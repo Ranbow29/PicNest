@@ -4,7 +4,8 @@ import { useLibrary } from '../stores/library'
 import FilterBar from './FilterBar.vue'
 import { api } from '../api'
 
-// 主面板顶栏 = 玻璃浮条，按模式变形：浏览模式（面包屑/布局/排列/搜索/筛选） ⇄ 大图模式（返回/序号/缩放/详情）
+// 主面板顶栏 = 顶部玻璃条（内容从其底下穿过），按模式变形：
+// 浏览模式（面包屑/筛选/布局排列/缩放/搜索） ⇄ 大图模式（返回/序号/缩放）；窗控圆形按钮内联右端
 const lib = useLibrary()
 
 const title = computed(() => {
@@ -64,7 +65,7 @@ watch(searchText, (v) => {
 
 function onKey(e) {
   if (e.ctrlKey && e.shiftKey && (e.key === 'F' || e.key === 'f')) {
-    if (lib.lightbox.open) return // 大图模式不响应
+    if (lib.lightbox.open) return
     e.preventDefault()
     lib.filterBarOpen = !lib.filterBarOpen
     if (lib.filterBarOpen) panelOpen.value = false
@@ -134,6 +135,14 @@ function onKey(e) {
     </template>
 
     <div class="spacer" />
+    <!-- 窗控 + 详情开关：圆形亮色，内联右端（与其他窗口右上角对齐） -->
+    <div class="bar-controls">
+      <button class="wc" :class="{ on: lib.viewer.showInspector }" title="详情面板（收起/放出）" @click="lib.viewer.showInspector = !lib.viewer.showInspector">◧</button>
+      <button class="wc" title="置顶" @click="api.windowToggleAlwaysOnTop()">✦</button>
+      <button class="wc" title="最小化" @click="api.windowMinimize()">─</button>
+      <button class="wc" title="最大化" @click="api.windowMaximize()">▢</button>
+      <button class="wc close" title="关闭" @click="api.windowClose()">✕</button>
+    </div>
   </header>
 </template>
 
@@ -141,26 +150,11 @@ function onKey(e) {
 .titlebar {
   height: 42px; flex: none; display: flex; align-items: center;
   -webkit-app-region: drag;
-  background: linear-gradient(0deg, rgba(22, 20, 16, 0.9), rgba(40, 37, 30, 0.82));
-  backdrop-filter: blur(26px) saturate(1.2);
-  -webkit-backdrop-filter: blur(26px) saturate(1.2);
+  background: linear-gradient(180deg, var(--glass-strong) 0%, var(--glass-weak) 100%);
+  backdrop-filter: blur(26px) saturate(1.25);
+  -webkit-backdrop-filter: blur(26px) saturate(1.25);
   position: relative; z-index: 20;
-  color: #e8e4da;
 }
-/* 暗玻璃上的亮字覆写（两主题统一深色任务条） */
-.crumb-root, .sep, .crumb, .count, .pos, .zpct { color: #b5aea0 !important; }
-.crumb.current { color: #e8e4da !important; }
-.tool { color: #b5aea0 !important; }
-.tool:hover { background: rgba(212, 169, 100, 0.18) !important; color: #d4a964 !important; }
-.tool.on {
-  background: rgba(212, 169, 100, 0.22) !important; color: #d4a964 !important;
-  box-shadow: inset 0 0 0 1px rgba(212, 169, 100, 0.7) !important;
-}
-.search { background: rgba(255, 255, 255, 0.07) !important; border-color: rgba(255, 255, 255, 0.12) !important; }
-.search:focus-within { border-color: rgba(212, 169, 100, 0.7) !important; }
-.s-icon { color: #8a8577 !important; }
-.search input { color: #e8e4da !important; }
-.search input::placeholder { color: #8a8577 !important; }
 .left { display: flex; align-items: center; gap: 6px; padding-left: 16px; min-width: 0; overflow: hidden; }
 .crumb-root { font-size: 12px; color: var(--text-2); }
 .sep { color: var(--text-2); font-size: 11px; }
@@ -191,12 +185,10 @@ button.tool.funnel .badge {
   background: var(--accent); color: #fff; font-size: 9px; font-style: normal;
   display: flex; align-items: center; justify-content: center; padding: 0 3px;
 }
-.funnel-pop { position: absolute; bottom: 50px; right: 4px; z-index: 50; border-radius: 16px; box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28); }
+.funnel-pop { position: absolute; top: 50px; right: 4px; z-index: 50; border-radius: 16px; box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28); }
 .vo-panel {
-  position: absolute; bottom: 50px; right: 4px; z-index: 50; width: 300px; border-radius: 16px; box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
+  position: absolute; top: 50px; right: 4px; z-index: 50; width: 300px; border-radius: 16px; box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
   background: var(--panel); backdrop-filter: blur(var(--blur)) saturate(1.2);
-  border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow);
-  padding: 12px 14px; animation: pop 0.14s ease;
 }
 @keyframes pop { from { transform: translateY(-4px); opacity: 0; } to { transform: none; opacity: 1; } }
 .vo-row { display: flex; align-items: flex-start; gap: 10px; padding: 6px 0; }
@@ -223,5 +215,16 @@ button.tool.funnel .badge {
 .search input { width: 150px; border: none; background: transparent; outline: none; color: var(--text); font-size: 12px; }
 .search input::placeholder { color: var(--text-2); }
 
-.zoom-slider { -webkit-app-region: no-drag; }
+/* 窗控 + 详情开关：圆形亮色内联 */
+.bar-controls { display: flex; align-items: center; gap: 8px; padding-right: 12px; -webkit-app-region: no-drag; }
+.wc {
+  width: 30px; height: 30px; border-radius: 50%;
+  border: 1px solid var(--border); background: var(--panel-inspector);
+  color: var(--text-2); font-size: 12px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: all 0.15s;
+}
+.wc:hover { background: var(--accent-weak); color: var(--accent); border-color: var(--accent); }
+.wc.on { background: var(--accent-weak); color: var(--accent); border-color: var(--accent); font-weight: 600; }
+.wc.close:hover { background: #e5484d; color: #fff; border-color: #e5484d; }
 </style>

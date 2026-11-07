@@ -9,7 +9,6 @@ import Lightbox from './components/Lightbox.vue'
 import ContextMenu from './components/ContextMenu.vue'
 import DuplicateDialog from './components/DuplicateDialog.vue'
 import ResizeHandle from './components/ResizeHandle.vue'
-import { api } from './api'
 
 // ZCode 式嵌套结构：左栏底层(可拖宽) → 主面板工作区（浏览 ⇄ 大图双模式）→ 详情计划式浮岛(可收起可拖宽)
 // 全窗口兜底拖入：外部文件 → 当前浏览目录（树行/侧栏各自的 drop 会 stopPropagation 优先接管）
@@ -64,18 +63,10 @@ async function onDrop(e) {
     <div v-if="importOver" class="import-veil"><span>松开录入</span></div>
     <div v-if="importNote" class="import-note">{{ importNote }}</div>
 
-    <!-- 窗控：圆形亮色，窗体右上角（与其他窗口页面对齐） -->
-    <div class="win-controls">
-      <button class="wc insp" :class="{ on: lib.viewer.showInspector }" title="详情面板（收起/放出）" @click="lib.viewer.showInspector = !lib.viewer.showInspector">◧</button>
-      <button class="wc" title="置顶" @click="api.windowToggleAlwaysOnTop()">✦</button>
-      <button class="wc" title="最小化" @click="api.windowMinimize()">─</button>
-      <button class="wc" title="最大化" @click="api.windowMaximize()">▢</button>
-      <button class="wc close" title="关闭" @click="api.windowClose()">✕</button>
-    </div>
-
     <SideBar />
     <ResizeHandle store="sidebar" />
     <section class="main-panel">
+      <TitleBar />
       <div class="main-inner">
         <!-- 浏览模式：网格 + 详情浮岛（v-show 保滚动位置） -->
         <div v-show="!lib.lightbox.open" class="browse">
@@ -96,8 +87,6 @@ async function onDrop(e) {
           </div>
         </template>
       </div>
-      <!-- 玻璃顶栏浮在滚动区上方（内容从其底下穿过） -->
-      <TitleBar />
     </section>
   </div>
   <ContextMenu />
@@ -106,22 +95,7 @@ async function onDrop(e) {
 
 <style scoped>
 .shell { display: flex; height: 100%; position: relative; }
-.win-controls {
-  position: absolute; top: 10px; right: 14px; z-index: 45;
-  display: flex; gap: 8px;
-  -webkit-app-region: no-drag;
-}
-.wc {
-  width: 30px; height: 30px; border-radius: 50%;
-  border: 1px solid var(--border); background: var(--panel-inspector);
-  color: var(--text-2); font-size: 12px; cursor: pointer;
-  display: flex; align-items: center; justify-content: center;
-  box-shadow: var(--shadow);
-  transition: all 0.15s;
-}
-.wc:hover { background: var(--accent-weak); color: var(--accent); border-color: var(--accent); }
-.wc.close:hover { background: #e5484d; color: #fff; border-color: #e5484d; }
-.wc.insp.on { background: var(--accent-weak); color: var(--accent); border-color: var(--accent); }
+.browse :deep(.inspector), .insp-overlay :deep(.inspector) { margin-top: 8px; }
 .import-veil {
   position: absolute; inset: 0; z-index: 60;
   background: var(--accent-weak); backdrop-filter: blur(2px);
