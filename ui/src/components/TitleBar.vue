@@ -74,7 +74,9 @@ function onKey(e) {
 </script>
 
 <template>
-  <header class="titlebar glass">
+  <header class="titlebar">
+    <div class="drag-surface"></div>
+    <div class="bar-content">
     <!-- ============ 大图工作模式 ============ -->
     <template v-if="lib.lightbox.open">
       <button class="ctl back" title="返回浏览（Esc）" @click="lib.closeLightbox()">←</button>
@@ -147,17 +149,39 @@ function onKey(e) {
       <button class="wc" title="最大化" @click="api.windowMaximize()">▢</button>
       <button class="wc close" title="关闭" @click="api.windowClose()">✕</button>
     </div>
+    </div>
   </header>
 </template>
 
 <style scoped>
 .titlebar {
-  height: 42px; flex: none; display: flex; align-items: center;
+  position: absolute; top: 0; left: 0; right: 0; z-index: 20;
+  height: 42px; pointer-events: none; /* 空白处穿透到拖拽面；控件单独恢复 */
+}
+.drag-surface {
+  position: absolute; inset: 0;
   -webkit-app-region: drag;
   background: linear-gradient(180deg, var(--glass-strong) 0%, var(--glass-weak) 100%);
   backdrop-filter: blur(26px) saturate(1.25);
   -webkit-backdrop-filter: blur(26px) saturate(1.25);
-  position: relative; z-index: 20;
+}
+/* 玻璃拖尾：栏体下方 20px 继续模糊渐隐——内容“溶”进顶栏（Wenku8 式） */
+.titlebar::after {
+  content: '';
+  position: absolute; top: 42px; left: 0; right: 0; height: 20px;
+  backdrop-filter: blur(26px) saturate(1.25);
+  -webkit-backdrop-filter: blur(26px) saturate(1.25);
+  background: linear-gradient(180deg, var(--glass-weak), transparent);
+  pointer-events: none;
+}
+.bar-content {
+  position: relative; height: 42px; display: flex; align-items: center;
+  pointer-events: none; /* 容器透传，交互子元素单独恢复 */
+}
+.bar-content .left, .bar-content .vo-wrap, .bar-content .zoom-slider,
+.bar-content .search, .bar-content .bar-controls {
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
 }
 .left { display: flex; align-items: center; gap: 6px; padding-left: 16px; min-width: 0; overflow: hidden; }
 .crumb-root { font-size: 12px; color: var(--text-2); }
@@ -166,7 +190,7 @@ function onKey(e) {
 .crumb.current { color: var(--text); font-weight: 600; }
 .count { margin-left: 8px; font-size: 11px; color: var(--text-2); font-variant-numeric: tabular-nums; }
 .pos { font-size: 12.5px; color: var(--text-2); font-variant-numeric: tabular-nums; padding: 0 6px; }
-.zoom-slider { display: flex; align-items: center; gap: 6px; }
+.zoom-slider { display: flex; align-items: center; gap: 6px; -webkit-app-region: no-drag; }
 .z-sign { font-size: 12px; color: var(--text-2); }
 .zoom-slider input { width: 130px; accent-color: var(--accent); height: 3px; }
 .zpct { font-size: 11.5px; color: var(--text-2); width: 40px; font-variant-numeric: tabular-nums; }
@@ -211,6 +235,7 @@ button.tool.funnel .badge {
 
 .search {
   display: flex; align-items: center; gap: 4px;
+  -webkit-app-region: no-drag;
   border: 1px solid var(--border); border-radius: 9px;
   background: var(--bg-2); padding: 0 8px; height: 28px;
   transition: border-color 0.15s;

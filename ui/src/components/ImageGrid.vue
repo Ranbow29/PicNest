@@ -302,7 +302,7 @@ const cells = computed(() =>
 .overlay-state { position: absolute; inset: 60px 0 auto 0; }
 
 /* 编辑排印头块 */
-.page-head { position: absolute; top: 0; left: 4px; right: 4px; padding: 16px 10px 0; -webkit-app-region: drag; }
+.page-head { position: absolute; top: 0; left: 4px; right: 4px; padding: 56px 10px 0; -webkit-app-region: drag; }
 .head-big {
   font-family: var(--font-serif); font-size: 30px; font-weight: 700;
   margin: 0 0 6px; letter-spacing: 2px;

@@ -23,7 +23,7 @@ function fitToWindow() {
   const rect = stageEl.value.getBoundingClientRect()
   const inspW = lib.viewer.showInspector ? lib.inspectorWidth + 16 : 0
   const availW = Math.max(120, rect.width - inspW - 32)
-  const availH = Math.max(120, rect.height - 70) /* 底部工具条空间 */
+  const availH = Math.max(120, rect.height - 110) /* 顶部玻璃 42 + 拖尾 + 底部工具条 */
   const swapped = lib.viewer.rot % 180 !== 0
   const iw = swapped ? img.height : img.width
   const ih = swapped ? img.width : img.height
