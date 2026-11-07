@@ -80,7 +80,9 @@ function onKey(e) {
       <button class="ctl back" title="返回浏览（Esc）" @click="lib.closeLightbox()">←</button>
       <span class="pos">{{ lib.images.findIndex((i) => i.file_path === lib.lightbox.path) + 1 }} / {{ lib.images.length }}</span>
       <div class="zoom-slider">
+        <span class="z-sign">−</span>
         <input type="range" min="0.05" max="8" step="0.01" :value="lib.viewer.scale" @input="lib.viewer.scale = Number($event.target.value)" />
+        <span class="z-sign">＋</span>
         <span class="zpct">{{ Math.round(lib.viewer.scale * 100) }}%</span>
       </div>
       <div class="spacer" />
@@ -126,7 +128,9 @@ function onKey(e) {
         </div>
       </div>
       <div class="zoom-slider">
+        <span class="z-sign">−</span>
         <input type="range" min="0.6" max="3.2" step="0.05" :value="lib.zoom" @input="lib.zoom = Number($event.target.value)" />
+        <span class="z-sign">＋</span>
       </div>
       <div v-if="lib.view !== 'trash'" class="search">
         <span class="s-icon">⌕</span>
@@ -163,6 +167,7 @@ function onKey(e) {
 .count { margin-left: 8px; font-size: 11px; color: var(--text-2); font-variant-numeric: tabular-nums; }
 .pos { font-size: 12.5px; color: var(--text-2); font-variant-numeric: tabular-nums; padding: 0 6px; }
 .zoom-slider { display: flex; align-items: center; gap: 6px; }
+.z-sign { font-size: 12px; color: var(--text-2); }
 .zoom-slider input { width: 130px; accent-color: var(--accent); height: 3px; }
 .zpct { font-size: 11.5px; color: var(--text-2); width: 40px; font-variant-numeric: tabular-nums; }
 .spacer { flex: 1; height: 100%; }
@@ -216,15 +221,15 @@ button.tool.funnel .badge {
 .search input::placeholder { color: var(--text-2); }
 
 /* 窗控 + 详情开关：圆形亮色内联 */
-.bar-controls { display: flex; align-items: center; gap: 8px; padding-right: 12px; -webkit-app-region: no-drag; }
+.bar-controls { display: flex; align-items: center; gap: 2px; padding-right: 10px; -webkit-app-region: no-drag; }
 .wc {
-  width: 30px; height: 30px; border-radius: 50%;
-  border: 1px solid var(--border); background: var(--panel-inspector);
+  width: 34px; height: 34px; border-radius: 8px;
+  border: none; background: transparent;
   color: var(--text-2); font-size: 12px; cursor: pointer;
   display: flex; align-items: center; justify-content: center;
   transition: all 0.15s;
 }
-.wc:hover { background: var(--accent-weak); color: var(--accent); border-color: var(--accent); }
-.wc.on { background: var(--accent-weak); color: var(--accent); border-color: var(--accent); font-weight: 600; }
-.wc.close:hover { background: #e5484d; color: #fff; border-color: #e5484d; }
+.wc:hover { background: var(--accent-weak); color: var(--text); }
+.wc.on { background: var(--accent-weak); color: var(--accent); font-weight: 600; box-shadow: inset 0 0 0 1px var(--accent); }
+.wc.close:hover { background: #e5484d; color: #fff; }
 </style>

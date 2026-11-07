@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { useLibrary } from '../stores/library'
-import { fileUrl } from '../api'
+import { api, fileUrl } from '../api'
 
 const lib = useLibrary()
 const showLabels = computed(() => lib.hoverLabels !== false)
