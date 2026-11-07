@@ -1,0 +1,54 @@
+/* PicNest 设计 tokens —— 奶玻璃（参考 Wenku8_Flutter）+ 跟随系统明暗 */
+:root {
+  --bg: #f4efe7;
+  --bg-2: #efe9dd; /* 单元格占位：比主内容略亮 */
+  --panel: rgba(255, 255, 255, 0.55);
+  --panel-strong: rgba(214, 205, 189, 0.95); /* 正文画布：继续压暗（内嵌感） */
+  --text: #2c2a26;
+  --text-2: #6f6a60;
+  --accent: #b4884b;
+  --accent-weak: rgba(180, 136, 75, 0.14);
+  --border: rgba(60, 50, 30, 0.12);
+  --shadow: 0 8px 30px rgba(60, 50, 30, 0.12);
+  --overlay-grad: linear-gradient(transparent, rgba(255, 255, 255, 0.94)); /* 网格悬停信息条（加高加深版） */
+  --overlay-text: #1c1a16;
+  --overlay-halo: 0 1px 3px rgba(255, 255, 255, 0.9), 0 0 1px rgba(255, 255, 255, 0.9); /* 亮色主题：白描边 */
+  --glass-strong: rgba(196, 188, 171, 0.96); /* 顶栏玻璃：比正文更暗（内嵌感） */
+  --glass-weak: rgba(196, 188, 171, 0.55);
+  --panel-inspector: rgba(253, 250, 243, 0.95); /* 详情浮岛：亮回来（亮色节奏最亮层） */
+  --radius: 14px;
+  --radius-panel: 6px; /* 主面板：锐利小圆角（详情浮岛保持 14px，ZCode 层次） */
+  --blur: 22px;
+  --font-serif: Georgia, 'Times New Roman', 'Source Han Serif SC', 'Noto Serif SC', 'SimSun', serif;
+  --font-sans: 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #262636;          /* 侧栏底层：暗色里最亮的一层（ZCode 节奏） */
+    --bg-2: #1d1d2a;
+    --panel: rgba(38, 38, 54, 0.55);
+    --panel-strong: rgba(24, 24, 38, 0.95); /* 正文画布：比顶栏亮、比侧栏暗 */
+    --text: #e8e4da;
+    --text-2: #a49e90;
+    --accent: #d4a964;
+    --accent-weak: rgba(212, 169, 100, 0.16);
+    --border: rgba(255, 255, 255, 0.1);
+    --shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
+    --overlay-grad: linear-gradient(transparent, rgba(0, 0, 0, 0.85));
+    --overlay-text: #f2efe8;
+    --overlay-halo: 0 1px 3px rgba(0, 0, 0, 0.8), 0 0 1px rgba(0, 0, 0, 0.8); /* 暗色主题：黑描边 */
+    --glass-strong: rgba(10, 10, 17, 0.96);
+    --glass-weak: rgba(10, 10, 17, 0.55);
+    --panel-inspector: rgba(52, 52, 72, 0.92); /* 详情浮岛：比内容亮一档（暗色节奏：侧栏亮→内容暗→详情亮） */
+  }
+}
+
+* { box-sizing: border-box; }
+html, body, #app { height: 100%; margin: 0; }
+body {
+  font-family: var(--font-sans);
+  color: var(--text);
+  background: var(--bg);
+  overflow: hidden;
+  user-select: none;
+}
