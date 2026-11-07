@@ -121,6 +121,10 @@ const bridge = [
   '  picnestImportUrls: (urls, targetDir) => electron.ipcRenderer.invoke("picnest-import-urls", urls, targetDir),',
   '  picnestImportCheck: (paths, folderId) => electron.ipcRenderer.invoke("picnest-import-check", paths, folderId),',
   '  picnestCrop: (filePath, opts) => electron.ipcRenderer.invoke("picnest-crop", filePath, opts),',
+  '  windowDragStart: () => electron.ipcRenderer.send("picnest-window-drag-start"),',
+  '  windowMoveBy: (dx, dy) => electron.ipcRenderer.send("picnest-window-move", dx, dy),',
+  '  windowDragEnd: () => electron.ipcRenderer.send("picnest-window-drag-end"),',
+  '  windowBounds: () => electron.ipcRenderer.invoke("picnest-window-bounds"),',
   '});',
 ].join('\n')
 psrc = psrc.replace(anchor, bridge + '\n' + anchor)

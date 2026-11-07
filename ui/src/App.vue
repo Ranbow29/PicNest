@@ -95,7 +95,6 @@ async function onDrop(e) {
 
 <style scoped>
 .shell { display: flex; height: 100%; position: relative; }
-.browse :deep(.inspector), .insp-overlay :deep(.inspector) { margin-top: 8px; }
 .import-veil {
   position: absolute; inset: 0; z-index: 60;
   background: var(--accent-weak); backdrop-filter: blur(2px);
@@ -119,21 +118,25 @@ async function onDrop(e) {
 }
 .main-inner { flex: 1; display: flex; min-height: 0; position: relative; } /* 头块自己让位玻璃顶栏 */
 .browse { flex: 1; display: flex; min-height: 0; position: relative; }
-/* 详情统一 overlay：悬浮于内容之上（滚动条自然到最右），两模式同位同尺寸 */
+/* 详情统一 overlay：悬浮于内容之上（滚动条自然到最右），两模式同位同尺寸
+   top 64 = 让过 42px 玻璃顶栏 + 20px 拖尾渐隐（顶栏下缘 61，留 3px 呼吸） */
 .browse :deep(.inspector), .insp-overlay :deep(.inspector) {
-  position: absolute; top: 48px; right: 8px; bottom: 8px;
-  width: var(--insp-w, 296px); margin: 0;
+  position: absolute; top: 64px; right: 8px; bottom: 8px;
+  width: var(--insp-w, 296px); margin: 0; height: auto;
   max-height: none;
+  pointer-events: auto;
 }
-.insp-overlay .resize-handle { margin: 48px 0 8px 0; }
-.browse .resize-handle { margin: 48px 0 8px 0; }
+.insp-overlay .resize-handle { margin: 64px 0 8px 0; pointer-events: auto; }
+.browse .resize-handle { margin: 64px 0 8px 0; }
 .insp-enter-active, .insp-leave-active { transition: transform 0.24s ease, opacity 0.24s ease; }
 .insp-enter-from, .insp-leave-to { transform: translateX(40px); opacity: 0; }
+/* 大图模式详情容器：必须 inset:0（缺 left 会收缩成手柄宽，overflow:hidden 裁掉整个面板）；
+   pointer-events:none 让舞台拖拽/缩放照常，面板与拖宽手柄各自恢复 auto */
 .insp-overlay {
-  position: absolute; top: 0; right: 0; bottom: 0; z-index: 15;
+  position: absolute; top: 0; left: 0; right: 0; bottom: 0; z-index: 15;
   display: flex; flex-direction: column;
   overflow: hidden;
+  pointer-events: none;
 }
-.insp-overlay :deep(.inspector) { height: calc(100% - 16px); margin: 8px; }
 
 </style>

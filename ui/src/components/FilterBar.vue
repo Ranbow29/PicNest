@@ -1,6 +1,7 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { useLibrary } from '../stores/library'
+import ColorPicker from './ColorPicker.vue'
 
 // Eagle 式筛选面板：全部能力内联平铺（挂在漏斗按钮下，与 ▦ 分布面板互斥）
 const lib = useLibrary()
@@ -50,7 +51,6 @@ const formatDefs = computed(() => {
 })
 const formatSearch = ref('')
 const formatDefsShown = computed(() => formatDefs.value.filter(([e]) => !formatSearch.value || e.includes(formatSearch.value.toLowerCase())))
-const folderDefs = computed(() => lib.flatDirs().map((d) => ({ ...d, count: d.total })))
 
 function toggleIn(list, v) {
   const i = list.indexOf(v)
@@ -64,26 +64,29 @@ function toggleFormat(e, ex) {
   else toggleIn(f.value.formats, e)
   lib.layoutTick++
 }
-function toggleFolder(rel) { toggleIn(f.value.folders, rel); lib.layoutTick++ }
 
-/* 颜色：预设 + 灰度 + 准确度 */
+/* 颜色：色板真值取自 Eagle app.asar filter-item-color.html（12 预设 + none/gray + 自定义） */
 const colorState = computed(() => f.value.color)
-const GRAY_PRESETS = [
-  [236, 236, 236], [198, 198, 198], [140, 140, 140], [86, 86, 86], [26, 26, 26],
-]
-const COLOR_PRESETS = [
-  [235, 87, 87], [242, 153, 74], [246, 214, 78], [109, 191, 144], [84, 158, 235],
-  [104, 109, 224], [155, 81, 224], [88, 178, 193], [214, 129, 168], [141, 104, 66],
-]
+const EAGLE_PRESETS = ['#111111', '#FFFFFF', '#9E9E9E', '#A48057', '#FC85B3', '#FF2727', '#FFA34B', '#FFD534', '#47C595', '#51C4C4', '#2B76E7', '#6D50ED']
 const hexText = computed(() => {
   if (!colorState.value.value) return '#000000'
   return '#' + colorState.value.value.map((c) => c.toString(16).padStart(2, '0')).join('').toUpperCase()
 })
-function pickPreset(v) {
-  colorState.value.value = v
+const hexInput = ref('')
+function hexToRgb(hex) {
+  const m = /^#?([0-9a-fA-F]{6})$/.exec(hex || '')
+  if (!m) return null
+  const n = parseInt(m[1], 16)
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
+}
+function pickHex(hex) {
+  const rgb = hexToRgb(hex)
+  if (!rgb) return
+  colorState.value.value = rgb
   colorState.value.on = true
   lib.layoutTick++
 }
+function pickPreset(hex) { pickHex(hex) }
 function toggleGray() {
   colorState.value.gray = !colorState.value.gray
   lib.layoutTick++
@@ -92,13 +95,16 @@ function clearColor() {
   colorState.value.on = false
   colorState.value.gray = false
   colorState.value.value = null
+  hexInput.value = ''
   lib.layoutTick++
+}
+function onHexEnter() {
+  if (hexInput.value) pickHex(hexInput.value.trim())
 }
 function clearSection(kind) {
   if (kind === 'shape') f.value.shapes = []
   if (kind === 'rating') f.value.ratings = []
   if (kind === 'format') { f.value.formats = []; f.value.formatEx = [] }
-  if (kind === 'folders') f.value.folders = []
   lib.layoutTick++
 }
 </script>
@@ -111,20 +117,23 @@ function clearSection(kind) {
         <span>颜色</span>
         <button v-if="colorState.on || colorState.gray" class="clear" @click="clearColor">清除</button>
       </div>
+      <ColorPicker :model-value="colorState.value ? hexText : '#ffffff'" @update:model-value="pickHex" />
       <div class="color-row">
-        <button class="sw gray" :class="{ on: colorState.gray }" title="灰度（黑白）" @click="toggleGray">∅</button>
-        <button v-for="(p, i) in GRAY_PRESETS" :key="'g' + i" class="sw"
-                :class="{ on: colorState.value && !colorState.gray && colorState.value.join() === p.join() }"
-                :style="{ background: `rgb(${p.join(',')})` }" @click="pickPreset(p)" />
-        <i class="sep" />
-        <button v-for="(c, i) in COLOR_PRESETS" :key="'c' + i" class="sw"
-                :class="{ on: colorState.value && colorState.value.join() === c.join() }"
-                :style="{ background: `rgb(${c.join(',')})` }" @click="pickPreset(c)" />
+        <!-- Eagle 布局：无色（清除，斜杠）→ 灰度（纹理）→ 12 预设色 -->
+        <button class="sw none" :class="{ on: !colorState.gray && !colorState.value }" title="无色（清除颜色筛选）" @click="clearColor"><i /></button>
+        <button class="sw gray" :class="{ on: colorState.gray }" title="灰度（黑白）" @click="toggleGray" />
+        <button v-for="hex in EAGLE_PRESETS" :key="hex" class="sw"
+                :class="{ on: colorState.value && !colorState.gray && hexText === hex.toUpperCase() }"
+                :style="{ background: hex }" :title="hex" @click="pickPreset(hex)" />
+      </div>
+      <div class="custom-row">
+        <i class="cur-chip" :style="{ background: colorState.value ? hexText : '#ccc' }"></i>
+        <input class="hex-in" v-model="hexInput" placeholder="#FF0000" spellcheck="false" maxlength="7"
+               @keydown.enter="onHexEnter" @change="onHexEnter" />
       </div>
       <div class="acc-row">
-        <span>准确度</span>
-        <input type="range" min="3" max="60" :value="colorState.accuracy" @input="colorState.accuracy = Number($event.target.value); lib.layoutTick++" />
-        <b class="hex">{{ hexText }}</b>
+        <span>准确度:</span>
+        <input type="range" min="5" max="40" step="1" :value="colorState.accuracy ?? 20" @input="colorState.accuracy = Number($event.target.value); lib.layoutTick++" />
       </div>
     </div>
 
@@ -175,18 +184,6 @@ function clearSection(kind) {
       </div>
     </div>
 
-    <!-- 文件夹 -->
-    <div class="fsec">
-      <div class="fsec-head">
-        <span>文件夹</span>
-        <button v-if="f.folders.length" class="clear" @click="clearSection('folders')">清除</button>
-      </div>
-      <div class="fmt-list">
-        <button v-for="d in folderDefs" :key="d.rel" class="fmt" :class="{ on: f.folders.includes(d.rel) }" @click="toggleFolder(d.rel)">
-          <span>{{ '　'.repeat(d.depth) + d.name }}</span><em>{{ d.count }}</em>
-        </button>
-      </div>
-    </div>
   </div>
 </template>
 
@@ -204,14 +201,23 @@ function clearSection(kind) {
 .clear:hover { text-decoration: underline; }
 
 .color-row { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; margin-bottom: 8px; }
-.sw { width: 22px; height: 22px; border-radius: 6px; border: 1px solid var(--border); cursor: pointer; transition: transform 0.12s; }
-.sw:hover { transform: scale(1.12); }
-.sw.on { outline: 2px solid var(--accent); outline-offset: 1px; }
-.sw.gray { color: var(--text-2); font-size: 11px; background: var(--bg-2); }
-.sep { width: 1px; height: 18px; background: var(--border); margin: 0 2px; }
-.acc-row { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--text-2); }
-.acc-row input { flex: 1; accent-color: var(--accent); }
+/* Eagle 规格：20px 圆角 5 灰边框；选中白描边；none 斜杠、gray 底纹 */
+.sw { position: relative; width: 20px; height: 20px; border-radius: 5px; border: 1px solid rgba(128, 128, 128, 0.3); cursor: pointer; transition: transform 0.12s, opacity 0.15s; opacity: 0.85; overflow: hidden; }
+.sw:hover { transform: scale(1.12); opacity: 1; }
+.sw.on { opacity: 1; border-color: #fff; box-shadow: 0 0 0 1.5px var(--accent); }
+.sw.none { background: #ccc; }
+.sw.none i { position: absolute; top: 50%; left: -4px; right: -4px; height: 1.5px; background: #6a6a6a; transform: rotate(-45deg); }
+.sw.gray { background: repeating-linear-gradient(45deg, #ddd 0 3px, #888 3px 6px); }
 .hex { font-family: Consolas, monospace; color: var(--text); font-weight: 600; }
+.custom-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.cur-chip { width: 22px; height: 22px; border-radius: 6px; border: 1px solid var(--border); flex: none; }
+.hex-in {
+  flex: 1; height: 26px; padding: 0 8px; font-family: Consolas, monospace; font-size: 12px;
+  border: 1px solid var(--border); border-radius: 7px; background: var(--bg-2); color: var(--text); outline: none;
+}
+.hex-in:focus { border-color: var(--accent); }
+.acc-row { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--text-2); padding-bottom: 8px; }
+.acc-row input { flex: 1; accent-color: var(--accent); }
 
 .chips { display: flex; flex-wrap: wrap; gap: 5px; }
 .chip {

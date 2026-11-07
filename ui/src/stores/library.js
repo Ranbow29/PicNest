@@ -125,6 +125,8 @@ export const useLibrary = defineStore('library', {
             this._deb = setTimeout(() => { this.refreshTree(); this.loadImages() }, 600)
           }
         })
+        // 色板后台构建/回填（颜色筛选与详情色板共用；此前无调用点=颜色筛选恒空，已修）
+        this.ensurePalettes().catch(() => {})
       } catch (e) { this.error = String(e?.message || e) }
     },
 
@@ -265,15 +267,21 @@ export const useLibrary = defineStore('library', {
       return false
     },
     colorMatch(img) {
+      /* 对齐 Eagle 搜索窗实时版 $scope.colorFilter（用户体感那套，比主进程严格版宽）：
+         ① 主色占比 <25% 淘汰 → ② pal[0]/pal[1] 精确相等 → ③ ratio>33 主色 DeltaE 双阈值
+         → ④ 白底特例（主色>50 且近白，次色>8 即可参与）→ ⑤ 次色 ratio>33 DeltaE 双阈值 */
       const pal = this.palettes[img.file_path]
       const c = this.filters.color
       if (!pal || !pal.length) return false
       if (c.gray && isGrayPalettes(pal)) return true
       if (!c.value) return false
       const v = c.value
-      if (pal[0] && pal[0].r === v[0] && pal[0].g === v[1] && pal[0].b === v[2]) { this.colorDist[img.file_path] = 0.01; return true }
+      /* 精确命中任意色板（点图自身色板/吸到同色）——不受占比门槛限制，原图必保 */
+      for (const p of pal) {
+        if (p.r === v[0] && p.g === v[1] && p.b === v[2]) { this.colorDist[img.file_path] = 0.01; return true }
+      }
       const r0 = pal[0]?.percent ?? 0
-      if (r0 < 25) return false // Eagle：主色占比 <25% 直接淘汰
+      if (r0 < 25) return false
       const acc = c.accuracy ?? 20
       const test = (p, extra) => {
         const d2000 = deltaE2000(v, [p.r, p.g, p.b])
@@ -281,10 +289,10 @@ export const useLibrary = defineStore('library', {
         if (d2000 < acc && d76 < acc + 50) { this.colorDist[img.file_path] = d76 + (extra || 0); return true }
         return false
       }
-      if (test(pal[0])) return true
-      if (r0 > 50 && pal[0]) {
+      if (r0 > 33 && test(pal[0])) return true
+      if (r0 > 50 && pal[1] && (pal[1].percent ?? 0) > 8) {
         const white = deltaE2000([255, 255, 255], [pal[0].r, pal[0].g, pal[0].b])
-        if (white < 5 && pal[1] && (pal[1].percent ?? 0) > 8 && test(pal[1], 5)) return true
+        if (white < 5 && test(pal[1], 5)) return true
       }
       if (pal[1] && (pal[1].percent ?? 0) > 33 && test(pal[1])) return true
       return false
@@ -314,14 +322,17 @@ export const useLibrary = defineStore('library', {
       try {
         for (let i = 0; i < 400; i++) {
           const missing = this.images.filter((x) => !this.palettes[x.file_path]).map((x) => x.file_path)
-          if (!missing.length) { this.paletteBuild.done = this.paletteBuild.total; break }
-          const r = await window.picrand.picnestBuildPalettesStep(this.activeRootId, 40)
-          this.paletteBuild.done = r?.indexed ?? 0
-          this.paletteBuild.total = r?.total ?? 0
+          if (!missing.length) { this.paletteBuild.done = this.paletteBuild.total = this.images.length; break }
+          /* DB 真缺（NULL）的才现算；DB 里已有（含 SKIP）的直接回填内存。
+             终止不依赖 processed——DB 全量时 build-step 返回 0 会误断循环（曾只剩 40/6673） */
+          await window.picrand.picnestBuildPalettesStep(this.activeRootId, 40).catch(() => {})
           const got = await window.picrand.picnestGetPalettes(missing.slice(0, 40))
           Object.assign(this.palettes, got)
+          /* 本批没回来的（提取失败 SKIP 等）标空数组，保证单调推进不绕圈 */
+          for (const p of missing.slice(0, 40)) if (!this.palettes[p]) this.palettes[p] = []
+          this.paletteBuild.done = Object.keys(this.palettes).length
+          this.paletteBuild.total = this.images.length
           this.layoutTick++
-          if (!r?.processed) break
         }
       } finally { this.paletteBuild.running = false }
     },

@@ -68,9 +68,12 @@ const paletteLoading = ref(false)
 watch(() => lib.selectedPath, async (p) => {
   palette.value = []
   if (!p) return
-  // 优先读颜色筛选的索引缓存（零延迟），没有才现算
+  // 优先读颜色筛选的索引缓存（零延迟），没有才现算；两路统一映射成 {color, ratio}
+  // （此前缓存路径是 {r,g,b,percent} 裸形状，模板读 .color 直接炸 → 点色板筛选全灭）
   if (lib.palettes[p]) {
-    palette.value = lib.palettes[p].slice(0, 9)
+    palette.value = lib.palettes[p].slice(0, 9).map((c) => c.color
+      ? { color: c.color, ratio: c.ratio }
+      : { color: [c.r, c.g, c.b], ratio: c.percent })
     paletteLoading.value = false
     return
   }
@@ -84,6 +87,18 @@ watch(() => lib.selectedPath, async (p) => {
 
 const sections = ref({ info: true, palette: true, rating: true, folder: true, locate: true })
 const toggle = (k) => { sections.value[k] = !sections.value[k] }
+
+/* 点色板 = 以此色筛选（来自图自身色板 → 精确匹配分支必命中本图，吸色场景正解） */
+function filterByPaletteColor(color) {
+  const c = lib.filters.color
+  const rgb = [...color]
+  if (c.value && c.value.join() === rgb.join()) {
+    c.value = null; c.on = false // 再点一次取消
+  } else {
+    c.value = rgb; c.on = true; c.gray = false
+  }
+  lib.layoutTick++
+}
 
 /* 文件夹移动（真物理移动） */
 const moveOpen = ref(false)
@@ -146,8 +161,9 @@ async function copyFile() {
           <div v-if="paletteLoading" class="muted">分析中…</div>
           <div v-else-if="palette.length" class="swatches">
             <i v-for="(c, i) in palette" :key="i"
+               :class="{ on: lib.filters.color.value && lib.filters.color.value.join() === c.color.join() }"
                :style="{ background: `rgb(${c.color?.[0] ?? 128},${c.color?.[1] ?? 128},${c.color?.[2] ?? 128})` }"
-               :title="c.ratio != null ? c.ratio + '%' : ''" />
+               :title="(c.ratio != null ? c.ratio + '% · ' : '') + '点击筛选此色'" @click="filterByPaletteColor(c.color)" />
           </div>
           <div v-else class="muted">—</div>
         </div>
@@ -262,7 +278,9 @@ async function copyFile() {
 .move-note.err { color: #d24b4b; }
 
 .swatches { display: flex; gap: 4px; }
-.swatches i { flex: 1; height: 22px; border-radius: 5px; border: 1px solid var(--border); }
+.swatches i { flex: 1; height: 22px; border-radius: 5px; border: 1px solid var(--border); cursor: pointer; transition: transform 0.12s; }
+.swatches i:hover { transform: translateY(-2px); border-color: var(--accent); }
+.swatches i.on { border-color: #fff; box-shadow: 0 0 0 1.5px var(--accent); }
 
 .stars { display: flex; gap: 4px; font-size: 19px; line-height: 1; }
 .star { color: var(--border); cursor: pointer; transition: color .12s, transform .12s; }

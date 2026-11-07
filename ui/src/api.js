@@ -20,6 +20,9 @@ export const api = {
   windowMaximize: () => p().windowMaximize?.(),
   windowClose: () => p().windowClose?.(),
   windowToggleAlwaysOnTop: () => p().windowToggleAlwaysOnTop?.(),
+  windowDragStart: () => p().windowDragStart?.(),
+  windowMoveBy: (dx, dy) => p().windowMoveBy?.(dx, dy),
+  windowDragEnd: () => p().windowDragEnd?.(),
   // PicNest 新增
   dirTree: (folderId) => invoke('picnestDirTree', folderId),
   imagesByDir: (folderId, dirRel, offset, limit, sortMode = 'id') =>

@@ -3,6 +3,7 @@ import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useLibrary } from '../stores/library'
 import FilterBar from './FilterBar.vue'
 import { api } from '../api'
+import { startWindowDrag, onBarDblclick } from '../lib/winDrag'
 
 // 主面板顶栏 = 顶部玻璃条（内容从其底下穿过），按模式变形：
 // 浏览模式（面包屑/筛选/布局排列/缩放/搜索） ⇄ 大图模式（返回/序号/缩放）；窗控圆形按钮内联右端
@@ -75,7 +76,8 @@ function onKey(e) {
 
 <template>
   <header class="titlebar">
-    <div class="drag-surface"></div>
+    <div class="glass"></div>
+    <div class="drag-surface" @mousedown="startWindowDrag" @dblclick="onBarDblclick">
     <div class="bar-content">
     <!-- ============ 大图工作模式 ============ -->
     <template v-if="lib.lightbox.open">
@@ -114,18 +116,18 @@ function onKey(e) {
           {{ layoutMeta.icon }}
         </button>
         <div v-if="panelOpen" class="vo-panel glass-card" @click.stop>
-          <div class="vo-row">
-            <span class="vo-label">布局方式</span>
-            <div class="vo-opts">
-              <button v-for="l in LAYOUTS" :key="l.key" class="vo-opt" :class="{ on: lib.layout === l.key }" @click="lib.layout = l.key">{{ l.label }}</button>
-            </div>
+          <div class="vo-cap">布局方式</div>
+          <div class="vo-grid c3">
+            <button v-for="l in LAYOUTS" :key="l.key" class="vo-cell" :class="{ on: lib.layout === l.key }" @click="lib.layout = l.key">
+              <i>{{ l.icon }}</i>{{ l.label }}
+            </button>
           </div>
-          <div class="vo-row">
-            <span class="vo-label">排列方式</span>
-            <div class="vo-opts wrap">
-              <button v-for="o in SORTS" :key="o.key" class="vo-opt" :class="{ on: lib.sortMode === o.key }" @click="lib.setSort(o.key)">{{ o.label }}</button>
-              <button class="vo-opt dir" @click="lib.setSort(undefined, !lib.sortAsc)">{{ lib.sortAsc ? '↑ 升序' : '↓ 降序' }}</button>
-            </div>
+          <div class="vo-cap">
+            <span>排列方式</span>
+            <button class="vo-dir" @click="lib.setSort(undefined, !lib.sortAsc)">{{ lib.sortAsc ? '↑ 升序' : '↓ 降序' }}</button>
+          </div>
+          <div class="vo-grid c4">
+            <button v-for="o in SORTS" :key="o.key" class="vo-cell sm" :class="{ on: lib.sortMode === o.key }" @click="lib.setSort(o.key)">{{ o.label }}</button>
           </div>
         </div>
       </div>
@@ -150,20 +152,25 @@ function onKey(e) {
       <button class="wc close" title="关闭" @click="api.windowClose()">✕</button>
     </div>
     </div>
+    </div><!-- /drag-surface -->
   </header>
 </template>
 
 <style scoped>
 .titlebar {
   position: absolute; top: 0; left: 0; right: 0; z-index: 20;
-  height: 42px; pointer-events: none; /* 空白处穿透到拖拽面；控件单独恢复 */
+  height: 42px;
 }
-.drag-surface {
-  position: absolute; inset: 0;
-  -webkit-app-region: drag;
+/* 纯视觉玻璃层：不背 app-region（不进拖拽位图），backdrop-filter 决不能与 drag 同体 */
+.glass {
+  position: absolute; inset: 0; pointer-events: none;
   background: linear-gradient(180deg, var(--glass-strong) 0%, var(--glass-weak) 100%);
   backdrop-filter: blur(26px) saturate(1.25);
   -webkit-backdrop-filter: blur(26px) saturate(1.25);
+}
+/* 拖拽命中面：透明全栏，mousedown 走手动拖窗（winDrag.js）；不再声明任何 app-region */
+.drag-surface {
+  position: absolute; inset: 0;
 }
 /* 玻璃拖尾：栏体下方 20px 继续模糊渐隐——内容“溶”进顶栏（Wenku8 式） */
 .titlebar::after {
@@ -176,21 +183,23 @@ function onKey(e) {
 }
 .bar-content {
   position: relative; height: 42px; display: flex; align-items: center;
-  pointer-events: none; /* 容器透传，交互子元素单独恢复 */
-}
-.bar-content .left, .bar-content .vo-wrap, .bar-content .zoom-slider,
-.bar-content .search, .bar-content .bar-controls {
-  pointer-events: auto;
-  -webkit-app-region: no-drag;
 }
 .left { display: flex; align-items: center; gap: 6px; padding-left: 16px; min-width: 0; overflow: hidden; }
 .crumb-root { font-size: 12px; color: var(--text-2); }
 .sep { color: var(--text-2); font-size: 11px; }
 .crumb { font-size: 12px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .crumb.current { color: var(--text); font-weight: 600; }
-.count { margin-left: 8px; font-size: 11px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.count { display: inline-block; min-width: 126px; margin-left: 8px; font-size: 11px; color: var(--text-2); font-variant-numeric: tabular-nums; /* 实测到 10,000 需 125px：位数进位不推挤右侧按钮 */ }
 .pos { font-size: 12.5px; color: var(--text-2); font-variant-numeric: tabular-nums; padding: 0 6px; }
-.zoom-slider { display: flex; align-items: center; gap: 6px; -webkit-app-region: no-drag; }
+/* 灯箱返回钮（此前无任何样式，裸按钮） */
+.ctl.back {
+  height: 28px; min-width: 30px; margin-left: 16px; padding: 0 8px;
+  border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg-2); color: var(--text-2); font-size: 13px; cursor: pointer;
+  transition: all 0.15s;
+}
+.ctl.back:hover { border-color: var(--accent); color: var(--text); }
+.zoom-slider { display: flex; align-items: center; gap: 6px; }
 .z-sign { font-size: 12px; color: var(--text-2); }
 .zoom-slider input { width: 130px; accent-color: var(--accent); height: 3px; }
 .zpct { font-size: 11.5px; color: var(--text-2); width: 40px; font-variant-numeric: tabular-nums; }
@@ -206,7 +215,7 @@ function onKey(e) {
   background: var(--accent-weak); color: var(--accent); font-weight: 600;
   box-shadow: inset 0 0 0 1px var(--accent);
 }
-.vo-wrap { position: relative; -webkit-app-region: no-drag; }
+.vo-wrap { position: relative; }
 button.tool.funnel { position: relative; }
 button.tool.funnel .badge {
   position: absolute; top: -3px; right: -3px;
@@ -214,28 +223,36 @@ button.tool.funnel .badge {
   background: var(--accent); color: #fff; font-size: 9px; font-style: normal;
   display: flex; align-items: center; justify-content: center; padding: 0 3px;
 }
-.funnel-pop { position: absolute; top: 50px; right: 4px; z-index: 50; border-radius: 16px; box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28); }
+.funnel-pop { position: absolute; top: 50px; left: 0; z-index: 50; border-radius: 16px; box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28); }
 .vo-panel {
-  position: absolute; top: 50px; right: 4px; z-index: 50; width: 300px; border-radius: 16px; box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
+  position: absolute; top: 50px; left: 0; z-index: 50; width: 300px; border-radius: 16px; box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
   background: var(--panel); backdrop-filter: blur(var(--blur)) saturate(1.2);
+  padding: 4px 14px 8px;
 }
 @keyframes pop { from { transform: translateY(-4px); opacity: 0; } to { transform: none; opacity: 1; } }
-.vo-row { display: flex; align-items: flex-start; gap: 10px; padding: 6px 0; }
-.vo-label { flex: none; width: 56px; font-size: 12px; color: var(--text-2); padding-top: 5px; }
-.vo-opts { display: flex; gap: 6px; flex-wrap: nowrap; }
-.vo-opts.wrap { flex-wrap: wrap; }
-.vo-opt {
+/* 分组标题 + 网格：布局 3 列图标格，排列 4 列紧凑格，升降序在组标题右侧 */
+.vo-cap {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 11.5px; color: var(--text-2); letter-spacing: 1px; padding: 7px 2px 6px;
+}
+.vo-dir { border: none; background: transparent; color: var(--accent); font-size: 11px; cursor: pointer; padding: 0; letter-spacing: 0; }
+.vo-dir:hover { text-decoration: underline; }
+.vo-grid { display: grid; gap: 6px; }
+.vo-grid.c3 { grid-template-columns: repeat(3, 1fr); }
+.vo-grid.c4 { grid-template-columns: repeat(4, 1fr); padding-bottom: 4px; }
+.vo-cell {
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
   border: 1px solid var(--border); background: transparent; color: var(--text-2);
-  padding: 5px 10px; border-radius: 8px; font-size: 12px; cursor: pointer;
+  border-radius: 10px; padding: 8px 4px 7px; font-size: 12px; cursor: pointer;
   transition: all 0.15s;
 }
-.vo-opt:hover { border-color: var(--accent); color: var(--text); }
-.vo-opt.on { background: var(--accent-weak); border-color: var(--accent); color: var(--accent); font-weight: 600; }
-.vo-opt.dir { margin-left: auto; }
+.vo-cell i { font-style: normal; font-size: 15px; line-height: 1; }
+.vo-cell:hover { border-color: var(--accent); color: var(--text); }
+.vo-cell.on { background: var(--accent-weak); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.vo-cell.sm { flex-direction: row; justify-content: center; padding: 6px 2px; }
 
 .search {
   display: flex; align-items: center; gap: 4px;
-  -webkit-app-region: no-drag;
   border: 1px solid var(--border); border-radius: 9px;
   background: var(--bg-2); padding: 0 8px; height: 28px;
   transition: border-color 0.15s;
@@ -246,7 +263,7 @@ button.tool.funnel .badge {
 .search input::placeholder { color: var(--text-2); }
 
 /* 窗控 + 详情开关：圆形亮色内联 */
-.bar-controls { display: flex; align-items: center; gap: 2px; padding-right: 10px; -webkit-app-region: no-drag; }
+.bar-controls { display: flex; align-items: center; gap: 2px; padding-right: 10px; }
 .wc {
   width: 34px; height: 34px; border-radius: 8px;
   border: none; background: transparent;

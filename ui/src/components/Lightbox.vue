@@ -306,6 +306,9 @@ function onKey(e) {
 
     <!-- 底部悬浮工具条（ZCode 输入口风格） -->
     <div class="dock glass-pill">
+      <button class="dock-btn" title="上一张（←）" @click="lib.lightboxNav(-1)">‹</button>
+      <button class="dock-btn" title="下一张（→）" @click="lib.lightboxNav(1)">›</button>
+      <i class="vsep" />
       <button class="dock-btn" :class="{ on: lib.viewer.flopX }" title="水平翻转" @click="lib.viewer.flopX = !lib.viewer.flopX">⇋</button>
       <button class="dock-btn" :class="{ on: lib.viewer.rot % 360 !== 0 }" title="旋转 90°" @click="lib.viewer.rot = (lib.viewer.rot + 90) % 360; lib.viewer.fitNonce++">↻</button>
       <button class="dock-btn" :class="{ on: lib.viewer.cropMode }" :disabled="lib.viewer.rot % 180 !== 0 || lib.viewer.flopX"

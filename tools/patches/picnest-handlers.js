@@ -521,4 +521,71 @@ electron.ipcMain.handle("picnest-rm-seed", () => {
   try { fs.rmSync(path.join(dataDir, "picnest-seed.json")); } catch (e) {}
   return true;
 });
+
+/* P6: 手动拖窗——app-region: drag 在 Electron 33 物理命中测试不可靠（no-drag 子元素被拖拽位图无视），
+   渲染层 mousedown + screenX/Y 增量后走这里移窗（频繁 send，勿改 handle/往返）。
+   Win 非 100% DPI 下，移动触发的边框补偿会让窗口每次胀 ~2px：
+   - 移动时永远断言「规范尺寸」picnestWinSize（绝不读现值回写 → 棘轮断根）
+   - 规范尺寸只在 resize 防抖后、且与现值差 >4px 时才更新（≤4px 一律视为补偿抖动丢弃） */
+let picnestDragBase = null;
+let picnestWinSize = null;
+let picnestResizeT = null;
+function picnestSnapSize(force) {
+  try {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    const b = mainWindow.getBounds();
+    if (!picnestWinSize || force
+        || Math.abs(b.width - picnestWinSize.width) > 4
+        || Math.abs(b.height - picnestWinSize.height) > 4) {
+      /* 吸附物理网格：DIP×scale 非整时（如 901×1.25=1126.25），每次换算都在舍入 → 永动 ±1 抖。
+         取整到整数物理像素再换回 DIP（可能带小数），换算链路从此零舍入 */
+      const f = electron.screen.getDisplayMatching(b).scaleFactor || 1;
+      picnestWinSize = {
+        width: Math.round(b.width * f) / f,
+        height: Math.round(b.height * f) / f,
+      };
+    }
+  } catch (e) {}
+}
+electron.ipcMain.on("picnest-window-drag-start", () => {
+  try {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (!picnestWinSize) picnestSnapSize(true);
+    /* 关键：手势期关掉 resizable——Win 非 100% DPI 下位置一变系统就强制重算窗口尺寸（±2px
+       非幂等），尺寸一变 Web 内容就整帧重排 = 拖动抖动。关掉后 Windows 停止尺寸管理，
+       setBounds 尺寸分量精确落位。先关再取 base（setResizable 自身可能触发一次重算）。
+       若渲染层崩溃漏发 drag-end，下次 drag-start 也会重新走到这里兜底 */
+    try { mainWindow.setResizable(false); } catch (e) {}
+    const b = mainWindow.getBounds();
+    picnestDragBase = { x: b.x, y: b.y };
+  } catch (e) {}
+});
+electron.ipcMain.on("picnest-window-move", (_event, dx, dy) => {
+  try {
+    if (!mainWindow || mainWindow.isDestroyed() || !picnestDragBase || !picnestWinSize) return;
+    if (!Number.isFinite(dx) || !Number.isFinite(dy)) return;
+    const f = electron.screen.getDisplayMatching(mainWindow.getBounds()).scaleFactor || 1;
+    mainWindow.setBounds({
+      x: Math.round((picnestDragBase.x + dx) * f) / f, /* 位置同样吸附物理网格，消 ±1px 内容平移 */
+      y: Math.round((picnestDragBase.y + dy) * f) / f,
+      width: picnestWinSize.width,
+      height: picnestWinSize.height,
+    });
+  } catch (e) {}
+});
+electron.ipcMain.on("picnest-window-drag-end", () => {
+  try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setResizable(true); } catch (e) {}
+});
+/* 用户真实调整窗体（边缘拉伸/最大化还原）后刷新规范尺寸；拖拽自触发的 resize 也会进来，
+   但 ≤4px 的被丢弃，不会污染 */
+try {
+  mainWindow.on("resize", () => {
+    clearTimeout(picnestResizeT);
+    picnestResizeT = setTimeout(() => picnestSnapSize(false), 400);
+  });
+} catch (e) {}
+/* 诊断探针：主进程视角的窗口 bounds（查 DPI 舍入漂移用） */
+electron.ipcMain.handle("picnest-window-bounds", () => {
+  try { return mainWindow && !mainWindow.isDestroyed() ? mainWindow.getBounds() : null; } catch (e) { return null; }
+});
 /* ==== /PicNest:P4 ==== */

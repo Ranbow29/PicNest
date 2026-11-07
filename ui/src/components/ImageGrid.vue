@@ -2,6 +2,7 @@
 import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { useLibrary } from '../stores/library'
 import { api, fileUrl } from '../api'
+import { startWindowDrag } from '../lib/winDrag'
 
 const lib = useLibrary()
 const showLabels = computed(() => lib.hoverLabels !== false)
@@ -227,7 +228,7 @@ const cells = computed(() =>
   <div ref="viewport" class="grid-viewport" @wheel="onViewportWheel">
     <div class="canvas" :style="{ height: totalH + 'px' }">
       <!-- 编辑排印头块：滚动时整体穿入玻璃顶栏（同 Wenku8） -->
-      <header class="page-head">
+      <header class="page-head" @mousedown="startWindowDrag">
         <h2 class="head-big">{{ header.big }}</h2>
         <div class="head-caption">{{ header.caption }}</div>
         <div class="head-rule"><i /></div>
@@ -302,7 +303,7 @@ const cells = computed(() =>
 .overlay-state { position: absolute; inset: 60px 0 auto 0; }
 
 /* 编辑排印头块 */
-.page-head { position: absolute; top: 0; left: 4px; right: 4px; padding: 56px 10px 0; -webkit-app-region: drag; }
+.page-head { position: absolute; top: 0; left: 4px; right: 4px; padding: 56px 10px 0; }
 .head-big {
   font-family: var(--font-serif); font-size: 30px; font-weight: 700;
   margin: 0 0 6px; letter-spacing: 2px;
