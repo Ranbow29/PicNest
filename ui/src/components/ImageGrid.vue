@@ -629,7 +629,7 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
 .grid-viewport {
   flex: 1; overflow-y: auto; overflow-x: hidden;
   transition: padding-right 0.2s ease;
-  padding: 0 6px 20px 8px;
+  padding: 0 6px 20px 26px; /* 左缘与右缘滑尺留白对齐，避免首图贴边 */
   position: relative;
 }
 /* 原生滚动条隐藏：概览滑尺接管其职能（残留即它） */
