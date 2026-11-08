@@ -18,7 +18,7 @@ const themeLabel = computed(() => {
 })
 const themeGlyph = computed(() => {
   const v = theme.resolved.value
-  if (v === 'mono-light' || v === 'mono-dark') return '◐'
+  if (v.startsWith('mono-')) return '◐'
   return v === 'dark' ? '☾' : '☀'
 })
 

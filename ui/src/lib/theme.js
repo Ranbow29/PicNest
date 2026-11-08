@@ -9,6 +9,7 @@ const MODES = [
   { key: 'light', label: '浅色' },
   { key: 'dark', label: '深色' },
   { key: 'mono-light', label: '灰白（低饱和）' },
+  { key: 'mono-charcoal', label: '炭黑（低饱和）' },
   { key: 'mono-dark', label: '墨黑（低饱和）' },
 ]
 const KEY = 'picnest.theme'
@@ -27,7 +28,7 @@ const resolved = computed(() => (mode.value === 'auto' ? (systemDark.value ? 'da
 
 function apply(v) {
   document.documentElement.dataset.theme = v
-  document.documentElement.style.colorScheme = v.includes('dark') ? 'dark' : 'light'
+  document.documentElement.style.colorScheme = (v === 'light' || v === 'mono-light') ? 'light' : 'dark'
 }
 watch(resolved, apply, { immediate: true })
 
