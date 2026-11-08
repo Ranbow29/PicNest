@@ -107,6 +107,7 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 - 主面板 `margin: 上/右 8px、下 22px、左 20px`（上/右收紧让窗控按钮贴角；下/左保留孤岛水带）+ `--shadow-float`（2026-11-09 按 Feb「增强正文孤岛感」加深一档）+ 顶部高光；底座 `#eee7da`；圆角主面板 6 / 浮岛 14（既有定稿，勿改）。改 margin 要同步概览滑尺的 `right/top/height`（窗口 fixed，现 6/70/calc(100vh-100px)）。
 - **左栏底子白光**：`.sidebar` 顶部 `--sidebar-glow` 白色渐变，150px 渐隐回 `--bg`（范围≈品牌区+「全部」行，图二口径）；暗色主题 `rgba(255,255,255,.07)`。
 - **网格卡片浮岛**：每张图常驻 `--shadow-tile`（近影+中影+柔光）、`--tile-edge` 顶缘高光、圆角 12；hover 抬升 3px + `--shadow-tile-hover`（`--ease-overshoot`）；选中环叠在浮岛影上，子文件夹封面同款。`.wi` 入场波用 `animation-fill-mode: backwards`（`both` 会永久压住 hover transform）。
+- **沉浸模式不做浮岛**：灯箱图片/视频 `.stage` 无投影、无圆角，平面贴在正文上；简报 `.brief img/video` 显式 `box-shadow:none; border-radius:0`。浮岛/抬升只属于浏览网格卡片。
 - 顶栏**不要**改成浮岛：试过（c7b0844），Feb 当场要求回调（f90daf8），保留全宽玻璃+20px 拖尾。
 - 随机自弹已移除；入场波 520ms；滑尺 48 槽 cos² 波峰 + 单条金色 dash。
 

@@ -718,9 +718,9 @@ function onKey(e) {
   background: var(--panel-strong);
 }
 .stage {
-  /* 基础尺寸=原始像素，适配完全由 transform scale 负责（单一权威） */
+  /* 基础尺寸=原始像素，适配完全由 transform scale 负责（单一权威）
+     沉浸模式不做浮岛：无投影/圆角，图片平面贴在正文上 */
   user-select: none;
-  box-shadow: 0 20px 80px rgba(0, 0, 0, 0.35);
 }
 .glass-pill {
   position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%);
@@ -760,7 +760,7 @@ function onKey(e) {
 .note { font-size: 11.5px; color: var(--accent); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---- 视频：自绘控制条 ---- */
-.stage.video { max-width: none; background: #000; box-shadow: 0 20px 80px rgba(0, 0, 0, 0.45); cursor: pointer; }
+.stage.video { max-width: none; background: #000; cursor: pointer; }
 .stage.gray { filter: grayscale(1); }
 .video-dock { gap: 6px; }
 .video-dock .dock-btn.play { color: var(--accent); font-size: 12px; }

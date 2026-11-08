@@ -101,6 +101,7 @@ onBeforeUnmount(() => {
 .brief img, .brief video {
   max-width: 100vw; max-height: 100vh; object-fit: contain; display: block;
   transform-origin: center center; will-change: transform; user-select: none;
+  border-radius: 0; box-shadow: none; /* 沉浸模式：图片不做浮岛 */
 }
 .brief img.gray, .brief video.gray { filter: grayscale(1); }
 .brief-empty { color: #8d877c; font-size: 14px; line-height: 2; text-align: center; }
