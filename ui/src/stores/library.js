@@ -58,7 +58,7 @@ export const useLibrary = defineStore('library', {
     contextMenu: { open: false, x: 0, y: 0, image: null },
     renaming: false,
     dupDialog: { open: false, items: [], targetRel: undefined, resolve: null },
-    viewer: { scale: 1, tx: 0, ty: 0, rot: 0, flopX: false, showInspector: true, cropMode: false, fitNonce: 0 },
+    viewer: { scale: 1, tx: 0, ty: 0, rot: 0, flopX: false, showInspector: false, /* 初始收起：让用户先看图，详情随点随开 */ cropMode: false, fitNonce: 0 },
     filterBarOpen: false,
     filters: {
       shapes: [],            // ['landscape','portrait','square','panoramaL','panoramaP','43','34','169','916','custom']

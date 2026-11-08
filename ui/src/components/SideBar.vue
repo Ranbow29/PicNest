@@ -85,10 +85,7 @@ async function dropToRoot(e) {
     <!-- 资料库：每个根一个节点，点击切换；当前库高亮；右键 = 文件夹菜单 -->
     <div class="section-head">
       <span>资料库</span>
-      <span class="head-btns">
-        <button class="add-btn" title="当前库根下新建文件夹" @click="askNewFolder = true">＋</button>
-        <button class="add-btn lib-add" title="添加资料库（选择目录）" @click="pickFolder">⌂</button>
-      </span>
+      <button class="add-btn lib-add" title="添加资料库（选择目录）" @click="pickFolder">⌂</button>
     </div>
     <div class="libs">
       <div v-for="l in libs" :key="l.id" class="lib-item" :class="{ active: l.active }"
