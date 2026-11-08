@@ -118,3 +118,7 @@ PicNest/
     `LIKE 转义前缀` 批量 UPDATE 整棵子树的 file_path/file_name；重命名走全量 sync 兜底。凡是物理移动目录都要查这条。
 25. **images 表没有 added_at 列**（只有 folders 有）：文件夹详情的「添加日期」取物理目录 `fs.statSync().birthtimeMs`；
     文件夹统计（`picnest-dir-stats`）用 rel 前缀 `LIKE ... OR ...` 一次查询取并集——父子文件夹同时选中不会重复计数。
+26. **多选文件夹合并视图**：`selectedDirs.length > 1` → `selectionView`，`loadImages` 优先走 `imagesInDirs`
+    （逐目录递归取图 → `file_path` 去重 → 全局排序）；`loadImages` 加 `_loadGen` 代际，快速切换/连续加选时丢弃过期结果。
+    整组拖拽用 JSON 数组键 `x-picnest-dirs` / `x-picnest-files`（drop 端优先数组，单值键保兼容）；根行 `rel=""` 禁用 draggable，
+    父子同时选中拖拽只搬父级（子项随父走，重复搬会源不存在）。

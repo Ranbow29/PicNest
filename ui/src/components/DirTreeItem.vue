@@ -38,8 +38,19 @@ function onClick(e) {
   if (!e.shiftKey && !add) emit('open', props.node)
 }
 
+function dtList(dt, key) {
+  try {
+    const v = JSON.parse(dt.getData(key) || '[]')
+    return Array.isArray(v) ? v.filter(Boolean) : []
+  } catch { return [] }
+}
 function onDragStart(e) {
-  e.dataTransfer.setData('application/x-picnest-dir', props.node.rel)
+  const rel = props.node.rel
+  const group = (lib.selectedDirs.length > 1 && lib.selectedDirs.includes(rel))
+    ? lib.selectedDirs.filter((r) => r !== '')
+    : []
+  e.dataTransfer.setData('application/x-picnest-dir', rel)
+  if (group.length > 1) e.dataTransfer.setData('application/x-picnest-dirs', JSON.stringify(group))
   e.dataTransfer.effectAllowed = 'move'
 }
 function onDragOver(e) {
@@ -93,13 +104,14 @@ async function onDrop(e) {
     return
   }
   const srcDir = e.dataTransfer.getData('application/x-picnest-dir')
+  const srcDirs = dtList(e.dataTransfer, 'application/x-picnest-dirs')
   const srcFile = e.dataTransfer.getData('application/x-picnest-file')
-  if (srcDir) {
-    if ((props.node.rel + '/').startsWith(srcDir + '/')) return // 不能丢进自己的后代
-    await lib.dropOnDir(srcDir, props.node.rel, mark || 'into')
-  } else if (srcFile) {
+  const srcFiles = dtList(e.dataTransfer, 'application/x-picnest-files')
+  if (srcDirs.length || srcDir) {
+    await lib.dropOnDirs(srcDirs.length ? srcDirs : [srcDir], props.node.rel, mark || 'into')
+  } else if (srcFiles.length || srcFile) {
     const destRel = (mark === 'before' || mark === 'after') ? parentRelOf(props.node.rel) : props.node.rel
-    await lib.moveImage(srcFile, destRel)
+    await lib.moveImages(srcFiles.length ? srcFiles : [srcFile], destRel)
   }
 }
 </script>
@@ -109,7 +121,7 @@ async function onDrop(e) {
     <div
       class="row" :class="{ active: isActive, into: dropMark === 'into', selected: lib.selectedDirs.includes(rel) }"
       :style="{ paddingLeft: 6 + depth * 13 + 'px' }"
-      draggable="true"
+      :draggable="!!node.rel"
       @click="onClick" @dblclick="toggleExpand"
       @dragstart="onDragStart" @dragover="onDragOver" @dragleave="onDragLeave" @drop.prevent="onDrop"
       @contextmenu.prevent="onContextMenu"

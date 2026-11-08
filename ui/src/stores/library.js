@@ -49,6 +49,7 @@ export const useLibrary = defineStore('library', {
     selectionAnchor: null,    // Shift 范围锚点
     selectedDirs: [],         // 文件夹多选（rel）
     dirAnchor: null,
+    selectionView: false,     // 多选文件夹 → 网格显示所选文件夹的合并内容
     hoverLabels: true,    // 网格悬停显字（M5 视图选项可关）
     layout: localStorage.getItem('picnest.layout') || 'grid',       // grid | justified | masonry（持久化）
     zoom: Number(localStorage.getItem('picnest.zoom')) || 1,          // 顶栏缩放滑条（持久化）
@@ -193,6 +194,7 @@ export const useLibrary = defineStore('library', {
       this.activeRootId = id
       this.currentDirRel = null
       this.view = 'all'
+      this.selectionView = false
       this.dirMemory = {}
       this.clearDirSelection()
       this.clearImageSelection()
@@ -276,6 +278,7 @@ export const useLibrary = defineStore('library', {
       // 树上点文件夹 = 离开大图模式和特殊视图，跳进该目录浏览
       if (this.lightbox.open) this.closeLightbox()
       collectiveShake()
+      this.selectionView = false
       this.view = 'all'
       localStorage.setItem('picnest.lastView', 'all')
       localStorage.setItem('picnest.lastDirRel', rel || '')
@@ -287,6 +290,7 @@ export const useLibrary = defineStore('library', {
       if (this.lightbox.open) this.closeLightbox()
       collectiveShake()
       this.clearDirSelection()
+      this.selectionView = false
       this.view = v
       localStorage.setItem('picnest.lastView', v)
       if (v !== 'all') localStorage.setItem('picnest.lastDirRel', '')
@@ -297,25 +301,32 @@ export const useLibrary = defineStore('library', {
 
     async loadImages() {
       if (this.activeRootId == null) return
+      const gen = (this._loadGen = (this._loadGen || 0) + 1)
       this.loading = true
       try {
-        if (this.view === 'recent') {
-          this.images = await api.recent(this.activeRootId, 20000)
+        let next = []
+        if (this.selectionView && this.selectedDirs.length > 1) {
+          /* 多选文件夹 = 合并内容视图（union 去重，全局排序） */
+          next = await this.imagesInDirs(this.selectedDirs)
+        } else if (this.view === 'recent') {
+          next = await api.recent(this.activeRootId, 20000)
         } else if (this.view === 'random') {
-          this.images = await window.picrand.picnestRandom(this.activeRootId, 300)
+          next = await window.picrand.picnestRandom(this.activeRootId, 300)
         } else if (this.view === 'trash') {
-          this.images = await window.picrand.picnestTrashList(this.activeRootId)
+          next = await window.picrand.picnestTrashList(this.activeRootId)
         } else if (this.view === 'uncategorized') {
           /* 未分类 = 库根层散图（不在任何子文件夹），排序面板可用 */
-          this.images = await api.imagesByDir(this.activeRootId, '__loose__', 0, 100000, this.sortMode, this.sortAsc)
+          next = await api.imagesByDir(this.activeRootId, '__loose__', 0, 100000, this.sortMode, this.sortAsc)
         } else if (this.view === 'search') {
-          this.images = this.searchQuery ? await window.picrand.picnestSearch(this.activeRootId, this.searchQuery, 300) : []
+          next = this.searchQuery ? await window.picrand.picnestSearch(this.activeRootId, this.searchQuery, 300) : []
         } else {
           /* 全部 = 最新入库流（新图置顶，与文件夹视图彻底分开；忽略升降序开关锁死最新在前）
              文件夹 = 排序器正常排序（sortMode + sortAsc 全生效） */
           const inAll = this.view === 'all' && !this.currentDirRel
-          this.images = await api.imagesByDir(this.activeRootId, this.currentDirRel, 0, 100000, inAll ? 'added' : this.sortMode, inAll ? false : this.sortAsc)
+          next = await api.imagesByDir(this.activeRootId, this.currentDirRel, 0, 100000, inAll ? 'added' : this.sortMode, inAll ? false : this.sortAsc)
         }
+        if (gen !== this._loadGen) return // 快速切换时丢弃过期结果
+        this.images = next || []
         this.selectedPath = null
         this.selectedPaths = []
         this.selectionAnchor = null
@@ -323,10 +334,36 @@ export const useLibrary = defineStore('library', {
         this.fillDimsInBackground()
         this.harvestThumbs().then(() => this.fillAllThumbsInBackground()) // 先收割存量，再单张串行补缺
       } catch (e) {
-        this.error = String(e?.message || e)
+        if (gen === this._loadGen) this.error = String(e?.message || e)
       } finally {
-        this.loading = false
+        if (gen === this._loadGen) this.loading = false
       }
+    },
+
+    /* 多选文件夹的合并内容：逐目录取递归图片 → 按 file_path 去重 → 全局排序 */
+    async imagesInDirs(rels) {
+      const lists = await Promise.all((rels || []).map((rel) =>
+        api.imagesByDir(this.activeRootId, rel, 0, 100000, this.sortMode, this.sortAsc).catch(() => [])))
+      const seen = new Set()
+      const merged = []
+      for (const list of lists) {
+        for (const im of list || []) {
+          if (seen.has(im.file_path)) continue
+          seen.add(im.file_path)
+          merged.push(im)
+        }
+      }
+      const mode = this.sortMode
+      const dir = this.sortAsc ? 1 : -1
+      merged.sort((a, b) => {
+        let r
+        if (mode === 'name') r = String(a.file_name || '').localeCompare(String(b.file_name || ''), 'zh')
+        else if (mode === 'size') r = (a.file_size || 0) - (b.file_size || 0)
+        else if (mode === 'mtime') r = (a.modify_time || 0) - (b.modify_time || 0)
+        else r = (a.id || 0) - (b.id || 0) // added / 其余回退入库序
+        return r * dir || String(a.file_path).localeCompare(String(b.file_path))
+      })
+      return merged
     },
 
     async doSearch(q) {
@@ -570,6 +607,30 @@ export const useLibrary = defineStore('library', {
       } catch (e) { return { ok: false, error: String(e?.message || e) } }
     },
 
+    // 多选图片批量物理移动（一次刷新；selectionView 下重载合并视图）
+    async moveImages(filePaths, targetRel) {
+      if (!this.tree) return { ok: false, error: '无目录树' }
+      const targetDir = this.tree.rootPath + (targetRel ? '\\' + targetRel.split('/').join('\\') : '')
+      let moved = 0, failed = 0
+      for (const p of filePaths || []) {
+        try {
+          const r = await window.picrand.picnestMoveImage(p, targetDir)
+          if (r?.ok) {
+            if (r.moved !== false) {
+              moved++
+              this.images = this.images.filter((i) => i.file_path !== p)
+              this.pruneImageSelection(p)
+            }
+          } else failed++
+        } catch (e) { failed++ }
+      }
+      if (moved) {
+        await this.refreshTree()
+        if (this.selectionView) await this.loadImages()
+      }
+      return { ok: failed === 0, moved, failed }
+    },
+
     // 目录树的扁平清单（移动目标选择器用）
     flatDirs() {
       const out = []
@@ -627,8 +688,8 @@ export const useLibrary = defineStore('library', {
       if (this.sortMode === 'random') this.randomNonce++
       localStorage.setItem('picnest.sortMode', this.sortMode)
       localStorage.setItem('picnest.sortAsc', this.sortAsc ? '1' : '0')
-      /* 文件夹视图排序实时生效（SQL 排序需重查）；全部视图固定最新置顶，不受排序影响 */
-      if (this.currentDirRel) this.loadImages()
+      /* 文件夹视图/多选合并视图排序实时生效（SQL 排序需重查）；全部视图固定最新置顶，不受排序影响 */
+      if (this.currentDirRel || this.selectionView) this.loadImages()
     },
     setLayout(key) {
       this.layout = key
@@ -866,6 +927,48 @@ export const useLibrary = defineStore('library', {
       }
     },
 
+    /* 多选文件夹拖拽：整组移动（跳过根、自身、后代；父子同时选中只搬父级） */
+    async dropOnDirs(srcRels, targetRel, pos) {
+      const destParent = pos === 'into' ? targetRel : (targetRel.includes('/') ? targetRel.split('/').slice(0, -1).join('/') : '')
+      let rels = [...new Set((srcRels || []).filter((r) => r !== ''))]
+      rels = rels.filter((r) => !rels.some((o) => o !== r && r.startsWith(o + '/'))) // 去掉被父级覆盖的子项
+      const valid = rels.filter((r) => r !== destParent && !(destParent && (destParent + '/').startsWith(r + '/')))
+      if (!valid.length) return { ok: true, moved: 0 }
+
+      if (pos === 'into') {
+        let moved = 0
+        for (const rel of valid) {
+          const r = await this.moveDir(rel, destParent)
+          if (r?.ok) {
+            moved++
+            await this.appendOrder(destParent, rel.split('/').pop())
+          }
+        }
+        return { ok: true, moved }
+      }
+
+      const targetName = targetRel.split('/').pop()
+      const movedNames = []
+      for (const rel of valid) {
+        const srcParent = rel.includes('/') ? rel.split('/').slice(0, -1).join('/') : ''
+        if (srcParent !== destParent) {
+          const r = await this.moveDir(rel, destParent)
+          if (!r?.ok) continue
+        }
+        movedNames.push(rel.split('/').pop())
+      }
+      if (!movedNames.length) return { ok: true, moved: 0 }
+      await this.refreshTree()
+      const node = destParent ? this.findNode(this.tree?.tree, destParent) : this.tree?.tree
+      const names = (node?.children || []).map((c) => c.name)
+        .filter((n) => n !== targetName && !movedNames.includes(n))
+      const at = names.indexOf(targetName)
+      names.splice(at < 0 ? names.length : at + (pos === 'after' ? 1 : 0), 0, ...movedNames)
+      await window.picrand.picnestDirOrderSet(destParent || '__root__', names)
+      await this.refreshTree()
+      return { ok: true, moved: movedNames.length }
+    },
+
     async appendOrder(parentRel, name) {
       await this.refreshTree()
       const node = parentRel ? this.findNode(this.tree?.tree, parentRel) : this.tree?.tree
@@ -890,7 +993,7 @@ export const useLibrary = defineStore('library', {
       const shift = !!opts.shift
       const add = !!opts.add
       const list = this.filteredImages.map((i) => i.file_path)
-      this.clearDirSelection()
+      if (!this.selectionView) this.clearDirSelection()
       if (shift && this.selectionAnchor != null) {
         const a = list.indexOf(this.selectionAnchor)
         const b = list.indexOf(path)
@@ -946,25 +1049,41 @@ export const useLibrary = defineStore('library', {
       const add = !!opts.add
       this.clearImageSelection()
       const list = this.flatVisibleDirs()
-      if (shift && this.dirAnchor != null) {
-        const a = list.indexOf(this.dirAnchor)
-        const b = list.indexOf(rel)
-        if (a >= 0 && b >= 0) {
-          const [lo, hi] = a < b ? [a, b] : [b, a]
-          const range = list.slice(lo, hi + 1)
-          this.selectedDirs = add ? [...new Set([...this.selectedDirs, ...range])] : range
-          return
+      do {
+        if (shift && this.dirAnchor != null) {
+          const a = list.indexOf(this.dirAnchor)
+          const b = list.indexOf(rel)
+          if (a >= 0 && b >= 0) {
+            const [lo, hi] = a < b ? [a, b] : [b, a]
+            const range = list.slice(lo, hi + 1)
+            this.selectedDirs = add ? [...new Set([...this.selectedDirs, ...range])] : range
+            break
+          }
         }
-      }
-      if (add) {
-        const i = this.selectedDirs.indexOf(rel)
-        if (i >= 0) this.selectedDirs.splice(i, 1)
-        else this.selectedDirs.push(rel)
+        if (add) {
+          const i = this.selectedDirs.indexOf(rel)
+          if (i >= 0) this.selectedDirs.splice(i, 1)
+          else this.selectedDirs.push(rel)
+          this.dirAnchor = rel
+          break
+        }
+        this.selectedDirs = [rel]
         this.dirAnchor = rel
-        return
+      } while (false)
+      /* 多选文件夹 → 网格合并内容视图；降到 1 个 → 退出并回到原浏览 */
+      const multi = this.selectedDirs.length > 1
+      if (multi) {
+        this.selectionView = true
+        this.loadImages()
+      } else if (this.selectionView) {
+        this.selectionView = false
+        this.loadImages()
       }
-      this.selectedDirs = [rel]
-      this.dirAnchor = rel
+    },
+    exitSelectionView() {
+      if (!this.selectionView) return
+      this.selectionView = false
+      this.loadImages()
     },
     clearDirSelection() {
       this.selectedDirs = []
@@ -985,7 +1104,7 @@ export const useLibrary = defineStore('library', {
         this.selectedPaths = [this.selectedPath]
         this.selectionAnchor = this.selectedPath
       }
-      this.clearDirSelection()
+      if (!this.selectionView) this.clearDirSelection()
       this.lightbox = { open: true, path: path || this.selectedPath }
       if (this.lightbox.path) this.markOpened(this.lightbox.path)
       this.viewer.rot = 0; this.viewer.flopX = false
@@ -1014,7 +1133,7 @@ export const useLibrary = defineStore('library', {
     },
     openContextMenu(e, image) {
       this.contextMenu = { open: true, x: e.clientX, y: e.clientY, image }
-      this.clearDirSelection()
+      if (!this.selectionView) this.clearDirSelection()
       if (!this.selectedPaths.includes(image.file_path)) {
         this.selectedPaths = [image.file_path]
         this.selectionAnchor = image.file_path

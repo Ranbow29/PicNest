@@ -12,9 +12,10 @@ const dirNodes = computed(() => (lib.selectedDirs || [])
   .map((rel) => ({ rel, node: rel ? lib.findNode(lib.tree?.tree, rel) : lib.tree?.tree }))
   .filter((d) => d.node))
 const mode = computed(() => {
-  if (dirNodes.value.length) return dirNodes.value.length > 1 ? 'dirs' : 'dir'
+  /* 图片选中优先于文件夹（多选合并视图里点图 → 图详情；清空图选 → 回到文件夹详情） */
   if (lib.selectedPaths.length > 1) return 'multi'
   if (img.value) return 'img'
+  if (dirNodes.value.length) return dirNodes.value.length > 1 ? 'dirs' : 'dir'
   return 'empty'
 })
 const singleDir = computed(() => (dirNodes.value.length === 1 ? dirNodes.value[0] : null))
@@ -204,12 +205,9 @@ async function rateMulti(s) {
 async function doMultiMove(e) {
   const rel = e.target.value
   const paths = multiImages.value.map((i) => i.file_path)
-  let ok = 0, fail = 0
-  for (const p of paths) {
-    const r = await lib.moveImage(p, rel)
-    if (r?.ok) ok++; else fail++
-  }
-  multiNote.value = `已移动 ${ok}${fail ? ` · 失败 ${fail}` : ''}`
+  if (!paths.length) return
+  const r = await lib.moveImages(paths, rel)
+  multiNote.value = `已移动 ${r?.moved || 0}${r?.failed ? ` · 失败 ${r.failed}` : ''}`
   setTimeout(() => { multiNote.value = '' }, 2600)
 }
 async function copyMultiFiles() {

@@ -62,7 +62,11 @@ function onViewportWheel(e) {
 }
 
 function onCellDragStart(e, img) {
+  const group = (lib.selectedPaths.length > 1 && lib.selectedPaths.includes(img.file_path))
+    ? lib.selectedPaths.slice()
+    : []
   e.dataTransfer.setData('application/x-picnest-file', img.file_path)
+  if (group.length > 1) e.dataTransfer.setData('application/x-picnest-files', JSON.stringify(group))
   e.dataTransfer.effectAllowed = 'move'
 }
 
@@ -99,6 +103,10 @@ const HEADER_H = 150 // 编辑排印头块实际高度：56 玻璃让位 + 标�
 const VIEW_EN = { all: 'LIBRARY', recent: 'RECENT', uncategorized: 'UNSORTED', random: 'RANDOM', trash: 'TRASH', search: 'SEARCH' }
 const header = computed(() => {
   const viewEn = VIEW_EN[lib.view] || 'LIBRARY'
+  if (lib.selectionView) {
+    const n = lib.selectedDirs.length
+    return { big: `已选定 ${n} 个文件夹`, caption: `${(lib.images.length || 0).toLocaleString()} IMAGES / ${n} FOLDERS` }
+  }
   if (lib.view !== 'all') return { big: { all: '全部', recent: '最近使用', uncategorized: '未分类', random: '随机模式', trash: '回收站' }[lib.view], caption: `${(lib.images.length || 0).toLocaleString()} ITEMS / ${viewEn}` }
   if (!lib.currentDirRel) return { big: '全部', caption: `${(lib.images.length || 0).toLocaleString()} IMAGES / ${viewEn}` }
   const parts = lib.currentDirRel.split('/')

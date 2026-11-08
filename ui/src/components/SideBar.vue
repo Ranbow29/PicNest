@@ -57,9 +57,24 @@ async function dropToRoot(e) {
     return
   }
   const srcDir = e.dataTransfer.getData('application/x-picnest-dir')
+  const srcDirs = dtList(e.dataTransfer, 'application/x-picnest-dirs')
   const srcFile = e.dataTransfer.getData('application/x-picnest-file')
-  if (srcDir) await lib.moveDir(srcDir, '')
-  else if (srcFile) await lib.moveImage(srcFile, '')
+  const srcFiles = dtList(e.dataTransfer, 'application/x-picnest-files')
+  if (srcDirs.length || srcDir) await lib.dropOnDirs(srcDirs.length ? srcDirs : [srcDir], '', 'into')
+  else if (srcFiles.length || srcFile) await lib.moveImages(srcFiles.length ? srcFiles : [srcFile], '')
+}
+
+function dtList(dt, key) {
+  try {
+    const v = JSON.parse(dt.getData(key) || '[]')
+    return Array.isArray(v) ? v.filter(Boolean) : []
+  } catch { return [] }
+}
+
+/* 树空白点击 = 清空文件夹多选并退出合并视图 */
+function clearTreeSelection() {
+  lib.clearDirSelection()
+  lib.exitSelectionView()
 }
 
 /* 拖到资料库行 = 录进对应资料库的库根（全部/未分类） */
@@ -110,7 +125,7 @@ async function dropOnLib(e, l) {
     <nav class="views">
       <div
         v-for="e in entries" :key="e.key"
-        class="view-item" :class="{ active: lib.view === e.key && (e.key !== 'all' || !lib.currentDirRel), disabled: !e.enabled }"
+        class="view-item" :class="{ active: !lib.selectionView && lib.view === e.key && (e.key !== 'all' || !lib.currentDirRel), disabled: !e.enabled }"
         @click="e.enabled && lib.view !== e.key && lib.switchView(e.key)"
       >
         <span class="label">{{ e.label }}</span>
@@ -141,7 +156,7 @@ async function dropOnLib(e, l) {
 
     <div v-if="lib.scanning" class="scanning">{{ lib.scanNote }}</div>
     <div v-else-if="!lib.tree" class="empty">还没有资料库，点 ⌂ 导入</div>
-    <div v-else class="tree" @click.self="lib.clearDirSelection()">
+    <div v-else class="tree" @click.self="clearTreeSelection">
       <DirTreeItem :node="lib.tree.tree" :depth="0" @open="openNode" />
     </div>
 

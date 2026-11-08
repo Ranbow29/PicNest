@@ -102,12 +102,17 @@ function onKey(e) {
     <!-- ============ 浏览模式 ============ -->
     <template v-else>
       <div class="left">
-        <span class="crumb-root">全部</span>
-        <template v-if="title.trail.length || title.main !== '全部'">
-          <span class="sep">›</span>
-          <span v-for="(t, i) in title.trail" :key="i" class="crumb">{{ t }}</span>
-          <span class="sep" v-if="title.trail.length">›</span>
-          <span class="crumb current">{{ title.main }}</span>
+        <template v-if="lib.selectionView">
+          <span class="crumb current">已选定 {{ lib.selectedDirs.length }} 个文件夹</span>
+        </template>
+        <template v-else>
+          <span class="crumb-root">全部</span>
+          <template v-if="title.trail.length || title.main !== '全部'">
+            <span class="sep">›</span>
+            <span v-for="(t, i) in title.trail" :key="i" class="crumb">{{ t }}</span>
+            <span class="sep" v-if="title.trail.length">›</span>
+            <span class="crumb current">{{ title.main }}</span>
+          </template>
         </template>
         <span v-if="lib.activeFilterCount()" class="count">筛选结果 ({{ lib.filteredImages.length.toLocaleString() }})</span>
         <span v-else-if="lib.images.length" class="count">{{ lib.images.length.toLocaleString() }} 张</span>
