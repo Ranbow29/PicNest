@@ -11,12 +11,19 @@ import { collectiveShake } from '../lib/iconMotion'
 // 浏览模式（面包屑/筛选/布局排列/缩放/搜索） ⇄ 大图模式（返回/序号/缩放）；窗控圆形按钮内联右端
 const lib = useLibrary()
 
-const title = computed(() => {
-  const names = { all: '全部', recent: '最近使用', random: '随机模式', trash: '回收站', search: '搜索' }
-  if (lib.view !== 'all') return { main: names[lib.view] || lib.view, trail: [] }
-  if (!lib.currentDirRel) return { main: '全部', trail: [] }
-  const parts = lib.currentDirRel.split('/')
-  return { main: parts[parts.length - 1], trail: parts.slice(0, -1) }
+const VIEW_NAMES = { recent: '最近使用', random: '随机模式', trash: '回收站', search: '搜索', uncategorized: '未分类' }
+/* 面包屑：全部 → 各级祖先 → 当前；全部/祖先可点击跳回 */
+const crumbs = computed(() => {
+  const out = [{ label: '全部', view: 'all', rel: null }]
+  if (lib.view !== 'all') {
+    out.push({ label: VIEW_NAMES[lib.view] || lib.view, view: lib.view, current: true })
+    return out
+  }
+  const parts = String(lib.currentDirRel || '').split('/').filter(Boolean)
+  parts.forEach((p, i) => out.push({ label: p, view: 'all', rel: parts.slice(0, i + 1).join('/') }))
+  if (!parts.length) out[0].current = true
+  else out[out.length - 1].current = true
+  return out
 })
 
 const LAYOUTS = [
@@ -103,16 +110,17 @@ function onKey(e) {
     <!-- ============ 浏览模式 ============ -->
     <template v-else>
       <div class="left">
+        <button class="nav-arrow" :disabled="!lib.canGoBack" title="返回上一个文件夹" @click="lib.goBack()">←</button>
+        <button class="nav-arrow" :disabled="!lib.canGoForward" title="前进到撤回前的文件夹" @click="lib.goForward()">→</button>
         <template v-if="lib.selectionView">
           <span class="crumb current">已选定 {{ lib.selectedDirs.length }} 个文件夹</span>
         </template>
         <template v-else>
-          <span class="crumb-root">全部</span>
-          <template v-if="title.trail.length || title.main !== '全部'">
-            <span class="sep">›</span>
-            <span v-for="(t, i) in title.trail" :key="i" class="crumb">{{ t }}</span>
-            <span class="sep" v-if="title.trail.length">›</span>
-            <span class="crumb current">{{ title.main }}</span>
+          <template v-for="(c, i) in crumbs" :key="i">
+            <span v-if="i" class="sep">›</span>
+            <button v-if="!c.current" class="crumb-link"
+                    @click="c.view === 'all' ? lib.openDir(c.rel) : lib.switchView(c.view)">{{ c.label }}</button>
+            <span v-else class="crumb current">{{ c.label }}</span>
           </template>
         </template>
         <span v-if="lib.activeFilterCount()" class="count">筛选结果 ({{ lib.filteredImages.length.toLocaleString() }})</span>
@@ -200,6 +208,21 @@ function onKey(e) {
   position: relative; height: 42px; display: flex; align-items: center;
 }
 .left { display: flex; align-items: center; gap: 6px; padding-left: 16px; min-width: 0; overflow: hidden; }
+.nav-arrow {
+  width: 24px; height: 24px; flex: none; border: none; border-radius: 7px;
+  display: flex; align-items: center; justify-content: center;
+  background: transparent; color: var(--text-2); font-size: 14px; line-height: 1;
+  cursor: pointer; transition: background 0.15s, color 0.15s;
+}
+.nav-arrow:hover:not(:disabled) { background: var(--accent-weak); color: var(--accent); }
+.nav-arrow:disabled { opacity: 0.28; cursor: default; }
+.crumb-link {
+  border: none; background: transparent; padding: 2px 3px; border-radius: 5px;
+  color: var(--text-2); font-size: 12px; cursor: pointer;
+  max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+}
+.crumb-link:hover { background: var(--accent-weak); color: var(--accent); }
 .crumb-root { font-size: 12px; color: var(--text-2); }
 .sep { color: var(--text-2); font-size: 11px; }
 .crumb { font-size: 12px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

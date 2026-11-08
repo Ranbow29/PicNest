@@ -37,6 +37,8 @@ export const useLibrary = defineStore('library', {
     dirMemory: {},           // rel -> { color?, expanded? }（refreshTree 时全表缓存）
     dirMenu: { open: false, x: 0, y: 0, rel: '', node: null },
     view: 'all',          // all | recent | random | trash | search
+    navHistory: [],       // 浏览历史 [{rootId, view, rel}]（后退/前进）
+    navIndex: -1,
     searchQuery: '',
     currentDirRel: null,  // null=全部；''=根层；'a/b'=子目录
     images: [],
@@ -93,6 +95,8 @@ export const useLibrary = defineStore('library', {
   getters: {
     activeRoot: (s) => s.roots.find((r) => r.id === s.activeRootId) || null,
     memoryKey: (s) => (s.activeRootId == null ? '' : `${s.activeRootId}/${s.currentDirRel ?? ''}`),
+    canGoBack: (s) => s.navIndex > 0,
+    canGoForward: (s) => s.navIndex >= 0 && s.navIndex < s.navHistory.length - 1,
     selected: (s) => s.images.find((i) => i.file_path === s.selectedPath) || null,
     filteredImages(s) {
       let arr = s.applyFilters(s.images)
@@ -202,7 +206,7 @@ export const useLibrary = defineStore('library', {
     },
 
     /* 资料库切换：同 id 忽略；全链路键 = activeRootId，tree/counts/images 按 folderId 自动重建 */
-    async switchRoot(id) {
+    async switchRoot(id, opts = {}) {
       if (this.activeRootId === id) return
       if (this.lightbox.open) this.closeLightbox()
       collectiveShake()
@@ -216,6 +220,7 @@ export const useLibrary = defineStore('library', {
       localStorage.setItem('picnest.activeRootId', String(id))
       await this.refreshTree()
       await this.loadImages()
+      if (opts.record !== false) this.recordNav(this.currentLocation())
     },
 
     /* ---- 资料库文件夹管理 ---- */
@@ -485,7 +490,44 @@ export const useLibrary = defineStore('library', {
       }
     },
 
-    async openDir(rel) {
+    /* ---- 浏览历史（后退/前进）：位置 = 资料库 + 视图 + 文件夹 ---- */
+    currentLocation() {
+      return {
+        rootId: this.activeRootId,
+        view: this.view,
+        rel: this.view === 'all' ? (this.currentDirRel ?? null) : null,
+      }
+    },
+    recordNav(loc) {
+      if (!loc) return
+      const next = { rootId: loc.rootId ?? this.activeRootId, view: loc.view || 'all', rel: loc.rel ?? null }
+      const cur = this.navHistory[this.navIndex]
+      if (cur && cur.rootId === next.rootId && cur.view === next.view && cur.rel === next.rel) return
+      this.navHistory = this.navHistory.slice(0, this.navIndex + 1)
+      this.navHistory.push(next)
+      if (this.navHistory.length > 100) this.navHistory = this.navHistory.slice(-100)
+      this.navIndex = this.navHistory.length - 1
+    },
+    async applyNav(loc) {
+      if (!loc) return
+      if (loc.rootId != null && loc.rootId !== this.activeRootId) {
+        await this.switchRoot(loc.rootId, { record: false })
+      }
+      if (loc.view === 'all') await this.openDir(loc.rel ?? null, { record: false })
+      else await this.switchView(loc.view, { record: false })
+    },
+    async goBack() {
+      if (this.navIndex <= 0) return
+      this.navIndex--
+      await this.applyNav(this.navHistory[this.navIndex])
+    },
+    async goForward() {
+      if (this.navIndex < 0 || this.navIndex >= this.navHistory.length - 1) return
+      this.navIndex++
+      await this.applyNav(this.navHistory[this.navIndex])
+    },
+
+    async openDir(rel, opts = {}) {
       // 树上点文件夹 = 离开大图模式和特殊视图，跳进该目录浏览
       if (this.lightbox.open) this.closeLightbox()
       collectiveShake()
@@ -496,9 +538,10 @@ export const useLibrary = defineStore('library', {
       this.currentDirRel = rel ?? null
       if (rel) await this.revealDir(rel)
       await this.loadImages()
+      if (opts.record !== false) this.recordNav(this.currentLocation())
     },
 
-    async switchView(v) {
+    async switchView(v, opts = {}) {
       if (this.lightbox.open) this.closeLightbox()
       collectiveShake()
       this.clearDirSelection()
@@ -509,6 +552,7 @@ export const useLibrary = defineStore('library', {
       this.currentDirRel = null
       this.searchQuery = ''
       await this.loadImages()
+      if (opts.record !== false) this.recordNav(this.currentLocation())
     },
 
     async loadImages() {

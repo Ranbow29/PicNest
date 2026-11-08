@@ -160,3 +160,8 @@ PicNest/
     「显示子文件夹内容」开关：关 = `recursive=false` 且 `dirRel=""`，**directOnly 判断不能依赖 dirRel 真值**
     （空 rel 也要排除更深层，否则会返回全库）。图片拖到侧栏「回收站」入口 = `picnestRemove` 软删 + 本地过滤。
     主面板整圈 `drop-main` 虚线已移除（无实际作用，只剩卡片/树行/浮签反馈）。
+36. **浏览历史 / 面包屑**：store 里 `navHistory/navIndex`，位置 = `{rootId, view, rel}`；`openDir/switchView/switchRoot`
+    末尾 `recordNav`（`opts.record===false` 时跳过，供 goBack/goForward 用）；新导航截断前进栈，上限 100。
+    `goBack/goForward` 改 navIndex 后走 `applyNav`：跨库先 `switchRoot`（不记录）再 openDir/switchView。面包屑用
+    `crumbs` 计算（全部 + 当前 rel 的每级前缀；特殊视图为 全部 + 视图名），非当前项用 `.crumb-link` 按钮点击
+    `openDir(rel)` / `switchView(view)`。按钮在 drag-surface 内，`isInteractive` 已排除 button，不触发拖窗。
