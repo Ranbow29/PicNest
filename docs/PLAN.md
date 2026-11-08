@@ -208,7 +208,3 @@ PicNest/
     并加 `backdrop-filter: blur(22px)`——**0.85 半透明在文字密集页面会透底**，看起来像浮不起来；纯色实白又会失去玻璃感。
     渐变必须「上实下透」（Feb 指定仿顶栏玻璃，方向相反），底部 0.60 是阅读性下限，再透按钮文字会掉对比。圆角维持主面板 6 / 浮岛 14（既有定稿，勿顺手改）。
     改定位时注意 `.insp-overlay` / `.browse` 两处 Inspector 与 resize-handle 的 bottom 要一起改（8→10）。
-    **顶栏同款浮岛（Feb 指定）**：`.titlebar` 内缩 8px、高 42、圆角 14、复用 `--panel-insp-*` 渐变 + blur(22) + `--shadow-float`；
-    移除原全宽 20px 玻璃拖尾（`.titlebar::after` 已删），用 `.titlebar::before`（top:-8 height:8，`--panel-strong`）盖住岛上方滚动内容；
-    **不能给 `.titlebar` 加 overflow:hidden**——`vo-panel`/`funnel-pop` 弹层是它的子级，会被圆角裁掉。
-    顶栏内容滚动穿透（岛下渐变 0.6）是刻意保留的玻璃效果。

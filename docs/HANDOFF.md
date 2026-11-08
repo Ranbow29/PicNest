@@ -130,9 +130,6 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。
 - 入场波 520ms（1/24 墨水步进）；AnimIcon 六字形；集体晃动总线（切视图/换文件夹/切库/关大图/漏斗与布局弹板/详情开合）
 - **随机自弹已彻底移除**（Feb 明确要求，勿复活）
 - 滑尺 fixed 右缘：48 槽 cos² 波峰 + 单条金色 dash；点击/拖拽跳转
-- **顶栏浮岛**：`top/left/right:8px`、高 42、圆角 14、同款 `--panel-insp-*` 竖向渐变 + `blur(22px)` + `--shadow-float`；
-  原全宽 20px 玻璃拖尾已移除；`.titlebar::before` 用 `--panel-strong` 盖住岛上方 8px 的滚动内容；
-  **titlebar 不能加 `overflow:hidden`**（布局面板/筛选弹层会一起被裁），弹层仍在岛下 50px 处正常溢出
 - **视觉分层**：底座 `--bg` 调到 `#eee7da`、主面板 `--panel-strong` 提到 0.95，主面板 `margin:12/12/12/10`
   + `--shadow-float`（近影+主影+大范围柔光）+ `inset 0 1px 0 --panel-edge` 顶缘高光，白窗体压在左栏之上；
   详情浮岛 right/bottom 10 与主面板内缘对齐，**底色为竖向玻璃渐变**（`--panel-insp-top/mid/low/bot`，
