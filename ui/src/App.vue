@@ -166,8 +166,8 @@ const chipStyle = computed(() => {
 .main-panel {
   flex: 1; min-width: 0; display: flex; flex-direction: column;
   position: relative;
-  /* 四边留白 + 悬浮阴影：白窗体压在左栏之上（左缝 8px，其余 10px） */
-  margin: 10px 10px 10px 8px; background: var(--panel-strong);
+  /* 四边留白 + 悬浮阴影：白窗体压在左栏之上（左缝 10px，其余 12px） */
+  margin: 12px 12px 12px 10px; background: var(--panel-strong);
   border: 1px solid var(--border); border-radius: var(--radius-panel);
   box-shadow: var(--shadow-float), inset 0 1px 0 var(--panel-edge);
   overflow: hidden;

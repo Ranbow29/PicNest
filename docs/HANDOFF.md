@@ -130,8 +130,9 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。
 - 入场波 520ms（1/24 墨水步进）；AnimIcon 六字形；集体晃动总线（切视图/换文件夹/切库/关大图/漏斗与布局弹板/详情开合）
 - **随机自弹已彻底移除**（Feb 明确要求，勿复活）
 - 滑尺 fixed 右缘：48 槽 cos² 波峰 + 单条金色 dash；点击/拖拽跳转
-- **视觉分层**：主面板 `margin:10/10/10/8` + `--shadow-float`（近影+大范围柔光）+ `inset 0 1px 0 --panel-edge` 顶缘高光，
-  白窗体压在左栏之上；详情浮岛 right/bottom 10 与主面板内缘对齐，**底色为竖向玻璃渐变**（`--panel-insp-top/mid/low/bot`，
+- **视觉分层**：底座 `--bg` 调到 `#eee7da`、主面板 `--panel-strong` 提到 0.95，主面板 `margin:12/12/12/10`
+  + `--shadow-float`（近影+主影+大范围柔光）+ `inset 0 1px 0 --panel-edge` 顶缘高光，白窗体压在左栏之上；
+  详情浮岛 right/bottom 10 与主面板内缘对齐，**底色为竖向玻璃渐变**（`--panel-insp-top/mid/low/bot`，
   0.97 → 0.93@46% → 0.86@74% → 0.60，顶端实白、越往下越透）+ `backdrop-filter: blur(22px)`，同用 `--shadow-float`
   （文字密集的正文上也不会透底）。圆角保持主面板 6 / 浮岛 14
 - 手动拖窗、置顶按钮、颜色筛选对齐 Eagle 真源、裁剪三选一、丢回收站/从库移除
