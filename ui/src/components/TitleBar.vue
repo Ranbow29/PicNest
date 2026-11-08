@@ -198,28 +198,28 @@ function onKey(e) {
 
 <style scoped>
 .titlebar {
-  position: absolute; top: 0; left: 0; right: 0; z-index: 20;
+  position: absolute; top: 8px; left: 8px; right: 8px; z-index: 20;
   height: 42px;
+  border-radius: var(--radius); /* 14px：与详情浮岛同一套圆角/材质 */
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-float), inset 0 1px 0 var(--panel-edge);
+}
+/* 浮岛上方的面板顶条：盖住滚动内容，避免顶栏上沿露出图 */
+.titlebar::before {
+  content: ''; position: absolute; left: -8px; right: -8px; top: -8px; height: 8px;
+  background: var(--panel-strong);
 }
 /* 纯视觉玻璃层：不背 app-region（不进拖拽位图），backdrop-filter 决不能与 drag 同体 */
 .glass {
   position: absolute; inset: 0; pointer-events: none;
-  background: linear-gradient(180deg, var(--glass-strong) 0%, var(--glass-weak) 100%);
-  backdrop-filter: blur(26px) saturate(1.25);
-  -webkit-backdrop-filter: blur(26px) saturate(1.25);
+  border-radius: calc(var(--radius) - 1px);
+  background: linear-gradient(180deg, var(--panel-insp-top) 0%, var(--panel-insp-mid) 46%, var(--panel-insp-low) 74%, var(--panel-insp-bot) 100%);
+  backdrop-filter: blur(22px) saturate(1.12);
+  -webkit-backdrop-filter: blur(22px) saturate(1.12);
 }
 /* 拖拽命中面：透明全栏，mousedown 走手动拖窗（winDrag.js）；不再声明任何 app-region */
 .drag-surface {
   position: absolute; inset: 0;
-}
-/* 玻璃拖尾：栏体下方 20px 继续模糊渐隐——内容“溶”进顶栏（Wenku8 式） */
-.titlebar::after {
-  content: '';
-  position: absolute; top: 42px; left: 0; right: 0; height: 20px;
-  backdrop-filter: blur(26px) saturate(1.25);
-  -webkit-backdrop-filter: blur(26px) saturate(1.25);
-  background: linear-gradient(180deg, var(--glass-weak), transparent);
-  pointer-events: none;
 }
 .bar-content {
   position: relative; height: 42px; display: flex; align-items: center;
