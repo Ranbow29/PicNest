@@ -34,7 +34,7 @@
   --border: rgba(60, 50, 30, 0.12);
   --shadow: 0 8px 30px rgba(60, 50, 30, 0.12);
   /* 悬浮层：主面板压左栏 / 详情岛压正文（近影 + 主影 + 大范围柔光） */
-  --shadow-float: 0 2px 4px rgba(60, 50, 30, 0.06), 0 16px 40px rgba(60, 50, 30, 0.17), 0 40px 100px rgba(60, 50, 30, 0.11);
+  --shadow-float: 0 3px 6px rgba(60, 50, 30, 0.09), 0 20px 48px rgba(60, 50, 30, 0.23), 0 56px 130px rgba(60, 50, 30, 0.16);
   /* 图片浮岛：近影贴地 + 中景柔影，卡片在 14px 缝里读成一块块浮起的纸 */
   --shadow-tile: 0 1px 2px rgba(60, 50, 30, 0.10), 0 5px 14px rgba(60, 50, 30, 0.13), 0 14px 30px rgba(60, 50, 30, 0.08);
   --shadow-tile-hover: 0 2px 5px rgba(60, 50, 30, 0.13), 0 12px 26px rgba(60, 50, 30, 0.20), 0 28px 56px rgba(60, 50, 30, 0.12);
@@ -70,7 +70,7 @@
     --accent-weak: rgba(212, 169, 100, 0.16);
     --border: rgba(255, 255, 255, 0.1);
     --shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
-    --shadow-float: 0 2px 6px rgba(0, 0, 0, 0.4), 0 18px 44px rgba(0, 0, 0, 0.52), 0 44px 110px rgba(0, 0, 0, 0.4);
+    --shadow-float: 0 3px 8px rgba(0, 0, 0, 0.5), 0 22px 52px rgba(0, 0, 0, 0.6), 0 60px 140px rgba(0, 0, 0, 0.46);
     --shadow-tile: 0 1px 3px rgba(0, 0, 0, 0.42), 0 5px 16px rgba(0, 0, 0, 0.42), 0 14px 34px rgba(0, 0, 0, 0.26);
     --shadow-tile-hover: 0 2px 6px rgba(0, 0, 0, 0.52), 0 12px 30px rgba(0, 0, 0, 0.56), 0 28px 60px rgba(0, 0, 0, 0.36);
     --tile-edge: rgba(255, 255, 255, 0.13);

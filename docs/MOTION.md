@@ -80,7 +80,7 @@ collectiveShake()  →  iconShake.value++  →  watch 的所有 AnimIcon/FolderI
 4. **CSS 动画 vs transform 定位**：入场波不能打在用 transform 摆位的元素上（会覆盖定位），
    打其内层包裹（.thumb）。
 5. **canvas 替换元素**：`position:fixed + top + bottom + height:auto` 会吃 intrinsic height
-   （bottom 被无视，只剩 18px）——显式 `height: calc(100vh - 94px)`。
+   （bottom 被无视，只剩 18px）——显式 `height: calc(100vh - 114px)`（随主面板 22px 外缝；改 margin 要同步）。
 6. **合成事件测不了 OS 层**（app-region 血泪的延伸）：但纯 DOM 逻辑（无 app-region）用
    dispatchEvent + 组件内部状态探针（`el.__vueParentComponent.setupState`）可以精确断言。
 7. **python 脚本插代码进函数体**：用 `find('}')` 式锚点会切进内层函数——插桩后必须通读受影响函数。
