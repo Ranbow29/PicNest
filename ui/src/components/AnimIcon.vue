@@ -28,12 +28,18 @@ function play() {
   }
   raf = requestAnimationFrame(tick)
 }
+/* 载入手势：图标挂载即晃一次。
+   必要性：大图模式顶栏是另一套模板，漏斗/布局钮在大图期间被卸载；退出时它们新挂载，
+   而晃动总线已在 closeLightbox 里 +1 过了 → 挂载晚于触发，监听不到（用户报"退出大图这两颗不晃"）。
+   顺带首次启动全体开场一次，符合"状态跃迁盖一次章"的编排哲学。 */
+let mountT = 0
 onMounted(() => {
+  mountT = setTimeout(play, 80) // 让挂载与布局稳定，手势读起来像同一拍
   if (!props.ambient) return
   const loop = () => { cancelAmbient = scheduleAmbient(() => { play(); loop() }, 3000, 6000) }
   loop()
 })
-onBeforeUnmount(() => { cancelAnimationFrame(raf); cancelAmbient?.() })
+onBeforeUnmount(() => { clearTimeout(mountT); cancelAnimationFrame(raf); cancelAmbient?.() })
 
 // 集体晃动：总线 +1 时全体同步做一次手势
 watch(iconShake, () => play())
