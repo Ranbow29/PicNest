@@ -8,6 +8,7 @@ import Inspector from './components/Inspector.vue'
 import Lightbox from './components/Lightbox.vue'
 import ContextMenu from './components/ContextMenu.vue'
 import DuplicateDialog from './components/DuplicateDialog.vue'
+import ConfirmDialog from './components/ConfirmDialog.vue'
 import ImportResultCard from './components/ImportResultCard.vue'
 import ResizeHandle from './components/ResizeHandle.vue'
 
@@ -88,6 +89,7 @@ const chipStyle = computed(() => {
   </div>
   <ContextMenu />
   <DuplicateDialog />
+  <ConfirmDialog />
   <ImportResultCard />
 </template>
 

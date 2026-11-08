@@ -65,6 +65,14 @@ function rename() {
     ask.value = { title: '重命名文件夹', initial: nameOf(rel), selectBase: true, run: (name) => lib.renameDir(rel, name) }
   })
 }
+function renameLib() {
+  const node = menu.value.node || {}
+  if (!node.id) return
+  const current = node.display_name || node.name || ''
+  run(() => {
+    ask.value = { title: '重命名资料库（仅显示名）', initial: current, selectBase: true, run: (name) => lib.renameLibrary(node.id, name) }
+  })
+}
 async function moveTo() {
   const rel = relOf(menu.value.rel)
   const srcAbs = lib.absPathOf(rel)
@@ -101,6 +109,32 @@ function setColor(key) {
   const rel = relOf(menu.value.rel)
   run(() => lib.patchDirMemory(rel, { color: key }))
 }
+const fmtSize = (n) => {
+  if (!n) return '—'
+  if (n >= 1073741824) return (n / 1073741824).toFixed(2) + ' GB'
+  if (n > 1048576) return (n / 1048576).toFixed(1) + ' MB'
+  if (n > 1024) return (n / 1024).toFixed(0) + ' KB'
+  return n + ' B'
+}
+function deleteDir() {
+  const rel = relOf(menu.value.rel)
+  if (!rel) return
+  const name = nameOf(rel)
+  run(async () => {
+    const stats = await lib.dirStats([rel])
+    const ok = await lib.askConfirm({
+      title: '删除文件夹',
+      message: `确定删除「${name}」？`,
+      details: [
+        stats?.ok ? `${stats.count} 个文件 · ${fmtSize(stats.size)}` : '无法读取文件夹统计',
+        '整个文件夹会移入 Windows 回收站（可还原），并从资料库移除索引。',
+      ],
+      confirmText: '移入回收站',
+      danger: true,
+    })
+    if (ok) await lib.deleteDir(rel)
+  })
+}
 
 const sortItems = [
   { label: '标题（当前层级） A→Z', mode: 'name_asc' },
@@ -117,6 +151,7 @@ const sortItems = [
     <div v-if="menu.open" class="dm-layer" @click="lib.closeDirMenu()" @contextmenu.prevent="lib.closeDirMenu()">
       <div class="dm glass-card" :style="pos" @click.stop>
         <button class="mi" @click="newSub">新建子文件夹</button>
+        <button v-if="isLib" class="mi" @click="renameLib">重命名资料库…</button>
         <button v-if="!isLib" class="mi" @click="newSibling">新建文件夹</button>
         <button v-if="!isLib" class="mi" @click="rename">重命名</button>
 
@@ -141,6 +176,8 @@ const sortItems = [
                   :style="{ background: c.css }" :title="c.label || c.key"
                   @click="setColor(c.key)" />
         </div>
+
+        <button v-if="!isLib" class="mi danger" @click="deleteDir">删除文件夹…</button>
       </div>
     </div>
 
@@ -172,6 +209,8 @@ const sortItems = [
 .mi.group { color: var(--text-2); }
 .mi.sub { padding-left: 22px; font-size: 12px; color: var(--text-2); }
 .mi.sub:hover { color: var(--text); }
+.mi.danger { color: #c25a4d; margin-top: 2px; }
+.mi.danger:hover { background: rgba(194, 90, 77, 0.12); }
 .caret { font-style: normal; font-size: 10px; transition: transform 0.15s; }
 .caret.on { transform: rotate(90deg); }
 .swatch-row { display: flex; gap: 6px; padding: 4px 10px 8px; }

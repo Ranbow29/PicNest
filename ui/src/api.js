@@ -26,8 +26,8 @@ export const api = {
   // PicNest 新增
   dirTree: (folderId) => invoke('picnestDirTree', folderId),
   dirStats: (folderId, rels) => invoke('picnestDirStats', folderId, rels),
-  imagesByDir: (folderId, dirRel, offset, limit, sortMode = 'id', sortAsc) =>
-    invoke('picnestImagesByDir', folderId, dirRel, offset, limit, sortMode, sortAsc),
+  imagesByDir: (folderId, dirRel, offset, limit, sortMode = 'id', sortAsc, recursive = true) =>
+    invoke('picnestImagesByDir', folderId, dirRel, offset, limit, sortMode, sortAsc, recursive),
   countAll: (folderId) => invoke('picnestCountAll', folderId),
   recent: (folderId, limit) => invoke('picnestRecent', folderId, limit),
   imageOpened: (filePath) => invoke('picnestImageOpened', filePath),
@@ -35,6 +35,8 @@ export const api = {
   dirMemorySet: (key, patch) => invoke('picnestDirMemorySet', key, patch),
   // 资料库文件夹管理
   mkdir: (parentPath, name) => invoke('picnestMkdir', parentPath, name),
+  deleteDir: (dirPath, rel) => invoke('picnestDeleteDir', dirPath, rel),
+  renameLibrary: (id, name) => invoke('picnestRenameLibrary', id, name),
   renameDir: (oldPath, newName, oldRel, parentRel) => invoke('picnestRenameDir', oldPath, newName, oldRel, parentRel),
   dirSort: (parentRel, parentAbsPath, mode) => invoke('picnestDirSort', parentRel, parentAbsPath, mode),
   dirSortRecursive: (rootAbsPath, rootRel, mode) => invoke('picnestDirSortRecursive', rootAbsPath, rootRel, mode),

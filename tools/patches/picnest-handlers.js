@@ -129,7 +129,7 @@ electron.ipcMain.handle("picnest-dir-stats", (_event, folderId, rels) => {
 });
 
 /* 某子目录下的图片分页（dirRel 用 "/" 分隔，"" = 根层直属文件） */
-electron.ipcMain.handle("picnest-images-by-dir", (_event, folderId, dirRel, offset, limit, sortMode, sortAsc) => {
+electron.ipcMain.handle("picnest-images-by-dir", (_event, folderId, dirRel, offset, limit, sortMode, sortAsc, recursive) => {
   picnestMigrate();
   const root = getDb().prepare("SELECT path FROM folders WHERE id = ?").get(folderId);
   if (!root) return [];
@@ -138,6 +138,11 @@ electron.ipcMain.handle("picnest-images-by-dir", (_event, folderId, dirRel, offs
   let pattern = picnestLikeEscape(root.path + sep + (dirRel && dirRel !== "__loose__" ? dirRel.split("/").join(sep) + sep : "")) + "%";
   const looseOnly = dirRel === "__loose__";
   if (looseOnly) pattern = rootEsc + "%";
+  /* recursive=false：只要该层直属图片（排除更深层带分隔符的路径） */
+  const directOnly = recursive === false && dirRel && dirRel !== "__loose__";
+  const deeperPattern = directOnly
+    ? picnestLikeEscape(root.path + sep + dirRel.split("/").join(sep) + sep) + "%" + picnestLikeEscape(sep) + "%"
+    : null;
   /* 排序：name/added/mtime/size 走 SQL（sortAsc 控制方向），dims/rating 等暂回退 id ASC。
      全部视图（dirRel 空）由渲染层强制传 added → id DESC = 最新入库置顶 */
   const dirWord = (ascDefault) => (sortAsc === undefined || sortAsc === null ? ascDefault : sortAsc) ? "ASC" : "DESC";
@@ -151,10 +156,15 @@ electron.ipcMain.handle("picnest-images-by-dir", (_event, folderId, dirRel, offs
       `SELECT id, file_path, file_name, file_size, modify_time, width, height, thumbnail_path, is_favorite
        FROM images WHERE folder_id = ? AND deleted_at IS NULL AND file_path LIKE ? ESCAPE '\\' AND file_path NOT LIKE ? ESCAPE '\\' ORDER BY ${order} LIMIT ? OFFSET ?`
     ).all(folderId, pattern, rootEsc + "%" + picnestLikeEscape(sep) + "%", limit, offset)
-    : getDb().prepare(
-      `SELECT id, file_path, file_name, file_size, modify_time, width, height, thumbnail_path, is_favorite
-       FROM images WHERE folder_id = ? AND deleted_at IS NULL AND file_path LIKE ? ESCAPE '\\' ORDER BY ${order} LIMIT ? OFFSET ?`
-    ).all(folderId, pattern, limit, offset);
+    : directOnly
+      ? getDb().prepare(
+        `SELECT id, file_path, file_name, file_size, modify_time, width, height, thumbnail_path, is_favorite
+         FROM images WHERE folder_id = ? AND deleted_at IS NULL AND file_path LIKE ? ESCAPE '\\' AND file_path NOT LIKE ? ESCAPE '\\' ORDER BY ${order} LIMIT ? OFFSET ?`
+      ).all(folderId, pattern, deeperPattern, limit, offset)
+      : getDb().prepare(
+        `SELECT id, file_path, file_name, file_size, modify_time, width, height, thumbnail_path, is_favorite
+         FROM images WHERE folder_id = ? AND deleted_at IS NULL AND file_path LIKE ? ESCAPE '\\' ORDER BY ${order} LIMIT ? OFFSET ?`
+      ).all(folderId, pattern, limit, offset);
   const valid = [];
   for (const img of rows) {
     if (img.thumbnail_path && !fs.existsSync(img.thumbnail_path)) img.thumbnail_path = "";
@@ -491,6 +501,62 @@ electron.ipcMain.handle("picnest-mkdir", (_event, parentPath, name) => {
     for (let i = 2; fs.existsSync(finalPath); i++) finalPath = path.join(parentPath, clean + " (" + i + ")");
     fs.mkdirSync(finalPath, { recursive: true });
     return { ok: true, path: finalPath, name: path.basename(finalPath) };
+  } catch (e) {
+    return { ok: false, error: String(e?.message || e) };
+  }
+});
+
+/* 删除文件夹：整包移入 Windows 回收站（可还原），同时清 DB 索引与 dirMemory/排序残留；库根禁止 */
+electron.ipcMain.handle("picnest-delete-dir", async (_event, dirPath, rel) => {
+  try {
+    if (!dirPath) return { ok: false, error: "路径为空" };
+    const abs = path.resolve(dirPath);
+    if (!fs.existsSync(abs)) return { ok: false, error: "目录不存在" };
+    if (!fs.statSync(abs).isDirectory()) return { ok: false, error: "不是文件夹" };
+    if (path.dirname(abs) === abs) return { ok: false, error: "不能删除盘符根目录" };
+    if (getDb().prepare("SELECT id FROM folders WHERE path = ?").get(abs)) {
+      return { ok: false, error: "资料库根不能在文件夹区删除" };
+    }
+    const prefix = abs.replace(/[\\/]+$/, "") + path.sep;
+    const pattern = picnestLikeEscape(prefix) + "%";
+    const cnt = getDb().prepare("SELECT COUNT(*) AS c FROM images WHERE file_path LIKE ? ESCAPE '\\'").get(pattern).c;
+    await electron.shell.trashItem(abs);
+    getDb().prepare("DELETE FROM images WHERE file_path LIKE ? ESCAPE '\\'").run(pattern);
+    /* 清理 dirMemory 键与父级排序中的名字 */
+    if (rel) {
+      const cleanRel = String(rel).replace(/^\/+|\/+$/g, "");
+      const parentRel = cleanRel.includes("/") ? cleanRel.slice(0, cleanRel.lastIndexOf("/")) : "";
+      const name = cleanRel.split("/").pop();
+      let c = {};
+      try { c = JSON.parse(fs.readFileSync(configPath, "utf-8")); } catch (e) {}
+      let changed = false;
+      const mem = c.picnestDirMemory || {};
+      for (const key of Object.keys(mem)) {
+        if (key === cleanRel || key.startsWith(cleanRel + "/")) { delete mem[key]; changed = true; }
+      }
+      if (changed) c.picnestDirMemory = mem;
+      const order = c.picnestDirOrder || {};
+      const pkey = parentRel || "__root__";
+      if (Array.isArray(order[pkey]) && order[pkey].includes(name)) {
+        order[pkey] = order[pkey].filter((n) => n !== name);
+        c.picnestDirOrder = order;
+        changed = true;
+      }
+      if (changed) fs.writeFileSync(configPath, JSON.stringify(c, null, 2));
+    }
+    return { ok: true, count: cnt, path: abs };
+  } catch (e) {
+    return { ok: false, error: String(e?.message || e) };
+  }
+});
+
+/* 资料库重命名：只改显示名，不动物理目录（资料库区的编辑入口） */
+electron.ipcMain.handle("picnest-rename-library", (_event, id, name) => {
+  try {
+    const clean = String(name || "").trim();
+    if (!clean) return { ok: false, error: "名称为空" };
+    getDb().prepare("UPDATE folders SET display_name = ? WHERE id = ?").run(clean, id);
+    return { ok: true, name: clean };
   } catch (e) {
     return { ok: false, error: String(e?.message || e) };
   }

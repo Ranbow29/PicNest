@@ -51,6 +51,7 @@ export const useLibrary = defineStore('library', {
     dirAnchor: null,
     selectionView: false,     // 多选文件夹 → 网格显示所选文件夹的合并内容
     hoverLabels: true,    // 网格悬停显字（M5 视图选项可关）
+    showSubfolderContent: localStorage.getItem('picnest.showSubfolderContent') !== '0', // 文件夹视图：是否包含子文件夹图片
     layout: localStorage.getItem('picnest.layout') || 'grid',       // grid | justified | masonry（持久化）
     zoom: Number(localStorage.getItem('picnest.zoom')) || 1,          // 顶栏缩放滑条（持久化）
     sortMode: localStorage.getItem('picnest.sortMode') || 'name',    // name|added|mtime|size|dims|rating|random
@@ -63,6 +64,7 @@ export const useLibrary = defineStore('library', {
     contextMenu: { open: false, x: 0, y: 0, image: null },
     renaming: false,
     dupDialog: { open: false, items: [], targetRel: undefined, resolve: null },
+    confirmDialog: { open: false, title: '', message: '', details: [], confirmText: '确定', danger: false, resolve: null },
     importResult: { open: false, nonce: 0, summary: '', details: [], tone: 'ok' }, // 录入汇总结果卡
     dropHint: { active: false, zone: '', label: '', x: 0, y: 0, key: null }, // 外部拖入落点提示（分区高亮 + 跟随光标）
     viewer: { scale: 1, tx: 0, ty: 0, rot: 0, flopX: false, showInspector: false, /* 初始收起：让用户先看图，详情随点随开 */ cropMode: false, fitNonce: 0 },
@@ -156,6 +158,13 @@ export const useLibrary = defineStore('library', {
       } catch (e) { this.error = String(e?.message || e) }
     },
 
+    /* 资料库重命名：只改显示名（资料库区编辑入口；物理目录不动） */
+    async renameLibrary(id, name) {
+      const r = await api.renameLibrary(id, name)
+      if (r?.ok) this.roots = this.roots.map((x) => (x.id === id ? { ...x, display_name: name } : x))
+      return r
+    },
+
     async addRootByPath(p) {
       this.scanning = true
       this.scanNote = '登记文件夹…'
@@ -221,6 +230,29 @@ export const useLibrary = defineStore('library', {
       await this.refreshTree()
       await this.loadImages()
       return { ...r, rel: newRel }
+    },
+
+    /* 删除文件夹：整包移入 Windows 回收站（可还原）+ 清索引；资料库根不可删 */
+    async deleteDir(rel) {
+      if (!this.tree || !rel) return { ok: false, error: '资料库根不能删除' }
+      const abs = this.absPathOf(rel)
+      const parentRel = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : ''
+      try {
+        const r = await api.deleteDir(abs, rel)
+        if (!r?.ok) { this.error = r?.error || '删除失败'; return r }
+        const inSub = (x) => x === rel || (x || '').startsWith(rel + '/')
+        if (inSub(this.currentDirRel)) this.currentDirRel = parentRel || null
+        this.selectedDirs = this.selectedDirs.filter((x) => !inSub(x))
+        if (this.dirAnchor != null && inSub(this.dirAnchor)) this.dirAnchor = parentRel || null
+        if (this.selectionView && this.selectedDirs.length < 2) this.selectionView = false
+        await this.refreshTree()
+        await this.loadImages()
+        return r
+      } catch (e) {
+        const r = { ok: false, error: String(e?.message || e) }
+        this.error = r.error
+        return r
+      }
     },
 
     async renameDir(rel, newName) {
@@ -323,7 +355,7 @@ export const useLibrary = defineStore('library', {
           /* 全部 = 最新入库流（新图置顶，与文件夹视图彻底分开；忽略升降序开关锁死最新在前）
              文件夹 = 排序器正常排序（sortMode + sortAsc 全生效） */
           const inAll = this.view === 'all' && !this.currentDirRel
-          next = await api.imagesByDir(this.activeRootId, this.currentDirRel, 0, 100000, inAll ? 'added' : this.sortMode, inAll ? false : this.sortAsc)
+          next = await api.imagesByDir(this.activeRootId, this.currentDirRel, 0, 100000, inAll ? 'added' : this.sortMode, inAll ? false : this.sortAsc, inAll ? true : this.showSubfolderContent)
         }
         if (gen !== this._loadGen) return // 快速切换时丢弃过期结果
         this.images = next || []
@@ -393,6 +425,25 @@ export const useLibrary = defineStore('library', {
     resolveDupDialog(choice) {
       if (this.dupDialog.resolve) this.dupDialog.resolve(choice)
       this.dupDialog = { open: false, items: [], targetRel: undefined, resolve: null }
+    },
+
+    /* 通用确认框（Promise<boolean>） */
+    askConfirm(opts = {}) {
+      return new Promise((resolve) => {
+        this.confirmDialog = {
+          open: true,
+          title: opts.title || '确认',
+          message: opts.message || '',
+          details: opts.details || [],
+          confirmText: opts.confirmText || '确定',
+          danger: !!opts.danger,
+          resolve,
+        }
+      })
+    },
+    resolveConfirm(v) {
+      if (this.confirmDialog.resolve) this.confirmDialog.resolve(!!v)
+      this.confirmDialog = { open: false, title: '', message: '', details: [], confirmText: '确定', danger: false, resolve: null }
     },
 
     async removeFromLibrary(path) {
@@ -694,6 +745,11 @@ export const useLibrary = defineStore('library', {
     setLayout(key) {
       this.layout = key
       localStorage.setItem('picnest.layout', key)
+    },
+    setShowSubfolderContent(v) {
+      this.showSubfolderContent = !!v
+      localStorage.setItem('picnest.showSubfolderContent', v ? '1' : '0')
+      if (this.view === 'all' && this.currentDirRel && !this.selectionView) this.loadImages()
     },
     setZoom(z) {
       this.zoom = z

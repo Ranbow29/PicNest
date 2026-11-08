@@ -122,3 +122,9 @@ PicNest/
     （逐目录递归取图 → `file_path` 去重 → 全局排序）；`loadImages` 加 `_loadGen` 代际，快速切换/连续加选时丢弃过期结果。
     整组拖拽用 JSON 数组键 `x-picnest-dirs` / `x-picnest-files`（drop 端优先数组，单值键保兼容）；根行 `rel=""` 禁用 draggable，
     父子同时选中拖拽只搬父级（子项随父走，重复搬会源不存在）。
+27. **IPC 新增参数必须三处同步**：main handler / `apply.mjs` preload bridge / `api.js`。`imagesByDir` 加 `recursive`
+    时漏了 preload 转发，主进程永远收到 undefined → 「显示子文件夹内容」开关无效（表现为 321 张不变）。
+    排查技巧：先看 `window.picrand.<方法>.length`（形参个数）是否包含新参数。
+28. **子文件夹卡片条与布局**：`contentTop = HEADER_H + stripH + 10` 必须参与 grid/justified/masonry 三种布局的起始 Y；
+    无图片时 `totalH` 也要给 header+strip 高度（否则 canvas 高度 0 裁掉卡片条）。`ImageGrid` 是 fragment 根
+    （canvas + viewport），App 传入的 `.insp-open` class 无法继承 → 卡片条在详情打开时手动 `right:312px` 避让。

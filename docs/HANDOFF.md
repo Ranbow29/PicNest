@@ -47,6 +47,9 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，替代 Eagle 日常使用
 - `＋`（文件夹区）= 当前库根新建文件夹；`⌂`（资料库区）= 添加资料库
 - 文件夹右键菜单：新建子/同级、重命名（order+memory 键迁移）、排序（当前层级 A→Z/Z→A、全部层级递归 ×2、修改时间 ×2）、移动到…、导出（递归保结构+重名去重）、图标颜色 8 预设
 - 空文件夹可见（dir-tree 合并文件系统真实目录）；颜色/展开态持久化（dirMemory）
+- **树根行只读**：资料库根在文件夹树里不提供右键编辑菜单（重命名/移动/删除根都禁止）；编辑统一在「资料库」区
+- **资料库行菜单**：新建子文件夹 / **重命名资料库…（仅改 display_name，不动物理目录）** / 排序 / 导出 / 图标颜色
+- **文件夹删除**：右键非根文件夹 → 删除文件夹… → 确认卡（文件数/大小）→ 整包移入 Windows 回收站（可还原），同时清 DB 索引、dirMemory 与该层级排序残留；当前浏览位置在被删子树内会回父级
 
 **动效系统**（Wenku8_Flutter GPL-2.0-or-later 移植，合规声明见 PLAN）
 - 入场波 520ms（1/24 墨水步进）：切视图/排序/筛选/内容更新重放；滚动补挂载不重放（gi≥48）
@@ -90,6 +93,8 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，替代 Eagle 日常使用
 **视图与设置**
 - 全部 = 最新入库置顶（锁死，忽略升降序开关）；文件夹 = 排序面板（name/added/mtime/size × 升降序）
 - 未分类 = 库根散图（侧栏在最近使用之下，当前 3 张）
+- **Eagle 式子文件夹卡片条**：文件夹视图顶部显示直属子文件夹卡片（封面图/名称/文件数）；点击打开，Shift/Alt 加入多选，右键出文件夹菜单；卡片条随内容滚动，不显示在全部/未分类/合并视图
+- **「显示子文件夹内容」开关**：默认开，localStorage 持久化；开 = 当前文件夹递归图片（藤原 321），关 = 只剩直属图片（245）；子文件夹卡片条始终显示
 - **持久化全清单**（均已实测跨重载恢复）：布局方式 · 缩放 · 排序 · 资料库选择 · 侧栏宽度 · 详情宽度 · 树展开态（dirMemory）· **上次浏览位置（视图 + 文件夹；目录失效自动回退全部）**；详情面板初始收起
 - **大图进出双触发集体晃动**（openLightbox / closeLightbox 各自 collectiveShake）
   - 注意：大图模式顶栏是另一套模板，漏斗/布局钮在大图期间**被卸载**；退出时新挂载晚于总线触发，
@@ -127,6 +132,7 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，替代 Eagle 日常使用
 | `ui/src/components/DirContextMenu.vue` · `NamePromptDialog.vue` | 文件夹菜单 · 名称对话框 |
 | `ui/src/components/FilterBar.vue` · `ColorPicker.vue` · `Inspector.vue` | 筛选 · HSV 取色 · 详情（色板可点） |
 | `ui/src/components/ImportResultCard.vue` | 录入汇总结果卡（明细展开/悬停停留/自动收起） |
+| `ui/src/components/ConfirmDialog.vue` | 通用确认框（Promise<boolean>，删除等危险操作用） |
 | `tools/patches/apply.mjs` · `picnest-handlers.js` | 补丁 P1-P6 + 文件夹管理 5 原语 + 未分类 + 拖窗 + 录入（import-check/import-dir-copy） |
 | `tools/cdp-eval.mjs` · `cdp-active-eval.mjs` · `cdp-shot.mjs` · `cdp-reload-probe.mjs` · `shot-prod.ps1` | 探针家族 |
 | `docs/MOTION.md` | 动效规格/调参速查（改手感先看它） |

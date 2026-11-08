@@ -28,6 +28,8 @@ function toggleExpand() {
 }
 
 function onContextMenu(e) {
+  /* 根行 = 资料库本身：编辑只在资料库区，文件夹树根行不提供编辑菜单 */
+  if (!rel.value) return
   if (!lib.selectedDirs.includes(rel.value)) lib.selectDir(rel.value, {})
   lib.openDirMenu(e, { rel: rel.value, node: props.node })
 }

@@ -433,8 +433,8 @@ async function exportFolder() {
         <input v-if="singleDir.rel" class="line-input folder-name" v-model="folderNameDraft"
                @keyup.enter="commitFolderName" @blur="commitFolderName" @keyup.esc="resetFolderName" />
         <div v-else class="folder-title">{{ singleDir.node.name }}</div>
-        <div v-if="!singleDir.rel" class="folder-note">资料库根目录</div>
-        <textarea class="line-input desc" placeholder="描述" v-model="dirDesc" @input="queueDirDesc"></textarea>
+        <div v-if="!singleDir.rel" class="folder-note">资料库根目录（编辑请在资料库区）</div>
+        <textarea v-if="singleDir.rel" class="line-input desc" placeholder="描述" v-model="dirDesc" @input="queueDirDesc"></textarea>
       </template>
       <template v-else>
         <div class="folder-title">多个标题</div>

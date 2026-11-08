@@ -4,6 +4,7 @@ import { useLibrary } from '../stores/library'
 import { api, fileUrl } from '../api'
 import { startWindowDrag } from '../lib/winDrag'
 import { waveSeq, waveDelay, replayWave } from '../lib/wave'
+import FolderIcon from './FolderIcon.vue'
 
 const lib = useLibrary()
 const showLabels = computed(() => lib.hoverLabels !== false)
@@ -98,6 +99,42 @@ const sortedImages = computed(() => {
 /* ---------- 布局引擎：grid（等格）/ justified（自适应行高） ---------- */
 const GAP = 14
 const HEADER_H = 150 // 编辑排印头块实际高度：56 玻璃让位 + 标题 38 + 小标 14 + 间距 + 规则线（不足会压线）
+const SUBFOLDER_STRIP_H = 172 // 文件夹视图顶部的子文件夹卡片条
+
+/* 当前文件夹的直属子文件夹（Eagle 式卡片条；合并视图/非文件夹视图不显示） */
+const currentFolderNode = computed(() => (lib.view === 'all' && lib.currentDirRel && !lib.selectionView
+  ? lib.findNode(lib.tree?.tree, lib.currentDirRel)
+  : null))
+const subfolders = computed(() => currentFolderNode.value?.children || [])
+const stripH = computed(() => (subfolders.value.length ? SUBFOLDER_STRIP_H : 0))
+const contentTop = computed(() => HEADER_H + stripH.value + 10)
+
+/* 卡片封面：每个子文件夹取一张图（缩略图优先） */
+const covers = ref({})
+let coverToken = 0
+watch(
+  () => [lib.activeRootId, lib.currentDirRel, subfolders.value.map((f) => f.rel).join('|')].join('::'),
+  async () => {
+    const list = subfolders.value
+    const token = ++coverToken
+    if (!list.length) { covers.value = {}; return }
+    const out = {}
+    await Promise.all(list.map(async (f) => {
+      try {
+        const rows = await api.imagesByDir(lib.activeRootId, f.rel, 0, 1, 'added', false)
+        const im = rows?.[0]
+        if (im) out[f.rel] = fileUrl(im.thumbnail_path && im.thumbnail_path !== 'SKIP' ? im.thumbnail_path : im.file_path)
+      } catch { /* 单目录失败忽略 */ }
+    }))
+    if (token === coverToken) covers.value = out
+  },
+  { immediate: true }
+)
+function onSubClick(e, f) {
+  const add = e.altKey || e.ctrlKey || e.metaKey
+  if (e.shiftKey || add) lib.selectDir(f.rel, { shift: e.shiftKey, add })
+  else lib.openDir(f.rel)
+}
 
 /* ---------- 编辑排印头块（Wenku8 式：衬线大标题 + 英文小标 + 规则线） ---------- */
 const VIEW_EN = { all: 'LIBRARY', recent: 'RECENT', uncategorized: 'UNSORTED', random: 'RANDOM', trash: 'TRASH', search: 'SEARCH' }
@@ -122,7 +159,7 @@ const items = computed(() => {
 
   if (lib.layout === 'justified') {
     const targetH = Math.round(240 * lib.zoom)
-    let y = HEADER_H + 10, row = []
+    let y = contentTop.value, row = []
     let arSum = 0 // 行内宽高比之和
     const flushRow = (isLast) => {
       if (!row.length) return
@@ -152,7 +189,7 @@ const items = computed(() => {
     const targetColW = Math.round(220 * lib.zoom)
     const cols = Math.max(1, Math.floor((W + GAP) / (targetColW + GAP)))
     const colW = Math.floor((W - GAP * (cols - 1)) / cols)
-    const colH = new Array(cols).fill(HEADER_H + 10)
+    const colH = new Array(cols).fill(contentTop.value)
     for (const img of imgs) {
       const ar = Math.max(0.2, Math.min(4, (img.width || 1) / (img.height || 1)))
       let col = 0
@@ -165,7 +202,7 @@ const items = computed(() => {
     const cell = Math.round(200 * lib.zoom)
     const step = cell + GAP
     const cols = Math.max(1, Math.floor((W + GAP) / step))
-    const y0 = HEADER_H + 10
+    const y0 = contentTop.value
     imgs.forEach((img, i) => {
       const col = i % cols, rowIdx = Math.floor(i / cols)
       out.push({ ...img, x: col * step, y: y0 + rowIdx * step, w: cell, h: cell })
@@ -176,9 +213,10 @@ const items = computed(() => {
 
 const totalH = computed(() => {
   const it = items.value
-  if (!it.length) return 0
+  const top = contentTop.value
+  if (!it.length) return top + 10
   const last = it[it.length - 1]
-  return last.y + last.h + 40
+  return Math.max(last.y + last.h + 40, top + 10)
 })
 
 /* 可视窗口：二分找起点，向后扫到出界 */
@@ -353,6 +391,33 @@ function onCellClick(e, img) {
         <div class="head-caption">{{ header.caption }}</div>
         <div class="head-rule"><i /></div>
       </header>
+
+      <!-- 子文件夹卡片条（Eagle 式）：随内容滚动，位于头部与图片之间 -->
+      <div v-if="subfolders.length" class="subfolders" :style="{ top: HEADER_H + 'px', height: stripH + 'px', right: lib.viewer.showInspector ? '312px' : '4px' }">
+        <div class="sf-head">
+          <span class="sf-title">子文件夹 <b>({{ subfolders.length }})</b></span>
+          <label class="sf-toggle">
+            <input type="checkbox" :checked="lib.showSubfolderContent" @change="lib.setShowSubfolderContent($event.target.checked)" />
+            <span>显示子文件夹内容</span>
+          </label>
+        </div>
+        <div class="sf-row">
+          <div
+            v-for="f in subfolders" :key="f.rel" class="sf-card"
+            :class="{ sel: lib.selectedDirs.includes(f.rel) }"
+            @click="onSubClick($event, f)"
+            @contextmenu.prevent="lib.openDirMenu($event, { rel: f.rel, node: f })"
+          >
+            <div class="sf-cover">
+              <img v-if="covers[f.rel]" :src="covers[f.rel]" draggable="false" loading="lazy" />
+              <FolderIcon v-else :color="lib.dirMemory[f.rel]?.color || ''" :size="30" />
+            </div>
+            <div class="sf-name" :title="f.name">{{ f.name }}</div>
+            <div class="sf-count">{{ f.total }} 个文件</div>
+          </div>
+        </div>
+      </div>
+
       <div
         v-for="img in cells" :key="img.id + '-' + waveSeq"
         class="cell" :class="{ selected: selectedSet.has(img.file_path) }"
@@ -372,7 +437,7 @@ function onCellClick(e, img) {
       </div>
     </div>
     <div v-if="lib.loading" class="state overlay-state">载入中…</div>
-    <div v-else-if="!lib.images.length" class="state overlay-state">此文件夹暂无图片</div>
+    <div v-else-if="!lib.images.length" class="state overlay-state">{{ subfolders.length ? '此文件夹暂无直属图片' : '此文件夹暂无图片' }}</div>
   </div>
 </template>
 
@@ -443,4 +508,31 @@ function onCellClick(e, img) {
 .head-rule { display: flex; align-items: center; gap: 8px; margin-right: 36px; } /* 右侧让位概览滑尺 */
 .head-rule i { flex: 1; height: 1px; background: var(--border); }
 .head-rule::after { content: ''; width: 5px; height: 5px; background: var(--accent); }
+
+/* ---- 子文件夹卡片条（Eagle 式） ---- */
+.subfolders { position: absolute; left: 4px; right: 4px; padding: 0 10px; }
+.sf-head { display: flex; align-items: center; justify-content: space-between; height: 30px; }
+.sf-title { font-size: 12px; color: var(--text-2); letter-spacing: 0.5px; }
+.sf-title b { color: var(--text); font-weight: 600; }
+.sf-toggle {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11.5px; color: var(--text-2); cursor: pointer; user-select: none;
+  padding: 3px 7px; border-radius: 7px; transition: background 0.15s, color 0.15s;
+}
+.sf-toggle:hover { background: var(--accent-weak); color: var(--text); }
+.sf-toggle input { accent-color: var(--accent); cursor: pointer; }
+.sf-row { display: flex; gap: 14px; height: 130px; overflow-x: auto; overflow-y: hidden; padding: 4px 2px 0; scrollbar-width: none; }
+.sf-row::-webkit-scrollbar { display: none; }
+.sf-card { flex: none; width: 168px; cursor: pointer; }
+.sf-cover {
+  height: 92px; border-radius: 10px; overflow: hidden;
+  background: var(--bg-2); border: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: center;
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
+}
+.sf-cover img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.sf-card:hover .sf-cover { border-color: var(--accent); transform: translateY(-2px); box-shadow: var(--shadow); }
+.sf-card.sel .sf-cover { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-weak); }
+.sf-name { margin-top: 7px; font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sf-count { margin-top: 2px; font-size: 11px; color: var(--text-2); }
 </style>
