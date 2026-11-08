@@ -481,9 +481,13 @@ async function exportFolder() {
 
 <style scoped>
 .inspector {
-  width: var(--insp-w, 296px); flex: none; margin: 46px 8px 8px 0; /* 46px = 让出玻璃顶栏 */
-  background: var(--panel-inspector); border: 1px solid var(--border);
-  border-radius: var(--radius); box-shadow: var(--shadow);
+  width: var(--insp-w, 296px); flex: none; margin: 46px 10px 10px 0; /* 46px = 让出玻璃顶栏 */
+  background: var(--panel-inspector);
+  backdrop-filter: blur(20px) saturate(1.12);
+  -webkit-backdrop-filter: blur(20px) saturate(1.12);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-float), inset 0 1px 0 var(--panel-edge); /* 悬浮于正文之上 */
   overflow-y: auto; overflow-x: hidden;
   animation: slide-in 0.22s ease;
 }

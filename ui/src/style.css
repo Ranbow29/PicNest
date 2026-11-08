@@ -31,12 +31,15 @@
   --accent-weak: rgba(180, 136, 75, 0.14);
   --border: rgba(60, 50, 30, 0.12);
   --shadow: 0 8px 30px rgba(60, 50, 30, 0.12);
+  /* 悬浮层：主面板压左栏 / 详情岛压正文（轻近影 + 大范围柔光） */
+  --shadow-float: 0 1px 2px rgba(60, 50, 30, 0.05), 0 12px 32px rgba(60, 50, 30, 0.13), 0 28px 70px rgba(60, 50, 30, 0.08);
+  --panel-edge: rgba(255, 255, 255, 0.6); /* 顶缘高光，给出“有厚度的纸” */
   --overlay-grad: linear-gradient(transparent, rgba(255, 255, 255, 0.94)); /* 网格悬停信息条（加高加深版） */
   --overlay-text: #1c1a16;
   --overlay-halo: 0 1px 3px rgba(255, 255, 255, 0.9), 0 0 1px rgba(255, 255, 255, 0.9); /* 亮色主题：白描边 */
   --glass-strong: rgba(244, 239, 231, 0.92); /* 玻璃顶边：顶部浓、往下透 */
   --glass-weak: rgba(244, 239, 231, 0.35);
-  --panel-inspector: rgba(255, 255, 255, 0.85); /* 详情浮岛 */
+  --panel-inspector: rgba(255, 255, 255, 0.94); /* 详情浮岛：接近实白，悬浮于正文之上 */
   --radius: 14px;
   --radius-panel: 6px; /* 主面板：锐利小圆角（详情浮岛保持 14px，ZCode 层次） */
   --blur: 22px;
@@ -55,6 +58,8 @@
     --accent-weak: rgba(212, 169, 100, 0.16);
     --border: rgba(255, 255, 255, 0.1);
     --shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
+    --shadow-float: 0 1px 2px rgba(0, 0, 0, 0.35), 0 14px 36px rgba(0, 0, 0, 0.45), 0 30px 80px rgba(0, 0, 0, 0.35);
+    --panel-edge: rgba(255, 255, 255, 0.07);
     --overlay-grad: linear-gradient(transparent, rgba(0, 0, 0, 0.85));
     --overlay-text: #f2efe8;
     --overlay-halo: 0 1px 3px rgba(0, 0, 0, 0.8), 0 0 1px rgba(0, 0, 0, 0.8); /* 暗色主题：黑描边 */

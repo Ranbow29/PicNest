@@ -166,22 +166,24 @@ const chipStyle = computed(() => {
 .main-panel {
   flex: 1; min-width: 0; display: flex; flex-direction: column;
   position: relative;
-  margin: 8px 8px 8px 4px; background: var(--panel-strong);
+  /* 四边留白 + 悬浮阴影：白窗体压在左栏之上（左缝 8px，其余 10px） */
+  margin: 10px 10px 10px 8px; background: var(--panel-strong);
   border: 1px solid var(--border); border-radius: var(--radius-panel);
-  box-shadow: var(--shadow); overflow: hidden;
+  box-shadow: var(--shadow-float), inset 0 1px 0 var(--panel-edge);
+  overflow: hidden;
 }
 .main-inner { flex: 1; display: flex; min-height: 0; position: relative; } /* 头块自己让位玻璃顶栏 */
 .browse { flex: 1; display: flex; min-height: 0; position: relative; }
 /* 详情统一 overlay：悬浮于内容之上（滚动条自然到最右），两模式同位同尺寸
    top 64 = 让过 42px 玻璃顶栏 + 20px 拖尾渐隐（顶栏下缘 61，留 3px 呼吸） */
 .browse :deep(.inspector), .insp-overlay :deep(.inspector) {
-  position: absolute; top: 64px; right: 8px; bottom: 8px; z-index: 12;
+  position: absolute; top: 64px; right: 10px; bottom: 10px; z-index: 12;
   width: var(--insp-w, 296px); margin: 0; height: auto;
   max-height: none;
   pointer-events: auto;
 }
-.insp-overlay .resize-handle { margin: 64px 0 8px 0; pointer-events: auto; z-index: 12; }
-.browse .resize-handle { margin: 64px 0 8px 0; z-index: 12; }
+.insp-overlay .resize-handle { margin: 64px 0 10px 0; pointer-events: auto; z-index: 12; }
+.browse .resize-handle { margin: 64px 0 10px 0; z-index: 12; }
 .insp-enter-active, .insp-leave-active { transition: transform 0.24s ease, opacity 0.24s ease; }
 .insp-enter-from, .insp-leave-to { transform: translateX(40px); opacity: 0; }
 /* 大图模式详情容器：必须 inset:0（缺 left 会收缩成手柄宽，overflow:hidden 裁掉整个面板）；

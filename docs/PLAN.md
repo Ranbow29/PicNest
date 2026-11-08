@@ -200,3 +200,9 @@ PicNest/
     视频：`<video>` 关闭原生 controls，自绘玻璃 dock（播放/进度拖拽/时间/静音/音量/循环/全屏/前后翻页），进入自动播放，
     空格播放暂停；`loadedmetadata` 取 videoWidth/Height 回填 store 并 fit；裁切/旋转/翻转/1:1 对视频隐藏；
     `url` 来自 `lib.images`（用不在当前列表的路径 openLightbox 会拿不到 src，探针踩过）。
+38. **视觉分层（2026-11-09，Feb 要求"白窗体悬浮于左栏、详情悬浮于正文"）**：新增 token `--shadow-float`
+    （`0 1px 2px` 近影 + `0 12px 32px` 主影 + `0 28px 70px` 柔光）与 `--panel-edge`（顶缘 1px 高光）；
+    主面板 `margin:10px 10px 10px 8px` + `inset 0 1px 0 --panel-edge`，靠留白和投影压在左栏之上；
+    详情浮岛 right/bottom 10（与主面板内缘对齐）、`--panel-inspector` 提到 0.94 并加 `backdrop-filter: blur(20px)`——
+    **0.85 半透明在文字密集页面会透底**，看起来像浮不起来；圆角维持主面板 6 / 浮岛 14（Feb 既有定稿，勿顺手改）。
+    改定位时注意 `.insp-overlay` / `.browse` 两处 Inspector 与 resize-handle 的 bottom 要一起改（8→10）。
