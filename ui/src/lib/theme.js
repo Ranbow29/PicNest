@@ -6,8 +6,8 @@ import { ref, computed, watch } from 'vue'
 
 const MODES = [
   { key: 'auto', label: '跟随系统' },
-  { key: 'light', label: '浅色' },
-  { key: 'dark', label: '深色' },
+  { key: 'light', label: '暖砂' },
+  { key: 'dark', label: '靛夜' },
   { key: 'mono-light', label: '灰白（低饱和）' },
   { key: 'mono-charcoal', label: '炭黑（低饱和）' },
   { key: 'mono-dark', label: '墨黑（低饱和）' },
@@ -24,7 +24,7 @@ if (mq) {
   else if (mq.addListener) mq.addListener(onChange)
 }
 
-const resolved = computed(() => (mode.value === 'auto' ? (systemDark.value ? 'dark' : 'light') : mode.value))
+const resolved = computed(() => (mode.value === 'auto' ? (systemDark.value ? 'mono-dark' : 'mono-light') : mode.value))
 
 function apply(v) {
   document.documentElement.dataset.theme = v

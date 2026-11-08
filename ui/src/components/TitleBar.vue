@@ -14,7 +14,7 @@ const theme = useTheme()
 const themeOpen = ref(false)
 const themeLabel = computed(() => {
   const m = theme.modes.find((x) => x.key === theme.mode.value) || theme.modes[0]
-  return m.key === 'auto' ? `跟随系统（${theme.resolved.value === 'dark' ? '深色' : '浅色'}）` : m.label
+  return m.key === 'auto' ? `跟随系统（${theme.resolved.value === 'mono-dark' ? '墨黑' : '灰白'}）` : m.label
 })
 const themeGlyph = computed(() => {
   const v = theme.resolved.value

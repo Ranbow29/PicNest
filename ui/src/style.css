@@ -124,16 +124,16 @@
 
 /* ---- 低饱和黑白 · 炭黑（比墨黑浅一档的中性灰） ---- */
 :root[data-theme="mono-charcoal"] {
-    --bg: #333333;
-    --bg-2: #292929;
-    --panel: rgba(51, 51, 51, 0.55);
-    --panel-strong: rgba(38, 38, 38, 0.92);
-    --text: #ebebeb;
-    --text-2: #b3b3b3;
-    --accent: #d0d0d0;
-    --accent-weak: rgba(255, 255, 255, 0.12);
-    --folder-default: #c8c8c8;
-    --border: rgba(255, 255, 255, 0.12);
+    --bg: #3a3a3a;
+    --bg-2: #303030;
+    --panel: rgba(58, 58, 58, 0.55);
+    --panel-strong: rgba(45, 45, 45, 0.92);
+    --text: #efefef;
+    --text-2: #b9b9b9;
+    --accent: #d6d6d6;
+    --accent-weak: rgba(255, 255, 255, 0.13);
+    --folder-default: #cfcfcf;
+    --border: rgba(255, 255, 255, 0.13);
     --shadow: 0 8px 30px rgba(0, 0, 0, 0.38);
     --shadow-float: 0 3px 8px rgba(0, 0, 0, 0.4), 0 22px 52px rgba(0, 0, 0, 0.48), 0 60px 140px rgba(0, 0, 0, 0.34);
     --shadow-tile: 0 1px 3px rgba(0, 0, 0, 0.35), 0 5px 16px rgba(0, 0, 0, 0.35), 0 14px 34px rgba(0, 0, 0, 0.22);
@@ -144,13 +144,13 @@
     --overlay-grad: linear-gradient(transparent, rgba(0, 0, 0, 0.82));
     --overlay-text: #f1f1f1;
     --overlay-halo: 0 1px 3px rgba(0, 0, 0, 0.8), 0 0 1px rgba(0, 0, 0, 0.8);
-    --glass-strong: rgba(51, 51, 51, 0.90);
-    --glass-weak: rgba(51, 51, 51, 0.30);
-    --panel-inspector: rgba(63, 63, 63, 0.92);
-    --panel-insp-top: rgba(63, 63, 63, 0.96);
-    --panel-insp-mid: rgba(63, 63, 63, 0.92);
-    --panel-insp-low: rgba(63, 63, 63, 0.84);
-    --panel-insp-bot: rgba(63, 63, 63, 0.62);
+    --glass-strong: rgba(58, 58, 58, 0.90);
+    --glass-weak: rgba(58, 58, 58, 0.30);
+    --panel-inspector: rgba(70, 70, 70, 0.92);
+    --panel-insp-top: rgba(70, 70, 70, 0.96);
+    --panel-insp-mid: rgba(70, 70, 70, 0.92);
+    --panel-insp-low: rgba(70, 70, 70, 0.84);
+    --panel-insp-bot: rgba(70, 70, 70, 0.62);
 }
 
 /* ---- 低饱和黑白 · 墨黑（中性炭灰） ---- */

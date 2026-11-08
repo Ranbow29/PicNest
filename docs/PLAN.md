@@ -304,8 +304,9 @@ PicNest/
     渲染层随后对新活动根 `startWatcher`。IPC：`picnest-remove-root`（picnest-handlers.js） + `picnestRemoveRoot`（apply.mjs P4b）。
     根文件菜单另有「在文件管理器中打开」：`window.picrand.openWithDefault(path)`（`shell.openPath`）打开目录本身；
     不要用 `picnestReveal`（showItemInFolder 会在父目录里选中它，语义是“显示所在位置”）。
-48. **主题系统（2026-11-09，Feb 指定）**：顶栏 ☀/☾/◐ 弹板六选一（跟随系统/浅色/深色/灰白/炭黑/墨黑，后三套低饱和），持久化 `picnest.theme`。
-    `ui/src/lib/theme.js` 把 auto 解析成 light/dark 写入 `<html data-theme>` + `style.colorScheme`，并监听系统 `prefers-color-scheme` 变化；
+48. **主题系统（2026-11-09，Feb 指定）**：顶栏 ☀/☾/◐ 弹板六选一（跟随系统/暖砂/靛夜/灰白/炭黑/墨黑，后三套低饱和；
+    暖砂=原暖米+金浅色、靛夜=原蓝紫夜+金深色，Feb 让 AI 起名），持久化 `picnest.theme`。
+    `ui/src/lib/theme.js` 把 auto **解析成 mono-light/mono-dark（灰白/墨黑）**写入 `<html data-theme>` + `style.colorScheme`，并监听系统 `prefers-color-scheme` 变化；
     `style.css` 的暗色 token 块由 `@media (prefers-color-scheme: dark)` 改为 `:root[data-theme="dark"]`，另有 `mono-light`/`mono-charcoal`/`mono-dark` 三套中性灰 token；
     `index.html` 内联脚本首屏定色防闪白（识别五种显式主题，light/mono-light → colorScheme light，其余 dark）。
     **低饱和黑白**强调色/阴影/玻璃/详情浮岛全部去饱和，默认文件夹图标走 `--folder-default`（普通金/黑白灰）；
