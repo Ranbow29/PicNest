@@ -397,7 +397,7 @@ function onCellClick(e, img) {
 }
 
 /* ---------- 拖动：格内排序 / 拖进子文件夹卡片 ---------- */
-const dragOverPath = ref(null)
+const reorderCtx = ref(null) // { path, before, x, y, h }：插入线跟随最近的图
 const subDropRel = ref(null)
 function dtTypes(e) { return [...(e.dataTransfer?.types || [])] }
 function isExternalDT(e) { const t = dtTypes(e); return t.includes('Files') || t.includes('text/uri-list') }
@@ -421,23 +421,53 @@ function internalDirs(e) {
   const single = e.dataTransfer.getData('application/x-picnest-dir')
   return single ? [single] : []
 }
-function onCellDragOver(e, img) {
+/* 画布级排序：按光标最近图片算插入位置（不要求正落在格子上，缝隙也能排） */
+function onCanvasDragOver(e) {
   if (!isInternalImageDT(e) || !lib.canReorder()) return
   e.preventDefault()
   e.stopPropagation()
   e.dataTransfer.dropEffect = 'move'
-  dragOverPath.value = img.file_path
+  const rect = e.currentTarget.getBoundingClientRect()
+  const cx = e.clientX - rect.left
+  const cy = e.clientY - rect.top
+  const list = items.value
+  if (!list.length) { reorderCtx.value = null; return }
+  let best = null, bestD = Infinity
+  for (const item of list) {
+    const dx = cx - (item.x + item.w / 2)
+    const dy = cy - (item.y + item.h / 2)
+    const d = dx * dx + dy * dy
+    if (d < bestD) { bestD = d; best = item }
+  }
+  if (!best) { reorderCtx.value = null; return }
+  const before = cx < best.x + best.w / 2
+  reorderCtx.value = {
+    path: best.file_path,
+    before,
+    x: before ? Math.max(0, best.x - 7) : best.x + best.w + 4,
+    y: best.y,
+    h: best.h,
+  }
 }
-function onCellDragLeave(img) {
-  if (dragOverPath.value === img.file_path) dragOverPath.value = null
+function onCanvasDragLeave(e) {
+  const rect = e.currentTarget.getBoundingClientRect()
+  if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) {
+    reorderCtx.value = null
+  }
 }
-async function onCellDrop(e, img) {
+async function onCanvasDrop(e) {
   if (!isInternalImageDT(e)) return // 外部拖入交给全窗 shell
   e.preventDefault()
   e.stopPropagation()
+  const ctx = reorderCtx.value
   const paths = internalImages(e)
-  dragOverPath.value = null
-  if (paths.length) await lib.reorderImages(paths, img.file_path)
+  reorderCtx.value = null
+  if (ctx && paths.length) await lib.reorderImages(paths, ctx.path, ctx.before)
+}
+/* 点正文空白：取消图片选中，改为选中当前文件夹（库根则选中库） */
+function onBackgroundClick() {
+  if (lib.view === 'all') lib.selectDir(lib.currentDirRel || '', {})
+  else lib.clearImageSelection()
 }
 function onSubDragOver(e, f) {
   if (!isExternalDT(e) && !isInternalImageDT(e) && !isInternalDirDT(e)) return
@@ -474,7 +504,7 @@ async function onSubDrop(e, f) {
     if (dirs.length) await lib.dropOnDirs(dirs, rel, 'into')
   }
 }
-function clearDragUi() { dragOverPath.value = null; subDropRel.value = null }
+function clearDragUi() { reorderCtx.value = null; subDropRel.value = null }
 onMounted(() => window.addEventListener('dragend', clearDragUi))
 onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
 </script>
@@ -484,7 +514,9 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
           @pointerdown.prevent="onRulerDown" @pointermove="onRulerMove"
           @pointerup="onRulerUp" @pointercancel="onRulerUp" />
   <div ref="viewport" class="grid-viewport" @wheel="onViewportWheel">
-    <div class="canvas" :style="{ height: totalH + 'px' }" @click.self="lib.clearImageSelection()">
+    <div class="canvas" :style="{ height: totalH + 'px' }"
+         @click.self="onBackgroundClick"
+         @dragover="onCanvasDragOver" @dragleave="onCanvasDragLeave" @drop="onCanvasDrop">
       <!-- 编辑排印头块：滚动时整体穿入玻璃顶栏（同 Wenku8） -->
       <header :key="'head-' + waveSeq" class="page-head wi" style="--d: 0ms" @mousedown="startWindowDrag">
         <h2 class="head-big">{{ header.big }}</h2>
@@ -539,13 +571,16 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
         </template>
       </div>
 
+      <!-- 拖动排序插入线（画布级，缝隙也可命中） -->
+      <div v-if="reorderCtx" class="reorder-line"
+           :style="{ left: reorderCtx.x + 'px', top: reorderCtx.y + 'px', height: reorderCtx.h + 'px' }" />
+
       <div
         v-for="img in cells" :key="img.id + '-' + waveSeq"
-        class="cell" :class="{ selected: selectedSet.has(img.file_path), 'drop-target': dragOverPath === img.file_path }"
+        class="cell" :class="{ selected: selectedSet.has(img.file_path) }"
         :style="{ transform: `translate(${img.x}px, ${img.y + 0}px)`, width: img.w + 'px', height: img.h + 'px', '--d': waveDelay(img.gi) + 'ms' }"
         draggable="true"
         @dragstart="onCellDragStart($event, img)"
-        @dragover="onCellDragOver($event, img)" @dragleave="onCellDragLeave(img)" @drop="onCellDrop($event, img)"
         @click="onCellClick($event, img)"
         @dblclick="lib.openLightbox(img.file_path)"
         @contextmenu.prevent="lib.openContextMenu($event, img)"
@@ -556,7 +591,6 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
           <!-- PicRand 式悬停信息条：叠在图片内部底部，不占布局 -->
           <div v-if="showLabels" class="hover-overlay" :data-info="img.info" />
         </div>
-        <span v-if="selectedSet.has(img.file_path)" class="sel-badge">✓</span>
       </div>
     </div>
     <div v-if="lib.loading" class="state overlay-state">载入中…</div>
@@ -593,17 +627,10 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
 }
 .cell:hover .thumb { transform: translateY(-2px); box-shadow: var(--shadow); }
 .cell.selected .thumb { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent), 0 0 0 6px var(--accent-weak); }
-.sel-badge {
-  position: absolute; top: 8px; right: 8px; z-index: 3;
-  width: 21px; height: 21px; border-radius: 50%;
-  display: flex; align-items: center; justify-content: center;
-  background: var(--accent); color: #fff; font-size: 12px; font-weight: 700;
-  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.35); pointer-events: none;
-}
-.cell.drop-target .thumb { box-shadow: 0 0 0 3px var(--accent), 0 0 0 8px var(--accent-weak); }
-.cell.drop-target::before {
-  content: ''; position: absolute; left: -6px; top: 2px; bottom: 2px; width: 3px;
-  border-radius: 2px; background: var(--accent); z-index: 4; pointer-events: none;
+.reorder-line {
+  position: absolute; width: 3px; border-radius: 2px;
+  background: var(--accent); box-shadow: 0 0 0 2px var(--accent-weak);
+  pointer-events: none; z-index: 5;
 }
 .thumb img { width: 100%; height: 100%; object-fit: cover; }
 .noimg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--text-2); font-size: 22px; }

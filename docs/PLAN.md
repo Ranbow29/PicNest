@@ -143,5 +143,7 @@ PicNest/
     彻底删除才 `shell.trashItem`。回收站列表过滤 `trash_group IS NULL`；`counts.trash` = 独立软删图片 + 文件夹条目数。
 32. **图片手动排序**：`images.sort_order`（0 = 未排序）；manual 排序 SQL `(sort_order = 0) ASC, sort_order ASC, id ASC`，
     未排序的新图/移入图排在最后。拖动排序 IPC 写 1..n 并自动切 manual；移动图片时 `sort_order = 0`。
-    格内拖动排序只在文件夹视图允许（全部视图是跨文件夹的入库流）；拖到子文件夹卡片/树行走 moveImages。
-    多选组拖动载荷 `x-picnest-files`；网格 dragover/drop 对内部图片 stopPropagation，外部拖入仍冒泡给 shell 录入当前目录。
+    **画布级拖动**：按光标最近图片中心算目标与 before/after（光标在目标左半=前、右半=后），画布任意缝隙都能命中；
+    插入线用画布绝对坐标绘制（会随滚动），不依赖落点在单元格上。只在文件夹视图允许（全部是跨文件夹入库流）。
+    多选组拖动载荷 `x-picnest-files`；外部拖入不拦截，继续冒泡给 shell 录入当前目录。
+    点正文空白 = 清图选 + 选中当前文件夹（库根→资料库根）；侧栏空白不接收内部图片（防误落未分类）。

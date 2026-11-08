@@ -986,7 +986,7 @@ export const useLibrary = defineStore('library', {
     canReorder() {
       return !this.selectionView && this.view === 'all' && !!this.currentDirRel && !this.lightbox.open
     },
-    async reorderImages(srcPaths, targetPath) {
+    async reorderImages(srcPaths, targetPath, before = true) {
       if (!this.canReorder()) return { ok: false, error: '仅在文件夹视图内可拖动排序' }
       const set = new Set(srcPaths || [])
       if (!targetPath || set.has(targetPath)) return { ok: true, moved: false }
@@ -996,6 +996,7 @@ export const useLibrary = defineStore('library', {
       const rest = list.filter((p) => !set.has(p))
       let idx = rest.indexOf(targetPath)
       if (idx < 0) idx = rest.length
+      else if (!before) idx += 1
       rest.splice(idx, 0, ...moving)
       const keep = this.selectedPaths.slice()
       try {

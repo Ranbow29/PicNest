@@ -64,10 +64,8 @@ async function dropToRoot(e) {
   }
   const srcDir = e.dataTransfer.getData('application/x-picnest-dir')
   const srcDirs = dtList(e.dataTransfer, 'application/x-picnest-dirs')
-  const srcFile = e.dataTransfer.getData('application/x-picnest-file')
-  const srcFiles = dtList(e.dataTransfer, 'application/x-picnest-files')
+  /* 内部图片不再因拖到侧栏空白而进库根（避免拖动排序误落未分类）；文件夹仍可移回根 */
   if (srcDirs.length || srcDir) await lib.dropOnDirs(srcDirs.length ? srcDirs : [srcDir], '', 'into')
-  else if (srcFiles.length || srcFile) await lib.moveImages(srcFiles.length ? srcFiles : [srcFile], '')
 }
 
 function dtList(dt, key) {
