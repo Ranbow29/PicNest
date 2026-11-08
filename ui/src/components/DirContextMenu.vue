@@ -75,6 +75,15 @@ function renameLib() {
     ask.value = { title: '重命名资料库（仅显示名）', initial: current, selectBase: true, run: (name) => lib.renameLibrary(node.id, name) }
   })
 }
+/* 根文件 → 在文件管理器中打开（shell.openPath 打开目录本身，不是“显示所在位置”） */
+function revealLib() {
+  const p = menu.value.node?.path || menu.value.node?.absPath || ''
+  if (!p) return
+  run(async () => {
+    const err = await window.picrand.openWithDefault(p).catch((e) => String(e?.message || e))
+    if (err) lib.showNote(`打开失败：${err}`, [], 'error')
+  })
+}
 /* 移出根文件：只解除登记，磁盘文件夹与文件保留；回收站非空先拦住 */
 async function removeLib() {
   const node = menu.value.node || {}
@@ -226,6 +235,7 @@ const sortItems = [
   <Teleport to="body">
     <div v-if="menu.open" class="dm-layer" @click="lib.closeDirMenu()" @contextmenu.prevent="lib.closeDirMenu()">
       <div class="dm glass-card" :style="pos" @click.stop>
+        <button v-if="isLib" class="mi" @click="revealLib">在文件管理器中打开</button>
         <button class="mi" @click="newSub">新建子文件夹</button>
         <button v-if="isLib" class="mi" @click="renameLib">重命名资料库…</button>
         <button v-if="!isLib" class="mi" @click="newSibling">新建文件夹</button>
