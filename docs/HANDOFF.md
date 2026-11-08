@@ -99,6 +99,14 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 - 视频：`<video>` 自绘 dock（播放/进度/时间/静音/音量/循环/全屏），进入自动播放；滚轮缩放/翻页照旧；裁切/旋转/翻转隐藏；`loadedmetadata` 回填宽高。
 - 详情：文本尺寸显示「文本」、隐藏色板；视频/文本预览用缩略图，不直链原文件。
 
+### 采集（M6，2026-11-09）
+- **自研开源 MV3 扩展** `extension/`（开发者模式加载，Edge/Chrome）：右键图片「保存图片到图巢」、右键页面「保存页面截图到图巢」；popup 选「根文件 / 保存到」，选择全局有效。
+- **主进程本地服务** `127.0.0.1:41600`（`picnest-handlers.js` 的 M6 块）：`/api/v1/ping`、`context`、`folders?rootId=`、`save`。只写目标根内的文件（`picnestCollectTarget` 防 `..` 逃逸）；写入后 `insertImagesBatch` + `sync-db add` 事件，渲染层自行补缩略图/尺寸；`url/annotation/star` 写 DB。
+- **安全**：绑定 127.0.0.1；Origin 只放行 `chrome-extension://` / `extension://` / 本机 localhost 页面；CORS + Private-Network 预检；**暂无 token**（开源发布前补）。
+- **目标根跟随活动根**：store `syncCollectRoot()` 在 init / addRootByPath / switchRoot / removeRoot 调 `picnest-collect-set-root`；扩展可另选根（服务端 `picnestCollectRootId`，默认第一个）。
+- **Eagle 兼容层暂缓**：只读调研确认 Eagle for Edge 3.1.29 用 `41595`（library/folder/tag/item addFromURL）+ `41593`（form：image / save-url / screen capture / import-images）。但 Eagle 运行时会占这两个端口（不能共存），且闭源扩展 EULA 需在开源前核实；协议事实记录在此，代码不抄、不捆绑。未来作为「Eagle 关闭时可选开启」的桥。
+- 扩展 v0.1 边界：图片 + 可见区域截图；不支持整页滚动/视频/PDF；不发送标签（标签系统未做）；服务端下载不带 Cookie，防盗链图片可能失败。
+
 ### 详情 / 视觉分层
 - 单选图片：预览/名称/注释/色板/评分/文件夹/操作（**URL 输入栏已删，DB url 字段保留**）。**图片的「文件夹」chip 必须由 `file_path` 反推**（`relOfImage`），不能用 `currentDirRel`——根文件夹开「显示子文件夹内容」或合并视图时，视图位置≠图片所在夹（否则子夹图片被标成库根）。
 - 多选图片：前 4 张扇形堆叠 + 已选 N + 批量注释/评分/文件夹 chips/移动/复制；单选/多选文件夹三态。
@@ -139,9 +147,9 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 
 ## 四、未做 / 技术债
 
-- 标签系统（筛选栏已预留标签位）；每文件夹独立排序模式。
+- 标签系统（筛选栏已预留标签位）。
 - 尺寸/评分排序 SQL 补全（目前前端排序）；滑尺 hover 预览；既有同名副本「合并到同名文件夹…」。
-- M6 采集（Eagle 兼容 localhost:41595，复用 Eagle for Edge）；M7 Eagle 库迁移（先只读预演）。
+- M6 采集后续：Eagle 兼容层（41595/41593，Eagle 关闭时可选开启）、采集 token 鉴权、整页滚动截图/视频/标签；M7 Eagle 库迁移（先只读预演）。
 - 目录删除确认细化（是否「删除并清空回收站」）；大图无视频帧步进（Eagle Ctrl+←/→ 未做）。
 - 查重无取消 IPC（关窗后主进程扫完丢弃）；同尺寸候选极多时首扫可能慢。
 - 文件夹整包 MD5 查重仍在主进程同步执行；超大文件夹首次放入会卡。
@@ -165,7 +173,8 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 | `ui/src/components/ConfirmDialog.vue` · `NamePromptDialog.vue` · `DuplicateDialog.vue` · `ImportResultCard.vue` · `TrashMenu.vue` | 确认/命名/录入三选一/结果卡/回收站菜单 |
 | `ui/src/components/FilterBar.vue` · `ColorPicker.vue` | 筛选 · HSV 取色 |
 | `ui/vite.config.js` | dev 绑定 127.0.0.1 + watch polling；build 输出到 app dist |
-| `tools/patches/apply.mjs` · `picnest-handlers.js` | 补丁 P1-P9 + 文件夹/录入/回收站/统计/排序/文本/查重/变换 IPC |
+| `tools/patches/apply.mjs` · `picnest-handlers.js` | 补丁 P1-P9 + 文件夹/录入/回收站/统计/排序/文本/查重/变换 IPC + **M6 采集本地服务（127.0.0.1:41600）** |
+| `extension/` | 自研 MV3 采集扩展（右键存图/页面截图 + popup 选根/文件夹）；安装见 `extension/README.md` |
 | `tools/cdp-*.mjs` · `shot-prod.ps1` · `verify_counts.py` | CDP 探针/截屏 · 多库对账 |
 | `docs/MOTION.md` | 动效规格/调参 |
 
@@ -199,6 +208,7 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 26. 颜色筛选依赖内存 `palettes`：`loadImages` 末尾必须 `ensurePalettes()`（init 只覆盖启动时文件夹，切换后不补建=颜色筛选恒 0）；FilterBar 取色/灰度、详情现算色板都要兜底触发/回写 `lib.palettes`。
 27. 移出根文件 = 只清 DB 索引/排序键/回收站条目，磁盘文件永不动；回收站非空先拒；watcher 命中该根必须停并清 `_addQueue`，否则根会被 add 事件复活。新增根相关 IPC 走 `picnest-handlers.js` + `apply.mjs` 的 P4b preload 列表两处（渲染层直接 `window.picrand.*`）。
 28. 主题只认 `<html data-theme>`：新颜色同时补 `:root`（light）、`[data-theme="dark"]`、`mono-light`、`mono-charcoal`、`mono-dark` 五块，组件里不要写 `prefers-color-scheme`；auto 的系统联动在 `lib/theme.js`，首屏防闪在 `index.html` 内联脚本；canvas（概览滑尺）换主题要主动重绘。
+29. 采集服务只绑 `127.0.0.1:41600`；写文件前必须过 `picnestCollectTarget`（防 `..` 逃逸）；Origin 只放行 `chrome-extension://`/`extension://`/本机 localhost；扩展代码原创、不打包不引用 Eagle 资源，Eagle 兼容层不默认开启。改采集服务后 `apply.mjs` + 重启；扩展改完在 `edge://extensions` 点重载。
 
 ## 七、验收状态 / 最近提交
 

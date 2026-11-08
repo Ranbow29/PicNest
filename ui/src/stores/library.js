@@ -125,6 +125,7 @@ export const useLibrary = defineStore('library', {
           /* 记住上次使用的资料库；失效（被移除）则回退第一个 */
           const saved = Number(localStorage.getItem('picnest.activeRootId'))
           this.activeRootId = this.roots.some((r) => r.id === saved) ? saved : this.roots[0].id
+          this.syncCollectRoot()
           await this.refreshTree()
           /* 恢复上次浏览位置：视图 + 文件夹（目录已不存在则回退全部） */
           const savedView = localStorage.getItem('picnest.lastView') || 'all'
@@ -177,6 +178,11 @@ export const useLibrary = defineStore('library', {
       } catch (e) { this.error = String(e?.message || e) }
     },
 
+    /* 采集服务默认目标根：跟随当前活动根（主进程本地服务用） */
+    syncCollectRoot() {
+      try { window.picrand?.picnestCollectSetRoot?.(this.activeRootId ?? null) } catch { /* 静默 */ }
+    },
+
     /* 移出根文件：只解除图巢登记，磁盘文件保留（回收站非空由主进程拦住） */
     async removeRoot(id) {
       const root = this.roots.find((r) => r.id === id)
@@ -203,12 +209,14 @@ export const useLibrary = defineStore('library', {
         localStorage.removeItem('picnest.lastDirRel')
         if (next) {
           this.activeRootId = next.id
+          this.syncCollectRoot()
           localStorage.setItem('picnest.activeRootId', String(next.id))
           await this.refreshTree()
           await this.loadImages()
           api.startWatcher(next.path).catch(() => {}) // 被移出的根若正在被监听，切到新根
         } else {
           this.activeRootId = null
+          this.syncCollectRoot()
           localStorage.removeItem('picnest.activeRootId')
           this.tree = null
           this.images = []
@@ -238,6 +246,7 @@ export const useLibrary = defineStore('library', {
         await api.startWatcher(p)
         this.roots = await api.getAllFolders()
         this.activeRootId = r.id
+        this.syncCollectRoot()
         await this.refreshTree()
         await this.openDir(null)
       } catch (e) {
@@ -269,6 +278,7 @@ export const useLibrary = defineStore('library', {
       if (this.lightbox.open) this.closeLightbox()
       collectiveShake()
       this.activeRootId = id
+      this.syncCollectRoot()
       this.currentDirRel = null
       this.view = 'all'
       this.selectionView = false

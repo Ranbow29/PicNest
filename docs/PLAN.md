@@ -316,3 +316,9 @@ PicNest/
     挂载/hover/mousedown/换主题/`iconShake` 集体晃动都会播放。
 49. **详情文件夹 chip 反推（2026-11-09，Feb 报「子夹图片被标成根文件夹」）**：根目录开「显示子文件夹内容」或合并视图时，`currentDirRel` 是视图位置，
     不能当图片所在夹；`Inspector` 新增 `relOfImage(file_path)`（相对库根反推目录，再用 leaf 名），单选 chip 与多选 `multiFolders` 共用。
+50. **M6 采集（2026-11-09，Feb 指定）**：自研开源 MV3 扩展 `extension/`（右键存图/页面截图，popup 选根与文件夹，目标全局）；
+    主进程本地服务 `127.0.0.1:41600`：GET ping/context/folders、POST save；只写目标根内文件（`picnestCollectTarget` 防 `..` 逃逸）；
+    写入后 `insertImagesBatch` + `sync-db add`（渲染层补缩略图/尺寸），`url/annotation/star` 写 DB；目标根跟随 activeRoot（store `syncCollectRoot`）。
+    安全：127.0.0.1 + Origin 白名单（扩展/localhost）+ PNA 预检；token 待补。Eagle for Edge 调研（只读）：
+    41595 根 + `/api/library`、`/api/folder`、`/api/tag`、`/api/item/addFromURL`；41593 旧表单（image/save-url/screen capture/import-images）；
+    Eagle 启动时占这两个端口，兼容层暂缓且不默认开启；协议信息记录，代码原创、不抄不绑 Eagle 资源。

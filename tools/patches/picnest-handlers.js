@@ -1649,4 +1649,271 @@ electron.ipcMain.handle("picnest-find-duplicates", async (event, folderId, rel) 
     return { ok: false, error: String((e && e.message) || e) };
   }
 });
+/* ==== M6 采集：本地保存服务（自研扩展用，127.0.0.1:41600） ====
+   协议：GET /api/v1/ping | /api/v1/context | /api/v1/folders?rootId=
+        POST /api/v1/save {kind:'image'|'page', src|dataUrl, title, url, annotation, star, rootId, rel}
+   只写目标根目录内的文件；入库复用 insertImagesBatch + sync-db 事件。 */
+const PICNEST_COLLECT_PORT = 41600;
+let picnestCollectRootId = null;
+let picnestCollectHttp = null;
+
+function picnestCollectLog(...args) {
+  try {
+    const line = `[${new Date().toISOString()}] ${args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" ")}\n`;
+    const p = path.join(dataDir, "picnest-collect.log");
+    try { if (fs.existsSync(p) && fs.statSync(p).size > 1024 * 1024) fs.renameSync(p, p + ".old"); } catch (e) {}
+    fs.appendFileSync(p, line);
+  } catch (e) {}
+}
+function picnestCollectRoots() {
+  try { return getDb().prepare("SELECT id, path, display_name FROM folders ORDER BY id").all(); } catch (e) { return []; }
+}
+function picnestCollectRoot(rootId) {
+  const roots = picnestCollectRoots();
+  if (rootId != null) {
+    const hit = roots.find((r) => String(r.id) === String(rootId));
+    if (hit) return hit;
+  }
+  if (picnestCollectRootId != null) {
+    const hit = roots.find((r) => r.id === picnestCollectRootId);
+    if (hit) return hit;
+  }
+  return roots[0] || null;
+}
+function picnestCollectTree(rootPath, rel = "") {
+  const abs = rel ? path.join(rootPath, ...rel.split("/")) : rootPath;
+  let ents = [];
+  try { ents = fs.readdirSync(abs, { withFileTypes: true }); } catch (e) { return []; }
+  return ents
+    .filter((d) => d.isDirectory() && !d.name.startsWith(".") && d.name !== "Thumbs.db" && d.name !== "$RECYCLE.BIN")
+    .sort((a, b) => a.name.localeCompare(b.name, "zh"))
+    .map((d) => {
+      const childRel = rel ? rel + "/" + d.name : d.name;
+      return { id: childRel, name: d.name, parent: rel || null, children: picnestCollectTree(rootPath, childRel) };
+    });
+}
+function picnestCollectTarget(rootId, rel) {
+  const root = picnestCollectRoot(rootId);
+  if (!root?.path) throw new Error("没有可用的根文件");
+  const safeRel = String(rel || "").replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  const absRoot = path.resolve(root.path);
+  const abs = safeRel ? path.resolve(absRoot, ...safeRel.split("/")) : absRoot;
+  if (abs !== absRoot && !abs.startsWith(absRoot + path.sep)) throw new Error("目标不在根文件内");
+  if (!fs.existsSync(abs) || !fs.statSync(abs).isDirectory()) throw new Error("目标文件夹不存在");
+  return { root, abs, rel: safeRel };
+}
+function picnestCollectSafeName(name) {
+  return String(name || "采集")
+    .replace(/[\\/:*?"<>|\r\n\t]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 120) || "采集";
+}
+function picnestCollectExt(contentType, src) {
+  const ct = String(contentType || "").toLowerCase();
+  const map = {
+    "image/jpeg": ".jpg", "image/jpg": ".jpg", "image/png": ".png", "image/gif": ".gif",
+    "image/webp": ".webp", "image/avif": ".avif", "image/bmp": ".bmp", "image/svg+xml": ".svg",
+  };
+  if (map[ct]) return map[ct];
+  const m = /\.([a-z0-9]{2,5})(?:[?#]|$)/i.exec(String(src || ""));
+  if (m) {
+    const ext = "." + m[1].toLowerCase();
+    if ([".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif", ".bmp", ".svg"].includes(ext)) return ext;
+  }
+  return ".jpg";
+}
+function picnestCollectDataUrl(u) {
+  const m = /^data:([^;,]+)?(;base64)?,([\s\S]*)$/.exec(String(u || ""));
+  if (!m) return null;
+  const buf = m[2] ? Buffer.from(m[3], "base64") : Buffer.from(decodeURIComponent(m[3]), "utf8");
+  return { buf, contentType: m[1] || "application/octet-stream" };
+}
+async function picnestCollectFetchImage(src) {
+  const u = String(src || "");
+  if (u.startsWith("data:")) {
+    const d = picnestCollectDataUrl(u);
+    if (!d) throw new Error("dataUrl 解析失败");
+    return d;
+  }
+  if (!/^https?:\/\//i.test(u)) throw new Error("只支持 http(s) 或 data: 图片");
+  const ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
+  const timer = setTimeout(() => { try { ctl?.abort(); } catch (e) {} }, 30000);
+  try {
+    const res = await fetch(u, {
+      redirect: "follow",
+      signal: ctl?.signal,
+      headers: { "User-Agent": "PicNest/0.1 (+collect)" },
+    });
+    if (!res.ok) throw new Error(`下载失败 HTTP ${res.status}`);
+    const ab = await res.arrayBuffer();
+    if (ab.byteLength > 80 * 1024 * 1024) throw new Error("文件超过 80MB");
+    return { buf: Buffer.from(ab), contentType: res.headers.get("content-type") || "" };
+  } finally { clearTimeout(timer); }
+}
+function picnestCollectInsert(root, absFile, meta = {}) {
+  const st = fs.statSync(absFile);
+  insertImagesBatch(root.id, [{
+    file_path: absFile,
+    file_name: path.basename(absFile),
+    file_size: st.size,
+    modify_time: Math.floor(st.mtimeMs / 1000),
+    sort_order: 0,
+  }]);
+  try {
+    getDb().prepare(
+      "UPDATE images SET annotation = CASE WHEN ?='' THEN annotation ELSE ? END, url = CASE WHEN ?='' THEN url ELSE ? END, is_favorite = MAX(is_favorite, ?) WHERE file_path = ?"
+    ).run(String(meta.annotation || ""), String(meta.annotation || ""), String(meta.url || ""), String(meta.url || ""), meta.star ? 1 : 0, absFile);
+  } catch (e) {}
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("sync-db", {
+      type: "add",
+      image: {
+        file_path: absFile, file_name: path.basename(absFile), file_size: st.size,
+        modify_time: Math.floor(st.mtimeMs / 1000), thumbnail_path: "", width: 0, height: 0,
+        is_favorite: meta.star ? 1 : 0,
+      },
+    });
+  }
+  return absFile;
+}
+async function picnestCollectSaveOne(item) {
+  const t = picnestCollectTarget(item.rootId, item.rel);
+  const kind = String(item.kind || (item.dataUrl ? "page" : "image"));
+  let buf, contentType, ext, base;
+  if (kind === "page" || kind === "screenshot") {
+    const d = picnestCollectDataUrl(item.dataUrl);
+    if (!d) throw new Error("缺少截图数据");
+    buf = d.buf;
+    contentType = d.contentType;
+    ext = picnestCollectExt(contentType, "");
+    base = picnestCollectSafeName(item.title || "页面截图");
+  } else {
+    const d = await picnestCollectFetchImage(item.dataUrl || item.src);
+    buf = d.buf;
+    contentType = d.contentType;
+    ext = picnestCollectExt(contentType, item.src || item.dataUrl);
+    base = picnestCollectSafeName(item.title || "图片");
+  }
+  if (!/^image\//i.test(contentType) && !/\.(jpe?g|png|gif|webp|avif|bmp|svg)$/i.test(ext)) throw new Error("不是图片内容");
+  let dest = path.join(t.abs, base + ext);
+  let n = 2;
+  while (fs.existsSync(dest)) dest = path.join(t.abs, `${base} (${n++})${ext}`);
+  fs.writeFileSync(dest, buf);
+  picnestCollectInsert(t.root, dest, item);
+  picnestCollectLog("saved", dest, `${buf.length}B`, `root=${t.root.id}`, `rel=${t.rel || "__root__"}`);
+  return { ok: true, saved: dest, name: path.basename(dest), rootId: t.root.id, rel: t.rel };
+}
+function picnestCollectCors(req, res) {
+  const origin = String(req.headers.origin || "");
+  res.setHeader("Access-Control-Allow-Origin", origin || "*");
+  res.setHeader("Vary", "Origin");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Access-Control-Allow-Private-Network", "true");
+}
+function picnestCollectJson(res, code, obj) {
+  const body = JSON.stringify(obj);
+  res.statusCode = code;
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.setHeader("Content-Length", Buffer.byteLength(body));
+  res.end(body);
+}
+function picnestCollectReadJson(req, limit = 2 * 1024 * 1024) {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks = [];
+    req.on("data", (c) => {
+      size += c.length;
+      if (size > limit) { reject(new Error("body 过大")); req.destroy(); return; }
+      chunks.push(c);
+    });
+    req.on("end", () => {
+      try { resolve(chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {}); }
+      catch (e) { reject(new Error("JSON 解析失败")); }
+    });
+    req.on("error", reject);
+  });
+}
+function picnestStartCollectServer() {
+  if (picnestCollectHttp) return;
+  const http = require("http");
+  const server = http.createServer(async (req, res) => {
+    picnestCollectCors(req, res);
+    if (req.method === "OPTIONS") { res.statusCode = 204; res.end(); return; }
+    const origin = String(req.headers.origin || "");
+    const originOk = !origin
+      || /^(chrome-extension|extension):\/\//i.test(origin)
+      || /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/i.test(origin);
+    if (!originOk) { picnestCollectJson(res, 403, { ok: false, error: "origin not allowed" }); return; }
+    const url = new URL(req.url || "/", `http://127.0.0.1:${PICNEST_COLLECT_PORT}`);
+    try {
+      if (req.method === "GET" && url.pathname === "/api/v1/ping") {
+        return picnestCollectJson(res, 200, { ok: true, app: "PicNest", api: 1, port: PICNEST_COLLECT_PORT });
+      }
+      if (req.method === "GET" && url.pathname === "/api/v1/context") {
+        const roots = picnestCollectRoots();
+        const cur = picnestCollectRoot(url.searchParams.get("rootId"));
+        return picnestCollectJson(res, 200, {
+          ok: true,
+          roots: roots.map((r) => ({ id: r.id, name: r.display_name || path.basename(r.path), path: r.path })),
+          rootId: cur?.id ?? null,
+          rootName: cur ? (cur.display_name || path.basename(cur.path)) : "",
+        });
+      }
+      if (req.method === "GET" && url.pathname === "/api/v1/folders") {
+        const root = picnestCollectRoot(url.searchParams.get("rootId"));
+        if (!root) return picnestCollectJson(res, 404, { ok: false, error: "没有根文件" });
+        return picnestCollectJson(res, 200, {
+          ok: true,
+          root: { id: root.id, name: root.display_name || path.basename(root.path), path: root.path },
+          folders: picnestCollectTree(root.path),
+        });
+      }
+      if (req.method === "POST" && url.pathname === "/api/v1/save") {
+        const body = await picnestCollectReadJson(req);
+        const items = Array.isArray(body.items) ? body.items : [body];
+        const saved = [];
+        for (const it of items) saved.push(await picnestCollectSaveOne(it));
+        return picnestCollectJson(res, 200, { ok: true, saved, count: saved.length });
+      }
+      return picnestCollectJson(res, 404, { ok: false, error: "not found" });
+    } catch (e) {
+      picnestCollectLog("error", req.method, url.pathname, String(e?.message || e));
+      return picnestCollectJson(res, 400, { ok: false, error: String(e?.message || e) });
+    }
+  });
+  server.on("error", (e) => {
+    picnestCollectLog("listen error", String(e?.message || e));
+    console.error("[collect] listen error:", e?.message || e);
+  });
+  server.listen(PICNEST_COLLECT_PORT, "127.0.0.1", () => {
+    picnestCollectLog("listening", `127.0.0.1:${PICNEST_COLLECT_PORT}`, `pid=${process.pid}`);
+    try {
+      fs.writeFileSync(path.join(dataDir, "picnest-collect.json"), JSON.stringify({
+        port: PICNEST_COLLECT_PORT, pid: process.pid, startedAt: new Date().toISOString(),
+      }, null, 2));
+    } catch (e) {}
+  });
+  picnestCollectHttp = server;
+}
+electron.ipcMain.handle("picnest-collect-set-root", (_event, id) => {
+  picnestCollectRootId = id == null || id === "" ? null : Number(id);
+  return { ok: true, rootId: picnestCollectRootId };
+});
+electron.ipcMain.handle("picnest-collect-info", () => ({
+  ok: true,
+  port: PICNEST_COLLECT_PORT,
+  listening: !!picnestCollectHttp?.listening,
+  rootId: picnestCollectRootId,
+}));
+if (electron.app.isReady()) {
+  setTimeout(() => { try { picnestStartCollectServer(); } catch (e) { picnestCollectLog("start error", String(e?.message || e)); } }, 2000);
+} else {
+  electron.app.whenReady().then(() => {
+    setTimeout(() => { try { picnestStartCollectServer(); } catch (e) { picnestCollectLog("start error", String(e?.message || e)); } }, 2000);
+  });
+}
+/* ==== /M6 采集 ==== */
+
 /* ==== /PicNest:P4 ==== */

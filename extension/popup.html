@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>PicNest 图巢采集</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header>
+      <div class="brand"><span class="mark"></span><b>PicNest</b><span class="sub">图巢采集</span></div>
+      <div id="status" class="status"><i></i><span>连接中…</span></div>
+    </header>
+
+    <div class="row">
+      <label>根文件</label>
+      <select id="root" disabled></select>
+    </div>
+    <div class="row">
+      <label>保存到</label>
+      <select id="folder" disabled></select>
+    </div>
+
+    <button id="save" disabled>保存当前页面截图</button>
+    <p class="hint">在网页图片上右键 →「保存图片到图巢」。目标文件夹是全局设置；页面截图保存当前可见区域。</p>
+    <p id="msg" class="msg"></p>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
