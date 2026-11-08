@@ -314,3 +314,5 @@ PicNest/
     主题弹板与布局/筛选弹板互斥，Esc/外部点击关闭；按钮在 auto 时按解析结果显示 ☀/☾，黑白主题显示 ◐，非 auto 高亮。
     顶栏漏斗/布局/主题三个 `vo-wrap` 改 flex 对齐（盒子统一 29×28）；主题按钮用 `springAt` 做旋转+缩放手势，
     挂载/hover/mousedown/换主题/`iconShake` 集体晃动都会播放。
+49. **详情文件夹 chip 反推（2026-11-09，Feb 报「子夹图片被标成根文件夹」）**：根目录开「显示子文件夹内容」或合并视图时，`currentDirRel` 是视图位置，
+    不能当图片所在夹；`Inspector` 新增 `relOfImage(file_path)`（相对库根反推目录，再用 leaf 名），单选 chip 与多选 `multiFolders` 共用。

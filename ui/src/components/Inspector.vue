@@ -142,9 +142,19 @@ async function doMove(e) {
   if (r?.ok) setTimeout(() => { moveNote.value = '' }, 2000)
 }
 
+/* 图片真实所在目录（相对库根）：递归浏览/合并视图里 currentDirRel 是视图位置，不是图片所在夹 */
+function relOfImage(filePath) {
+  const root = String(lib.tree?.rootPath || '').replace(/[\\/]+$/, '')
+  const p = String(filePath || '').replace(/\//g, '\\')
+  if (!root || !p.toLowerCase().startsWith((root + '\\').toLowerCase())) return null
+  const rest = p.slice(root.length).replace(/^[\\/]+/, '')
+  const idx = rest.lastIndexOf('\\')
+  return idx > 0 ? rest.slice(0, idx).split('\\').join('/') : ''
+}
 const folderName = computed(() => {
-  if (!lib.currentDirRel) return lib.tree?.tree?.name || ''
-  return lib.currentDirRel.split('/').pop()
+  const rel = img.value ? relOfImage(img.value.file_path) : null
+  if (rel === null) return lib.tree?.tree?.name || ''
+  return rel ? rel.split('/').pop() : (lib.tree?.tree?.name || '库根')
 })
 async function copyPath() {
   if (!img.value) return
@@ -178,17 +188,11 @@ const multiRating = computed(() => {
   const rs = multiImages.value.map((i) => i.rating || 0)
   return rs.length && rs.every((r) => r === rs[0]) ? rs[0] : -1
 })
-/* 所选图片所在文件夹（去重） */
+/* 所选图片所在文件夹（去重；同样按 file_path 反推，不跟视图位置） */
 const multiFolders = computed(() => {
-  const root = String(lib.tree?.rootPath || '').replace(/[\\/]+$/, '')
   const map = new Map()
   for (const im of multiImages.value) {
-    let rel = ''
-    if (root && im.file_path.toLowerCase().startsWith((root + '\\').toLowerCase())) {
-      const rest = im.file_path.slice(root.length).replace(/^[\\/]+/, '')
-      const idx = Math.max(rest.lastIndexOf('\\'), rest.lastIndexOf('/'))
-      rel = idx > 0 ? rest.slice(0, idx).split(/[\\/]/).join('/') : ''
-    }
+    const rel = relOfImage(im.file_path) || ''
     map.set(rel, rel ? rel.split('/').pop() : (lib.tree?.tree?.name || '库根'))
   }
   return [...map.entries()].map(([rel, name]) => ({ rel, name }))
