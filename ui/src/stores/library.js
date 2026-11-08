@@ -177,6 +177,47 @@ export const useLibrary = defineStore('library', {
       } catch (e) { this.error = String(e?.message || e) }
     },
 
+    /* 移出根文件：只解除图巢登记，磁盘文件保留（回收站非空由主进程拦住） */
+    async removeRoot(id) {
+      const root = this.roots.find((r) => r.id === id)
+      if (!root) return { ok: false, error: '根文件不存在' }
+      const r = await window.picrand.picnestRemoveRoot(id)
+      if (!r?.ok) { if (r?.error) this.error = r.error; return r }
+      this.roots = this.roots.filter((x) => x.id !== id)
+      /* 浏览历史里属于该根的位置全部作废 */
+      if (this.navHistory.some((h) => h.rootId === id)) {
+        this.navHistory = this.navHistory.filter((h) => h.rootId !== id)
+        this.navIndex = Math.min(this.navIndex, this.navHistory.length - 1)
+      }
+      if (this.activeRootId === id) {
+        const next = this.roots[0] || null
+        if (this.lightbox.open) this.closeLightbox()
+        this.selectionView = false
+        this.searchQuery = ''
+        this.currentDirRel = null
+        this.view = 'all'
+        this.dirMemory = {}
+        this.clearDirSelection()
+        this.clearImageSelection()
+        localStorage.setItem('picnest.lastView', 'all')
+        localStorage.removeItem('picnest.lastDirRel')
+        if (next) {
+          this.activeRootId = next.id
+          localStorage.setItem('picnest.activeRootId', String(next.id))
+          await this.refreshTree()
+          await this.loadImages()
+          api.startWatcher(next.path).catch(() => {}) // 被移出的根若正在被监听，切到新根
+        } else {
+          this.activeRootId = null
+          localStorage.removeItem('picnest.activeRootId')
+          this.tree = null
+          this.images = []
+          this.counts = { all: 0 }
+        }
+      }
+      return r
+    },
+
     /* 资料库重命名：只改显示名（资料库区编辑入口；物理目录不动） */
     async renameLibrary(id, name) {
       const r = await api.renameLibrary(id, name)

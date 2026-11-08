@@ -188,6 +188,7 @@ const bridge = [
   '  picnestTrashRestoreAll: (folderId) => electron.ipcRenderer.invoke("picnest-trash-restore-all", folderId),',
   '  picnestTrashPurgeAll: (folderId) => electron.ipcRenderer.invoke("picnest-trash-purge-all", folderId),',
   '  picnestRenameLibrary: (id, name) => electron.ipcRenderer.invoke("picnest-rename-library", id, name),',
+  '  picnestRemoveRoot: (id) => electron.ipcRenderer.invoke("picnest-remove-root", id),',
   '  picnestRenameDir: (oldPath, newName, oldRel, parentRel) => electron.ipcRenderer.invoke("picnest-rename-dir", oldPath, newName, oldRel, parentRel),',
   '  picnestDirSort: (parentRel, parentAbsPath, mode) => electron.ipcRenderer.invoke("picnest-dir-sort", parentRel, parentAbsPath, mode),',
   '  picnestDirSortRecursive: (rootAbsPath, rootRel, mode) => electron.ipcRenderer.invoke("picnest-dir-sort-recursive", rootAbsPath, rootRel, mode),',

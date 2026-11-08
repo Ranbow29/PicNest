@@ -75,6 +75,35 @@ function renameLib() {
     ask.value = { title: '重命名资料库（仅显示名）', initial: current, selectBase: true, run: (name) => lib.renameLibrary(node.id, name) }
   })
 }
+/* 移出根文件：只解除登记，磁盘文件夹与文件保留；回收站非空先拦住 */
+async function removeLib() {
+  const node = menu.value.node || {}
+  if (!node.id) return
+  const name = node.display_name || node.name || ''
+  run(async () => {
+    let stats = { all: 0, trash: 0 }
+    try { stats = await window.picrand.picnestViewCounts(node.id) } catch { /* 取不到就按 0 展示 */ }
+    if ((stats.trash || 0) > 0) {
+      lib.showNote(`「${name}」的回收站还有 ${stats.trash} 项`, ['先切到该根文件 → 回收站，清空或还原后再移出'], 'error')
+      return
+    }
+    const ok = await lib.askConfirm({
+      title: '移出根文件',
+      message: `把「${name}」从根文件列表移出？`,
+      details: [
+        `图巢内索引 ${Number(stats.all || 0).toLocaleString()} 张图片；评分、注释、色板等图巢数据会一并清除`,
+        '磁盘上的原始文件夹与文件不会被删除，之后可重新添加回来',
+        '其他根文件不受影响',
+      ],
+      confirmText: '移出',
+      danger: true,
+    })
+    if (!ok) return
+    const r = await lib.removeRoot(node.id)
+    if (r?.ok) lib.showNote(`已移出根文件「${name}」（磁盘文件保留）`, [], 'ok')
+    else lib.showNote(r?.error || '移出失败', [], 'error')
+  })
+}
 async function moveTo() {
   const rel = relOf(menu.value.rel)
   const srcAbs = lib.absPathOf(rel)
@@ -227,6 +256,7 @@ const sortItems = [
                   @click="setColor(c.key)" />
         </div>
 
+        <button v-if="isLib" class="mi danger" @click="removeLib">移出根文件…</button>
         <button v-if="!isLib" class="mi danger" @click="deleteDir">删除文件夹…</button>
       </div>
     </div>

@@ -1057,6 +1057,52 @@ electron.ipcMain.handle("picnest-rename-library", (_event, id, name) => {
   }
 });
 
+/* 根文件移出：只解除图巢登记（清该根图片索引/回收站条目/排序键），磁盘文件夹与文件一律不动。
+   回收站非空时拒绝——否则内部回收站里的文件会变成无人认领的孤盘。 */
+electron.ipcMain.handle("picnest-remove-root", (_event, folderId) => {
+  try {
+    picnestMigrate();
+    const db = getDb();
+    const root = db.prepare("SELECT id, path, display_name FROM folders WHERE id = ?").get(folderId);
+    if (!root) return { ok: false, error: "根文件不存在" };
+    const trashImgs = db.prepare("SELECT COUNT(*) c FROM images WHERE folder_id = ? AND deleted_at IS NOT NULL").get(folderId).c;
+    const trashDirs = db.prepare("SELECT COUNT(*) c FROM picnest_trash_folders WHERE folder_id = ?").get(folderId).c;
+    if (trashImgs + trashDirs > 0) {
+      return { ok: false, error: `回收站还有 ${trashImgs + trashDirs} 项，请先清空该根文件的回收站再移出` };
+    }
+    /* 正在监听该根时必须先停：worker 的 add 事件会 getOrCreateFolder 把根复活；清掉排队中的 add */
+    try {
+      const norm = (p) => String(p || "").replace(/[\\/]+$/, "").replace(/\//g, "\\").toLowerCase();
+      if (typeof watchedFolder === "string" && watchedFolder && norm(watchedFolder) === norm(root.path)) {
+        stopWatching();
+        if (typeof _addQueue !== "undefined" && Array.isArray(_addQueue)) _addQueue.length = 0;
+      }
+    } catch (e) { /* watcher 内部符号缺失不阻塞移出 */ }
+    const images = db.prepare("DELETE FROM images WHERE folder_id = ?").run(folderId).changes;
+    db.prepare("DELETE FROM picnest_trash_folders WHERE folder_id = ?").run(folderId);
+    db.prepare("DELETE FROM folders WHERE id = ?").run(folderId);
+    /* 清该库的目录排序键（config，键 = folderId|rel） */
+    try {
+      const c = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+      if (c.picnestDirOrder) {
+        let hit = false;
+        for (const k of Object.keys(c.picnestDirOrder)) {
+          if (k.startsWith(folderId + "|")) { delete c.picnestDirOrder[k]; hit = true; }
+        }
+        if (hit) fs.writeFileSync(configPath, JSON.stringify(c, null, 2));
+      }
+    } catch (e) {}
+    /* 回收站物理目录此时应为空壳，清掉避免留孤儿目录 */
+    try {
+      const td = path.join(dataDir, "picnest-trash", String(folderId));
+      if (fs.existsSync(td)) fs.rmSync(td, { recursive: true, force: true });
+    } catch (e) {}
+    return { ok: true, images, name: root.display_name || path.basename(root.path) };
+  } catch (e) {
+    return { ok: false, error: String(e?.message || e) };
+  }
+});
+
 /* 目录重命名：迁移 picnestDirOrder 兄弟序里的老名字 + dirMemory 的 rel 键（rel 前缀整体搬家） */
 electron.ipcMain.handle("picnest-rename-dir", (_event, oldPath, newName, oldRel, parentRel) => {
   try {

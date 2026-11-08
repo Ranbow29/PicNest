@@ -297,3 +297,8 @@ PicNest/
     ②封面菜单是**文件夹级开关**：`folderHasCover = !!dirMemory[rel].cover`；已有手动封面时任意同夹图片的菜单都显示
     「✓ 设为文件夹封面」，再按走 `clearFolderCover` 恢复自动；要换新封面需先清除再对新图设置（Feb 明确接受两次）。
     判断必须用文件夹 cover 是否存在，而不是“这张图是不是 cover”，否则菜单不会变成开关态。
+47. **移出根文件（2026-11-09，Feb 指定）**：资料库行右键新增「移出根文件…」，语义=只解除图巢登记：删 `images`（整根）、
+    `picnest_trash_folders`、`folders` 行与 config 的 `folderId|*` 排序键；磁盘文件夹/文件永不动，可重新添加。
+    回收站非空（软删图片或回收站文件夹条目）时主进程拒绝并给出件数；活动根被移出后切 roots[0]，空则空态。
+    watcher 若正监听该根必须 `stopWatching()` 并清 `_addQueue`——worker 的 add 回调会 `getOrCreateFolder` 把根复活；
+    渲染层随后对新活动根 `startWatcher`。IPC：`picnest-remove-root`（picnest-handlers.js） + `picnestRemoveRoot`（apply.mjs P4b）。
