@@ -114,13 +114,13 @@ function onKey(e) {
       </div>
       <div class="vo-wrap">
         <button class="tool funnel" :class="{ on: lib.filterBarOpen }" title="筛选工具 Ctrl+Shift+F" @click.stop="toggleFilterBar">
-          <AnimIcon name="filter" :size="15" ambient /><i v-if="lib.activeFilterCount()" class="badge">{{ lib.activeFilterCount() }}</i>
+          <AnimIcon name="filter" :size="15" /><i v-if="lib.activeFilterCount()" class="badge">{{ lib.activeFilterCount() }}</i>
         </button>
         <FilterBar v-if="lib.filterBarOpen" class="funnel-pop" />
       </div>
       <div class="vo-wrap">
         <button class="tool" :class="{ on: panelOpen }" :title="`布局：${layoutMeta.label} · 排列：${sortLabel}`" @click.stop="togglePanel">
-          <AnimIcon :name="layoutMeta.key === 'grid' ? 'grid' : layoutMeta.key === 'masonry' ? 'layout' : 'justified'" :size="15" ambient />
+          <AnimIcon :name="layoutMeta.key === 'grid' ? 'grid' : layoutMeta.key === 'masonry' ? 'layout' : 'justified'" :size="15" />
         </button>
         <div v-if="panelOpen" class="vo-panel glass-card" @click.stop>
           <div class="vo-cap">布局方式</div>
@@ -153,8 +153,8 @@ function onKey(e) {
     <div class="spacer" />
     <!-- 窗控 + 详情开关：圆形亮色，内联右端（与其他窗口右上角对齐） -->
     <div class="bar-controls">
-      <button class="wc" :class="{ on: lib.viewer.showInspector }" title="详情面板（收起/放出）" @click="lib.toggleInspector()"><AnimIcon name="contents" :size="14" ambient /></button>
-      <button class="wc" :class="{ on: topPinned }" :title="topPinned ? '取消置顶（当前置顶中）' : '置顶窗口'" @click="toggleTop"><AnimIcon name="pin" :size="14" :active="topPinned" ambient /></button>
+      <button class="wc" :class="{ on: lib.viewer.showInspector }" title="详情面板（收起/放出）" @click="lib.toggleInspector()"><AnimIcon name="contents" :size="14" /></button>
+      <button class="wc" :class="{ on: topPinned }" :title="topPinned ? '取消置顶（当前置顶中）' : '置顶窗口'" @click="toggleTop"><AnimIcon name="pin" :size="14" :active="topPinned" /></button>
       <button class="wc" title="最小化" @click="api.windowMinimize()">─</button>
       <button class="wc" title="最大化" @click="api.windowMaximize()">▢</button>
       <button class="wc close" title="关闭" @click="api.windowClose()">✕</button>

@@ -83,7 +83,7 @@ PicNest/
 5. 截图验证用 PowerShell PrintWindow(PW_RENDERFULLCONTENT)，不抢前台；对 GPU 合成窗口偶有旧帧竞态
 6. 关窗协议：主进程 confirm-close ↔ 渲染层 respondCloseConfirm(true)，新前端必须应答否则关不掉
 7. python heredoc 写 JS 反斜杠字面量被转义链吃掉——修复用 chr(92)*2 构造 + esbuild 仲裁（node --check 不管 ESM）；更稳妥：整块 JS 一律 Write 工具直写
-8. 运行时调试标配：PicNest 以 --remote-debugging-port=9222 启动，tools/cdp-eval.mjs 可在渲染层里查 Pinia 状态/模拟动作/端到端验证（store 经 $pinia._s.get('library')）
+8. 运行时调试标配：PicNest 以 --remote-debugging-port=9222 启动，tools/cdp-eval.mjs 可在渲染层里查 Pinia 状态/模拟动作/端到端验证（支持 @文件 免转义；动画验证用 cdp-active-eval.mjs 且窗口勿最小化）（store 经 $pinia._s.get('library')）
 9. PicRand 的 watcher 只在 add-folder 流程启动，应用重启后不恢复 → 必须在渲染层 init 里对所有根重新 startWatcher + 后台 sync-folder-snapshot（外部变动才可见）
 10. 渲染层快速迭代期间，编译错误浮层会卡死整个页面（所有点击无效）——用户报「功能无效」时先查是否处于编译错误窗口期
 11. **-webkit-app-region: drag 四种结构全灭**（2026-11-08）：①drag+backdrop-filter 同体 ②pointer-events:none 兄弟层 ③干净拖拽面+控件亲儿子 no-drag ④部分 setBounds——物理鼠标下 no-drag 全部失效（浏览器进程拖拽位图无视 no-drag，CDP 注入检测不出=假阳性）。→ 已弃用 app-region，改 winDrag.js 手动拖窗（mousedown + screenX/Y 增量 + IPC setBounds）
@@ -95,3 +95,13 @@ PicNest/
 16. **SQLite LIKE + ESCAPE 陷阱**：ESCAPE '' 生效时模式内裸反斜杠非法 → Windows 路径拼 LIKE 必须连分隔符一起 picnestLikeEscape（未分类视图曾因裸 sep 全体失配）
 17. **Vue 模板作用域没有 window/innerWidth**（两次踩中）：模板表达式里引用会变 undefined → NaNpx。一律在 computed 里取 window 尺寸再绑定
 18. **setup 内 TDZ 三连**：watch/computed 的 getter 注册即求值——引用晚声明的 const/let 直接 ReferenceError 白屏（ImageGrid 滑尺块曾三次踩中：lib、scrollTop、totalH）。新块一律放在全部依赖声明之后；大文件搬运禁用 find('}') 式锚点（会切进函数体内）
+
+19. **窗口最小化 → rAF 冻结 → 所有动画验证失效**（2026-11-08 踩）：Chromium 对不可见/最小化窗口停 rAF（实测 600ms 仅 1 帧）且把 setTimeout 节流到 500-1000ms。
+    现象：CDP 采样全是同一状态，误判"动效坏了/随机动又有"。**验证动画前必须先确认窗口非最小化**：
+    `IsIconic` 查状态 → `ShowWindow(h, 9)` 还原 → 测 rAF 帧率（应 >50 帧/600ms）→ 再采样。
+    工具：`tools/cdp-active-eval.mjs`（@文件表达式 + Page.setWebLifecycleState + Emulation.setFocusEmulationEnabled）。
+    **生产构建无 `__vueParentComponent`**（dev 专属）——生产验证只能用 DOM 属性采样，不能读内部 ref。
+
+20. **生产模式 dist 陈旧 = 改完看不到效果**：双击模式加载 `app/resources/app/dist`，每次改完必须 `cd ui && npm run build` 再 reload；
+    改代码后只 reload 不 build，跑的还是旧 JS（本轮 random motion "复活" 假象的真因之一：源码已修但 dist 未重建）。
+    验收流程固定为：改源码 → build → reload → 采样验证。

@@ -1,7 +1,10 @@
 // PicNest 渲染层运行时探针：经 CDP 在页面里执行 JS 并回显结果
-// 用法: node tools/cdp-eval.mjs "表达式"   （要求 PicNest 以 --remote-debugging-port=9222 启动）
-const expr = process.argv[2]
+// 用法: node tools/cdp-eval.mjs "表达式"   或   node tools/cdp-eval.mjs "@文件.js"（表达式走文件，免 shell 转义）
+// （要求 PicNest 以 --remote-debugging-port=9222 启动）
+import fs from 'node:fs'
+let expr = process.argv[2]
 if (!expr) { console.error('need expression'); process.exit(1) }
+if (expr.startsWith('@')) expr = fs.readFileSync(expr.slice(1), 'utf8')
 
 const list = await (await fetch('http://127.0.0.1:9222/json')).json()
 const page = list.find((t) => t.type === 'page' && /127\.0\.0\.1:5173|picnest/i.test(t.url + t.title)) || list.find((t) => t.type === 'page')
