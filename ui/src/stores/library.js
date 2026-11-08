@@ -103,7 +103,21 @@ export const useLibrary = defineStore('library', {
           const saved = Number(localStorage.getItem('picnest.activeRootId'))
           this.activeRootId = this.roots.some((r) => r.id === saved) ? saved : this.roots[0].id
           await this.refreshTree()
-          await this.openDir(null)
+          /* 恢复上次浏览位置：视图 + 文件夹（目录已不存在则回退全部） */
+          const savedView = localStorage.getItem('picnest.lastView') || 'all'
+          const savedDir = localStorage.getItem('picnest.lastDirRel') || ''
+          const dirExists = (() => {
+            if (!savedDir) return true
+            const walk = (node) => {
+              if (!node) return false
+              if (node.rel === savedDir) return true
+              return (node.children || []).some(walk)
+            }
+            return walk(this.tree && this.tree.tree)
+          })()
+          if (savedView === 'all' && savedDir && dirExists) await this.openDir(savedDir)
+          else if (savedView !== 'all' && ['recent', 'random', 'trash', 'uncategorized'].includes(savedView)) await this.switchView(savedView)
+          else await this.openDir(null)
         }
         // 重启后恢复所有根的文件监听 + 后台增量同步（外部变动/录入永远可见）
         for (const r of this.roots) {
@@ -245,6 +259,8 @@ export const useLibrary = defineStore('library', {
       if (this.lightbox.open) this.closeLightbox()
       collectiveShake()
       this.view = 'all'
+      localStorage.setItem('picnest.lastView', 'all')
+      localStorage.setItem('picnest.lastDirRel', rel || '')
       this.currentDirRel = rel ?? null
       await this.loadImages()
     },
@@ -253,6 +269,8 @@ export const useLibrary = defineStore('library', {
       if (this.lightbox.open) this.closeLightbox()
       collectiveShake()
       this.view = v
+      localStorage.setItem('picnest.lastView', v)
+      if (v !== 'all') localStorage.setItem('picnest.lastDirRel', '')
       this.currentDirRel = null
       this.searchQuery = ''
       await this.loadImages()
@@ -712,6 +730,7 @@ export const useLibrary = defineStore('library', {
       this.viewer.rot = 0; this.viewer.flopX = false
       this.viewer.cropMode = false
       this.viewer.fitNonce++
+      collectiveShake() // 进入大图：全体图标同步手势（与退出对称）
     },
     closeLightbox() {
       this.lightbox = { open: false, path: null }
