@@ -3,7 +3,7 @@
 把网页图片 / 页面截图保存进 **PicNest 图巢**。扩展只与本机 `127.0.0.1:41600` 通信，
 不经过任何云端；图片由 PicNest 主进程下载并落进你选的目标文件夹。
 
-## 安装（Edge / Chromium，开发者模式）
+## 安装（Edge / Chrome / Chromium，开发者模式）
 
 1. 启动 PicNest（主进程会自动监听 `127.0.0.1:41600`）。
 2. 打开 `edge://extensions`（Chrome 用 `chrome://extensions`）。
@@ -11,6 +11,10 @@
 4. 点「加载解压缩的扩展」，选择本目录 `PicNest/extension`。
 5. 点扩展图标打开面板：应显示「已连接」，可选根文件与目标文件夹。
 
+> **Chrome**：同一份扩展，不需要改 manifest；Chrome 137+ 已禁用 `--load-extension` 命令行，请用上面的
+> `chrome://extensions` UI 加载。Edge/Chrome 都用标准 MV3 API（contextMenus / scripting / notifications /
+> storage / tabs），扩展本身没有 Edge 专属调用。
+>
 > 首次保存 `file://` 页面图片时，需要在扩展详情里打开「允许访问文件 URL」。
 
 ## 用法

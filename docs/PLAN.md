@@ -325,3 +325,5 @@ PicNest/
     **网页内按住采集（content.js）**：按住 380ms（120ms 起环形进度）→ Shadow DOM 双栏面板（左「未分类/库根」大片，
     右 = 当前根全部文件夹缩进列表，原生滚动）；拖到目标松开保存，松在面板空白则停留点击；提前移动 >6px 取消，
     不影响页面自身拖拽；Esc/点外部/页面滚动关闭；只处理主 frame 的 `<img>`，popup 可关闭手势（`holdCollect`）。
+    面板固定白底（不随浏览器暗色，任何主题页面都清晰）；同一份扩展可在 Chrome `chrome://extensions` 开发者模式加载
+    （Chrome 137+ 禁用 `--load-extension` 命令行），只使用标准 MV3 API（contextMenus/scripting/notifications/storage/tabs）。

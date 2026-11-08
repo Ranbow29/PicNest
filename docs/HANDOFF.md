@@ -100,8 +100,8 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 - 详情：文本尺寸显示「文本」、隐藏色板；视频/文本预览用缩略图，不直链原文件。
 
 ### 采集（M6，2026-11-09）
-- **自研开源 MV3 扩展** `extension/`（开发者模式加载，Edge/Chrome）：右键图片「保存图片到图巢」、右键页面「保存页面截图到图巢」；popup 选「根文件 / 保存到」，选择全局有效。
-- **网页内按住采集**（2026-11-09）：网页图片上左键按住 380ms（光标处环形进度）→ 双栏面板：左大片「未分类/库根」，右 = 当前根下**全部文件夹**（缩进列表，原生滚动）；拖到目标松开保存；松开在面板空白则面板停留可点击；提前移动 >6px 取消，不影响页面自身拖拽/点击；Esc/点外部取消。Shadow DOM 注入，只挂主 frame 的 `<img>`；popup 可关闭该手势。
+- **自研开源 MV3 扩展** `extension/`（开发者模式加载；Edge/Chrome **同一份代码**，Chrome 137+ 已禁用 `--load-extension`，用 `chrome://extensions` UI）：右键图片「保存图片到图巢」、右键页面「保存页面截图到图巢」；popup 选「根文件 / 保存到」，选择全局有效。
+- **网页内按住采集**（2026-11-09）：网页图片上左键按住 380ms（光标处环形进度）→ 双栏面板：左大片「未分类/库根」，右 = 当前根下**全部文件夹**（缩进列表，原生滚动）；**面板固定白底**（不随浏览器暗色，任何主题页面都清晰）；拖到目标松开保存；松开在面板空白则面板停留可点击；提前移动 >6px 取消，不影响页面自身拖拽/点击；Esc/点外部取消。Shadow DOM 注入，只挂主 frame 的 `<img>`；popup 可关闭该手势。
 - **主进程本地服务** `127.0.0.1:41600`（`picnest-handlers.js` 的 M6 块）：`/api/v1/ping`、`context`、`folders?rootId=`、`save`。只写目标根内的文件（`picnestCollectTarget` 防 `..` 逃逸）；写入后 `insertImagesBatch` + `sync-db add` 事件，渲染层自行补缩略图/尺寸；`url/annotation/star` 写 DB。
 - **安全**：绑定 127.0.0.1；Origin 只放行 `chrome-extension://` / `extension://` / 本机 localhost 页面；CORS + Private-Network 预检；**暂无 token**（开源发布前补）。
 - **目标根跟随活动根**：store `syncCollectRoot()` 在 init / addRootByPath / switchRoot / removeRoot 调 `picnest-collect-set-root`；扩展可另选根（服务端 `picnestCollectRootId`，默认第一个）。
