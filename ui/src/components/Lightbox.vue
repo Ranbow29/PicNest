@@ -40,7 +40,10 @@ function fitToWindow() {
   const rect = stageEl.value.getBoundingClientRect()
   const inspW = lib.viewer.showInspector ? lib.inspectorWidth + 16 : 0
   const availW = Math.max(120, rect.width - inspW - 32)
-  const availH = Math.max(120, rect.height - 110) /* 顶部玻璃 42 + 拖尾 + 底部工具条 */
+  /* 上下各让 70px：42 标题栏 + 20 玻璃拖尾 + 8 呼吸 / dock 46 + 16 底距 + 8 呼吸。
+     旧版只留总 110px，居中后上下各 55px，顶边会钻进拖尾、底边会压到 dock。 */
+  const TOP_INSET = 70, BOTTOM_INSET = 70
+  const availH = Math.max(120, rect.height - TOP_INSET - BOTTOM_INSET)
   lib.viewer.scale = Math.min(availW / iw, availH / ih) || 1 /* 按工作区适配，可放大不超出 */
   lib.viewer.tx = 0; lib.viewer.ty = 0
 }

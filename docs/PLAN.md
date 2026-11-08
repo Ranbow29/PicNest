@@ -217,3 +217,7 @@ PicNest/
     改为 `top:auto; height:var(--insp-h)`，顶边柄 `bottom:calc(10px + var(--insp-h) - 4px)`、角柄 `-8px`。
     判断尺寸上限要用拖拽起点时容器的 `rect.height - 74`（64 顶 + 10 底），拖到满高就回写 0 保持窗口自适应；
     双击顶边/角柄恢复满高。三个柄的 `pointer-events:auto` 必须显式写（`.insp-overlay` 整层是 none）。
+39. **大图适配安全区（2026-11-09，Feb 报「顶部进入玻璃顶栏」）**：`fitToWindow` 的 `availH` 从 `rect.height - 110`
+    改为上下各 70 → `rect.height - 140`。原因：flex 居中会把总留白对半分，旧值只给上下各 55px，而玻璃顶栏 42+拖尾 20=62、
+    dock 46+底距 16=62，导致顶边钻拖尾 7px、底边压 dock 7px（帧实测 img top 68 < trailerBottom 75）。
+    改后实测 img top 83 > 75、img bottom 1015 < dockTop 1023，各留 8px 呼吸。若日后改标题栏高度/拖尾/dock 尺寸，必须重算这 70。
