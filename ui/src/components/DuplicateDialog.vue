@@ -29,7 +29,7 @@ function dismiss() {
           <b>{{ mode === 'merge' ? `文件夹内有 ${count} 张重复图片` : '重复添加提示' }}</b>
           <button class="close" @click="dismiss">✕</button>
         </div>
-        <div v-if="mode === 'merge'" class="merge-note">这些图片在资料库其他位置已存在，选择处理方式：</div>
+        <div v-if="mode === 'merge'" class="merge-note">这些图片在根文件其他位置已存在，选择处理方式：</div>
         <div class="pairs">
           <div v-for="(c, i) in dlg.items" :key="i" class="pair">
             <div class="side exist">

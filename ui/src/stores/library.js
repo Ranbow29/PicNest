@@ -1497,7 +1497,7 @@ export const useLibrary = defineStore('library', {
       const targetDir = this.absOfTarget(t)
       try {
         if (!targetDir) {
-          const fail = { ok: false, error: '目标资料库不可用' }
+          const fail = { ok: false, error: '目标根文件不可用' }
           this.reportImport(fail, t)
           return fail
         }
@@ -1560,7 +1560,7 @@ export const useLibrary = defineStore('library', {
       const targetDir = this.absOfTarget(t)
       try {
         if (!targetDir) {
-          const fail = { ok: false, error: '目标资料库不可用' }
+          const fail = { ok: false, error: '目标根文件不可用' }
           this.reportImport(fail, t)
           return fail
         }
@@ -1916,7 +1916,7 @@ export const useLibrary = defineStore('library', {
       const list = [...new Set((paths || []).filter(Boolean))]
       if (!list.length) return { ok: false }
       const rootPath = this.tree?.rootPath
-      if (!rootPath) return { ok: false, error: '无资料库' }
+      if (!rootPath) return { ok: false, error: '无根文件' }
       const norm = (p) => String(p).replace(/\//g, '\\').toLowerCase()
       const root = norm(rootPath).replace(/\\+$/, '')
       const dirOf = (p) => { const s = Math.max(p.lastIndexOf('\\'), p.lastIndexOf('/')); return s < 0 ? '' : p.slice(0, s) }
