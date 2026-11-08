@@ -313,7 +313,6 @@ async function exportFolder() {
       <div v-else class="name" title="点击重命名" @click="startEdit">{{ img.file_name }}</div>
 
       <input class="line-input" placeholder="添加注释" v-model="meta.annotation" @input="queueSave" />
-      <input class="line-input" placeholder="http://" v-model="meta.url" @input="queueSave" />
 
       <div class="sec">
         <div class="sec-head" @click="toggle('info')"><span>基本信息</span><i>{{ sections.info ? '▾' : '▸' }}</i></div>
@@ -390,8 +389,6 @@ async function exportFolder() {
 
       <input class="line-input" placeholder="添加注释（应用到全部）" v-model="multiMeta.annotation"
              @keyup.enter="applyMultiMeta('annotation')" @blur="applyMultiMeta('annotation')" />
-      <input class="line-input" placeholder="多个链接（应用到全部）" v-model="multiMeta.url"
-             @keyup.enter="applyMultiMeta('url')" @blur="applyMultiMeta('url')" />
       <div v-if="multiNote" class="move-note">{{ multiNote }}</div>
 
       <div class="sec">
