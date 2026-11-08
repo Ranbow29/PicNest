@@ -476,6 +476,11 @@ async function onCanvasDrop(e) {
   const ctx = reorderCtx.value
   const paths = internalImages(e)
   reorderCtx.value = null
+  if (!lib.canReorder()) {
+    /* 非手动排序模式：不写 sort_order，保护已有手动排序 */
+    lib.showNote('拖动换位需先切换到「手动排序」', [], 'muted')
+    return
+  }
   if (ctx && paths.length) await lib.reorderImages(paths, ctx.path, ctx.before)
 }
 /* 点正文空白：取消图片选中，改为选中当前文件夹（库根则选中库） */

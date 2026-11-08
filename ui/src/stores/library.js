@@ -1035,10 +1035,12 @@ export const useLibrary = defineStore('library', {
     },
     /* 图片拖动排序：仅文件夹视图；写入 sort_order 并切到手动排序 */
     canReorder() {
-      return !this.selectionView && this.view === 'all' && !this.lightbox.open
+      /* 只有手动排序模式才允许换位：其他排序模式下画面顺序是临时的，
+         若允许拖动会按当前画面重建 sort_order，直接覆盖掉已有手动排序 */
+      return !this.selectionView && this.view === 'all' && this.sortMode === 'manual' && !this.lightbox.open
     },
     async reorderImages(srcPaths, targetPath, before = true) {
-      if (!this.canReorder()) return { ok: false, error: '仅在文件夹视图内可拖动排序' }
+      if (!this.canReorder()) return { ok: false, error: '请先切换到「手动排序」再拖动换位' }
       const set = new Set(srcPaths || [])
       if (!targetPath || set.has(targetPath)) return { ok: true, moved: false }
       const list = this.images.map((i) => i.file_path)

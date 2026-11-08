@@ -145,7 +145,9 @@ PicNest/
     **新录入/移入的 0 值排最前**（id 新的在前）。拖动排序 IPC 写 1..n 并自动切 manual；移动图片时 `sort_order = 0`。
     **画布级拖动**：按光标最近图片中心算目标与 before/after（光标在目标左半=前、右半=后），画布任意缝隙都能命中；
     插入线用画布绝对坐标绘制（会随滚动），不依赖落点在单元格上。**全部视图也允许拖动排序**：非 manual 时强制 added，
-    manual 时按 sort_order 显示并可拖。多选组拖动载荷 `x-picnest-files`；外部拖入不拦截，继续冒泡给 shell 录入当前目录。
+    manual 时按 sort_order 显示并可拖。**canReorder 必须要求 sortMode==='manual'**：其他排序模式下拖动换位直接拒绝，
+    不画插入线、不写 sort_order，只提示切换手动排序——否则会按临时画面顺序重建 sort_order，覆盖已有手动排序。
+    多选组拖动载荷 `x-picnest-files`；外部拖入不拦截，继续冒泡给 shell 录入当前目录。
     点正文空白 = 清图选 + 选中当前文件夹（库根→资料库根）；侧栏空白不接收内部图片（防误落未分类）。
 33. **树联动与增量更新**：`openDir(rel)` 调 `revealDir` 展开祖先（**库根被收起时也要展开**）。`DirTreeItem` 必须
     watch `dirMemory.expanded` 同步本地 `expanded` ref——只 watch `props.node` 时，补丁展开了 memory 但树行不展开。
