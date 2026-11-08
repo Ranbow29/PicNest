@@ -131,3 +131,8 @@ PicNest/
 29. **Pinia/Vue 响应式数组不能直接过 IPC**：把 store 里的 `clipboard.paths` 原样传给 `ipcRenderer.invoke`
     会抛 `An object could not be cloned`（structured clone 不支持 Proxy）。复制粘贴的图片分支需传 `[...clip.paths]`；
     规则：所有 IPC 参数先转普通值（展开/`slice`），删除/移动等路径字符串数组同样注意。
+30. **文件夹放入的合并与查重**：同名目标文件夹 → 合并（不再 `名字 (n)`）；同名同大小必须按 MD5 判定——
+    同内容跳过、不同内容加序号（只看大小会在合并自身时误编号）。`picnest-dir-dup-check` 按 size 筛候选再 MD5，
+    且要排除**自身路径**与**目标同名位置**（`destRoot/相对路径`）：目标同位已有同内容 = 天然合并，不应弹重复提示。
+    三策略 skip / keep-both / replace；replace 在复制成功后把旧文件 `shell.trashItem` + 删 DB 行。
+    外部拖入文件夹与内部分支粘贴共用 store.mergeDirWithDupes。

@@ -1,13 +1,17 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useLibrary } from '../stores/library'
 import { fileUrl } from '../api'
 
 // Eagle 式重复添加提示：已存在 vs 新的文件 对比卡
+// files = 拖入图片冲突（二选一）；merge = 文件夹放入时库内查重（三选一：跳过旧/覆盖旧/都保留）
 const lib = useLibrary()
 const dlg = computed(() => lib.dupDialog)
+const mode = computed(() => dlg.value.mode || 'files')
+const count = computed(() => dlg.value.count || dlg.value.items.length)
 const choice = ref('use-existing')
 const fmtSize = (n) => (n > 1048576 ? (n / 1048576).toFixed(0) + 'KB' : (n / 1024).toFixed(0) + 'KB')
+watch(() => dlg.value.open, (v) => { if (v) choice.value = 'use-existing' })
 
 function confirm() {
   lib.resolveDupDialog(choice.value)
@@ -22,9 +26,10 @@ function dismiss() {
     <div v-if="dlg.open" class="dup-layer" @click.self="dismiss">
       <div class="dup-card glass-card">
         <div class="head">
-          <b>重复添加提示</b>
+          <b>{{ mode === 'merge' ? `文件夹内有 ${count} 张重复图片` : '重复添加提示' }}</b>
           <button class="close" @click="dismiss">✕</button>
         </div>
+        <div v-if="mode === 'merge'" class="merge-note">这些图片在资料库其他位置已存在，选择处理方式：</div>
         <div class="pairs">
           <div v-for="(c, i) in dlg.items" :key="i" class="pair">
             <div class="side exist">
@@ -47,10 +52,18 @@ function dismiss() {
             </div>
           </div>
         </div>
+        <div v-if="count > dlg.items.length" class="more-note">仅显示前 {{ dlg.items.length }} 组，处理方式会应用到全部 {{ count }} 张</div>
         <div class="foot">
-          <label class="radio"><input type="radio" value="use-existing" v-model="choice" /> 使用已存在文件导入</label>
-          <label class="radio"><input type="radio" value="keep-both" v-model="choice" /> 保留两者</label>
-          <button class="go" @click="confirm">导入文件</button>
+          <label class="radio"><input type="radio" value="use-existing" v-model="choice" />
+            {{ mode === 'merge' ? '只保留旧位置（跳过新文件夹里的重复图）' : '使用已存在文件导入' }}
+          </label>
+          <label v-if="mode === 'merge'" class="radio"><input type="radio" value="use-new" v-model="choice" />
+            覆盖到新文件夹（旧图移入回收站）
+          </label>
+          <label class="radio"><input type="radio" value="keep-both" v-model="choice" />
+            {{ mode === 'merge' ? '两个文件夹都保留' : '保留两者' }}
+          </label>
+          <button class="go" @click="confirm">{{ mode === 'merge' ? '应用' : '导入文件' }}</button>
         </div>
       </div>
     </div>
@@ -68,6 +81,8 @@ function dismiss() {
 .head b { font-size: 14px; }
 .close { margin-left: auto; border: none; background: transparent; color: var(--text-2); font-size: 14px; cursor: pointer; }
 .close:hover { color: var(--text); }
+.merge-note { padding: 10px 18px 0; font-size: 12px; color: var(--text-2); }
+.more-note { padding: 0 18px 10px; font-size: 11px; color: var(--text-2); }
 .pairs { flex: 1; overflow-y: auto; padding: 14px 18px; display: flex; flex-direction: column; gap: 16px; }
 .pairs::-webkit-scrollbar { width: 6px; }
 .pairs::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
@@ -88,7 +103,7 @@ function dismiss() {
   display: inline-block; margin-top: 6px; padding: 3px 10px; border-radius: 7px;
   background: var(--accent-weak); color: var(--accent); font-size: 11px;
 }
-.foot { display: flex; align-items: center; gap: 18px; padding: 12px 18px; border-top: 1px solid var(--border); }
+.foot { display: flex; align-items: center; flex-wrap: wrap; gap: 14px 18px; padding: 12px 18px; border-top: 1px solid var(--border); }
 .radio { display: flex; align-items: center; gap: 6px; font-size: 12.5px; cursor: pointer; }
 .radio input { accent-color: var(--accent); }
 .go {

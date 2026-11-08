@@ -270,13 +270,22 @@ electron.ipcMain.handle("picnest-import-files", async (_event, paths, targetDir)
 /* 外部拖入文件夹（PicNest P7）：复制为目标目录下的同名子文件夹（保留内部结构，仅收录图片/视频）
    目标同名文件夹 → 合并；同名同大小 → 跳过；同名不同内容 → 加序号。空目录不落盘。 */
 electron.ipcMain.handle("picnest-import-dir-copy", async (_event, srcDir, targetDir, opts) => {
-  const detail = { ok: false, name: "", dest: "", copied: 0, skipped: 0, failed: 0, unsupported: 0, unsupportedNames: [], dirsCreated: 0 };
-  const unique = !!(opts && opts.unique); // 复制粘贴：永远生成副本（同名加序号），不合并
+  const detail = {
+    ok: false, name: "", dest: "", copied: 0, skipped: 0, failed: 0,
+    unsupported: 0, unsupportedNames: [], dirsCreated: 0, created: false, replaced: 0, policy: "",
+  };
+  const o = opts || {};
+  const policy = o.policy || ""; // skip | keep-both | replace（空 = 未做库内查重）
+  const dupeMap = new Map();
+  for (const d of Array.isArray(o.dupes) ? o.dupes : []) {
+    if (d && d.src) dupeMap.set(String(d.src).toLowerCase(), d.old || "");
+  }
+  detail.policy = policy;
   try {
     if (!srcDir || !fs.existsSync(srcDir)) return { ...detail, error: "源文件夹不存在" };
     if (!fs.existsSync(targetDir)) return { ...detail, error: "目标目录不存在" };
     if (!fs.statSync(srcDir).isDirectory()) return { ...detail, error: "不是文件夹" };
-    /* 防自包含递归：目标在源内（含相同）或源已在目标同名位置时拒绝 */
+    /* 防自包含递归：目标在源内（含相同）时拒绝 */
     const normPath = (p) => path.resolve(p).toLowerCase();
     const srcNorm = normPath(srcDir);
     const dstNorm = normPath(targetDir);
@@ -284,17 +293,11 @@ electron.ipcMain.handle("picnest-import-dir-copy", async (_event, srcDir, target
       return { ...detail, error: "不能把文件夹复制进自身或其子目录" };
     }
     const base = path.basename(srcDir).replace(/[\\/:*?"<>|]/g, "_") || "导入文件夹";
-    if (!unique && normPath(path.join(targetDir, base)) === srcNorm) {
-      return { ...detail, error: "文件夹已在此位置" };
-    }
     let dest = path.join(targetDir, base);
-    if (unique) {
-      for (let n = 1; fs.existsSync(dest); n++) dest = path.join(targetDir, base + " (" + n + ")");
-    } else {
-      for (let n = 1; fs.existsSync(dest) && !fs.statSync(dest).isDirectory(); n++) {
-        dest = path.join(targetDir, base + " (" + n + ")");
-      }
+    for (let n = 1; fs.existsSync(dest) && !fs.statSync(dest).isDirectory(); n++) {
+      dest = path.join(targetDir, base + " (" + n + ")");
     }
+    const destExisted = fs.existsSync(dest); // 同名目录 → 合并，不新开 (n)
     const madeDirs = new Set();
     const ensureDir = (abs) => {
       if (fs.existsSync(abs)) return;
@@ -305,6 +308,7 @@ electron.ipcMain.handle("picnest-import-dir-copy", async (_event, srcDir, target
       detail.unsupported++;
       if (detail.unsupportedNames.length < 12) detail.unsupportedNames.push(relName);
     };
+    const oldToTrash = [];
     const walk = (from, to, relPrefix) => {
       let entries = [];
       try { entries = fs.readdirSync(from, { withFileTypes: true }); }
@@ -316,15 +320,28 @@ electron.ipcMain.handle("picnest-import-dir-copy", async (_event, srcDir, target
         if (ent.isDirectory()) { walk(srcPath, path.join(to, ent.name), relName); continue; }
         const lower = ent.name.toLowerCase();
         const ext = path.extname(lower);
-        if (PICNEST_DROP_JUNK.has(lower)) continue; // 系统缩略图库等垃圾文件
+        if (PICNEST_DROP_JUNK.has(lower)) continue;
         if (!PICNEST_DROP_EXTS.has(ext)) { unsupportedAt(relName); continue; }
+        const srcKey = path.resolve(srcPath).toLowerCase();
+        const dup = dupeMap.has(srcKey);
+        if (policy === "skip" && dup) { detail.skipped++; continue; }
         try {
           const st = fs.statSync(srcPath);
           let finalDst = path.join(to, ent.name);
+          const force = dup && (policy === "keep-both" || policy === "replace");
           if (fs.existsSync(finalDst)) {
             let sameSize = false;
             try { sameSize = fs.statSync(finalDst).size === st.size; } catch (e) { /* 不可读按冲突处理 */ }
-            if (sameSize) { detail.skipped++; continue; }
+            /* 同名同大小：按内容判断（合并同一文件夹时天然跳过；同名不同内容加序号） */
+            if (sameSize) {
+              let sameContent = false;
+              try {
+                const m1 = picnestMd5(srcPath);
+                const m2 = m1 ? picnestMd5(finalDst) : null;
+                sameContent = !!m1 && m1 === m2;
+              } catch (e) { /* 读失败按不同内容处理 */ }
+              if (sameContent && !force) { detail.skipped++; continue; }
+            }
             const stem = path.basename(ent.name, path.extname(ent.name));
             for (let n = 1; fs.existsSync(finalDst); n++) {
               finalDst = path.join(to, stem + " (" + n + ")" + path.extname(ent.name));
@@ -333,18 +350,100 @@ electron.ipcMain.handle("picnest-import-dir-copy", async (_event, srcDir, target
           ensureDir(to);
           fs.copyFileSync(srcPath, finalDst);
           detail.copied++;
+          if (policy === "replace" && dup) {
+            const old = dupeMap.get(srcKey);
+            if (old) {
+              const oldNorm = path.resolve(old).toLowerCase();
+              if (oldNorm !== path.resolve(finalDst).toLowerCase() && oldNorm !== path.resolve(srcPath).toLowerCase()) {
+                oldToTrash.push(old);
+              }
+            }
+          }
         } catch (e) { detail.failed++; }
       }
     };
     walk(srcDir, dest, "");
+    if (oldToTrash.length) {
+      const seen = new Set();
+      for (const old of oldToTrash) {
+        const key = path.resolve(old).toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        try {
+          await electron.shell.trashItem(old);
+          getDb().prepare("DELETE FROM images WHERE file_path = ?").run(old);
+          detail.replaced++;
+        } catch (e) { detail.failed++; }
+      }
+    }
     detail.ok = true;
     detail.name = path.basename(dest);
     detail.dest = dest;
     detail.dirsCreated = madeDirs.size;
+    detail.created = !destExisted && detail.copied > 0;
     if (!detail.copied && !detail.skipped && !detail.failed && !detail.unsupported) detail.empty = true;
     return detail;
   } catch (e) {
     return { ...detail, error: String(e?.message || e) };
+  }
+});
+
+/* 文件夹放入前的库内查重：按文件大小筛候选 → MD5 确认；跳过自身与“目标同名位置”的噪声重复 */
+electron.ipcMain.handle("picnest-dir-dup-check", (_event, srcDir, targetDir, folderId) => {
+  const out = { ok: false, count: 0, scanned: 0, items: [] };
+  try {
+    if (!srcDir || !fs.existsSync(srcDir) || !fs.statSync(srcDir).isDirectory()) return { ...out, error: "源文件夹不存在" };
+    const norm = (p) => path.resolve(p).toLowerCase();
+    const destRoot = path.join(targetDir, path.basename(srcDir).replace(/[\\/:*?"<>|]/g, "_"));
+    const walk = (dir) => {
+      let entries = [];
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
+      for (const ent of entries) {
+        if (ent.name.startsWith(".")) continue;
+        const p = path.join(dir, ent.name);
+        if (ent.isDirectory()) { walk(p); continue; }
+        const ext = path.extname(ent.name).toLowerCase();
+        if (!PICNEST_DROP_EXTS.has(ext) || PICNEST_DROP_JUNK.has(ent.name.toLowerCase())) continue;
+        out.scanned++;
+        let st;
+        try { st = fs.statSync(p); } catch (e) { continue; }
+        const cands = getDb().prepare(
+          "SELECT file_path, file_name, width, height FROM images WHERE file_size = ? AND folder_id = ? AND deleted_at IS NULL LIMIT 8"
+        ).all(st.size, folderId);
+        if (!cands.length) continue;
+        const md5 = picnestMd5(p);
+        if (!md5) continue;
+        const destPath = path.join(destRoot, path.relative(srcDir, p));
+        /* 目标同名位置已有同内容文件 → 合并时天然跳过，不算待处理重复；
+           否则报告库内其他位置的同内容文件 */
+        let atDest = false;
+        let hit = null;
+        for (const c of cands) {
+          const same = norm(c.file_path) === norm(p);
+          const isDest = norm(c.file_path) === norm(destPath);
+          if (same && !isDest) continue; // 自己（且不是目标同位）
+          if (!fs.existsSync(c.file_path)) continue;
+          if (picnestMd5(c.file_path) !== md5) continue;
+          if (isDest) { atDest = true; break; }
+          if (!hit) hit = c;
+        }
+        if (atDest || !hit) continue;
+        out.count++;
+        out.items.push({
+          src: p, name: ent.name, size: st.size,
+          existing: {
+            file_path: hit.file_path, file_name: hit.file_name,
+            width: hit.width, height: hit.height,
+            folderName: path.basename(path.dirname(hit.file_path)),
+          },
+        });
+      }
+    };
+    walk(srcDir);
+    out.ok = true;
+    return out;
+  } catch (e) {
+    return { ...out, error: String(e?.message || e) };
   }
 });
 

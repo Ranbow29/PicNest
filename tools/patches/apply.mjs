@@ -122,6 +122,7 @@ const bridge = [
   '  picnestImportUrls: (urls, targetDir) => electron.ipcRenderer.invoke("picnest-import-urls", urls, targetDir),',
   '  picnestImportCheck: (paths, folderId) => electron.ipcRenderer.invoke("picnest-import-check", paths, folderId),',
   '  picnestImportDirCopy: (srcDir, targetDir, opts) => electron.ipcRenderer.invoke("picnest-import-dir-copy", srcDir, targetDir, opts),',
+  '  picnestDirDupCheck: (srcDir, targetDir, folderId) => electron.ipcRenderer.invoke("picnest-dir-dup-check", srcDir, targetDir, folderId),',
   '  picnestCopyImages: (paths, targetDir) => electron.ipcRenderer.invoke("picnest-copy-images", paths, targetDir),',
   '  picnestCrop: (filePath, opts) => electron.ipcRenderer.invoke("picnest-crop", filePath, opts),',
   '  picnestCropAs: (filePath, opts) => electron.ipcRenderer.invoke("picnest-crop-as", filePath, opts),',

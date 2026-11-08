@@ -63,7 +63,7 @@ export const useLibrary = defineStore('library', {
     lightbox: { open: false, path: null },
     contextMenu: { open: false, x: 0, y: 0, image: null },
     renaming: false,
-    dupDialog: { open: false, items: [], targetRel: undefined, resolve: null },
+    dupDialog: { open: false, items: [], targetRel: undefined, mode: 'files', count: 0, resolve: null },
     confirmDialog: { open: false, title: '', message: '', details: [], confirmText: '确定', danger: false, resolve: null },
     importResult: { open: false, nonce: 0, summary: '', details: [], tone: 'ok' }, // 录入汇总结果卡
     clipboard: { kind: '', paths: [], count: 0, root: false }, // 应用内复制剪贴板（kind: dirs | files）
@@ -332,18 +332,19 @@ export const useLibrary = defineStore('library', {
         })
         if (!ok) return { ok: false, canceled: true }
       }
-      const agg = { ok: true, copied: 0, skipped: 0, failed: 0, unsupported: 0, dirs: [], errors: [] }
+      const agg = { ok: true, copied: 0, skipped: 0, failed: 0, unsupported: 0, replaced: 0, dirs: [], errors: [] }
       try {
         if (clip.kind === 'dirs') {
           for (const src of clip.paths) {
-            const r = await window.picrand.picnestImportDirCopy(src, targetDir, { unique: true })
+            const r = await this.mergeDirWithDupes(src, targetDir, t)
             if (r?.ok) {
               agg.dirs.push(r)
               agg.copied += r.copied || 0
               agg.skipped += r.skipped || 0
               agg.failed += r.failed || 0
               agg.unsupported += r.unsupported || 0
-              if (t.rootId === this.activeRootId) await this.insertOrderAt(t.rel, r.name, null)
+              agg.replaced += r.replaced || 0
+              if (t.rootId === this.activeRootId && r.created) await this.insertOrderAt(t.rel, r.name, null)
             } else {
               agg.ok = false
               agg.failed++
@@ -370,6 +371,7 @@ export const useLibrary = defineStore('library', {
         if (agg.copied) parts.push(`粘贴 ${agg.copied} 张`)
         if (agg.dirs.length) parts.push(`文件夹 ${agg.dirs.length} 个`)
         if (agg.skipped) parts.push(`跳过 ${agg.skipped}`)
+        if (agg.replaced) parts.push(`替换旧图 ${agg.replaced}`)
         if (agg.failed) parts.push(`失败 ${agg.failed}`)
         let cross = ''
         if (t.rootId !== this.activeRootId) {
@@ -377,7 +379,7 @@ export const useLibrary = defineStore('library', {
           const name = rec?.display_name || String(rec?.path || '').split(/[\\/]/).pop()
           cross = name ? ` → ${name}` : ''
         }
-        const details = (agg.dirs || []).map((d) => ({ label: d.name, text: `粘贴 ${d.copied}${d.failed ? ` · 失败 ${d.failed}` : ''}` }))
+        const details = (agg.dirs || []).map((d) => ({ label: d.name, text: `粘贴 ${d.copied}${d.replaced ? ` · 替换 ${d.replaced}` : ''}${d.failed ? ` · 失败 ${d.failed}` : ''}` }))
         if (agg.errors.length) details.push({ label: '错误', text: agg.errors.join('；') })
         this.showNote((parts.length ? parts.join(' · ') : (agg.ok ? '没有可粘贴的内容' : '粘贴失败')) + cross, details, agg.ok ? 'ok' : 'error')
         return agg
@@ -586,7 +588,7 @@ export const useLibrary = defineStore('library', {
 
     resolveDupDialog(choice) {
       if (this.dupDialog.resolve) this.dupDialog.resolve(choice)
-      this.dupDialog = { open: false, items: [], targetRel: undefined, resolve: null }
+      this.dupDialog = { open: false, items: [], targetRel: undefined, mode: 'files', count: 0, resolve: null }
     },
 
     /* 通用确认框（Promise<boolean>） */
@@ -964,6 +966,7 @@ export const useLibrary = defineStore('library', {
       if (r.downloaded) parts.push(`下载 ${r.downloaded} 张`)
       if (r.dirs?.length) parts.push(`文件夹 ${r.dirs.length} 个`)
       if (r.skipped) parts.push(`跳过 ${r.skipped}`)
+      if (r.replaced) parts.push(`替换旧图 ${r.replaced}`)
       if (r.unsupported) parts.push(`不支持 ${r.unsupported}`)
       if (r.failed) parts.push(`失败 ${r.failed}`)
       const details = []
@@ -971,6 +974,7 @@ export const useLibrary = defineStore('library', {
         const bits = []
         if (d.copied) bits.push(`录入 ${d.copied}`)
         if (d.skipped) bits.push(`跳过 ${d.skipped}`)
+        if (d.replaced) bits.push(`替换 ${d.replaced}`)
         if (d.unsupported) bits.push(`不支持 ${d.unsupported}`)
         if (d.failed) bits.push(`失败 ${d.failed}`)
         details.push({ label: d.name || '文件夹', text: bits.join(' · ') || '没有可录入的图片' })
@@ -1044,6 +1048,33 @@ export const useLibrary = defineStore('library', {
       if (!this.tree && this.activeRootId != null) await this.refreshTree()
     },
 
+    /* 文件夹放入：先做库内查重（MD5）→ 有重复弹三选一（跳过旧/覆盖旧/都保留）→ 按策略合并复制。
+       同名目标文件夹合并，不再新开 (n)；返回主进程明细（含 created/replaced）。 */
+    async mergeDirWithDupes(srcAbs, targetDir, t) {
+      let opts = {}
+      try {
+        const scan = await window.picrand.picnestDirDupCheck(srcAbs, targetDir, t.rootId)
+        if (scan?.ok && scan.count > 0) {
+          const choice = await new Promise((resolve) => {
+            this.dupDialog = {
+              open: true,
+              mode: 'merge',
+              items: (scan.items || []).slice(0, 8),
+              count: scan.count,
+              targetRel: t.rel || null,
+              resolve,
+            }
+          })
+          opts = {
+            dupChecked: true,
+            policy: choice === 'use-new' ? 'replace' : (choice === 'keep-both' ? 'keep-both' : 'skip'),
+            dupes: (scan.items || []).map((i) => ({ src: i.src, old: i.existing?.file_path || '' })),
+          }
+        }
+      } catch (e) { /* 查重失败：按普通合并处理 */ }
+      return window.picrand.picnestImportDirCopy(srcAbs, targetDir, opts)
+    },
+
     // 外部拖入：先全库查重（Eagle 式冲突弹窗），再复制进目标目录
     async importDrop(paths, target) {
       await this.ensureReady()
@@ -1063,7 +1094,7 @@ export const useLibrary = defineStore('library', {
         let choice = null
         if (conflicts.length) {
           choice = await new Promise((resolve) => {
-            this.dupDialog = { open: true, items: conflicts, targetRel: t.rel || null, resolve }
+            this.dupDialog = { open: true, mode: 'files', items: conflicts, count: conflicts.length, targetRel: t.rel || null, resolve }
           })
           if (choice === 'keep-both') finalPaths = finalPaths.concat(conflicts.map((c) => c.path))
         }
@@ -1088,15 +1119,16 @@ export const useLibrary = defineStore('library', {
         /* 文件夹：复制为子文件夹（合并/跳过/序号由主进程处理）；缝隙落点按 index 插入排序 */
         let idx = t.index
         for (const d of dirs) {
-          const r = await window.picrand.picnestImportDirCopy(d, targetDir)
+          const r = await this.mergeDirWithDupes(d, targetDir, t)
           if (r?.ok) {
             agg.dirs.push(r)
             agg.copied += r.copied || 0
             agg.skipped += r.skipped || 0
             agg.failed += r.failed || 0
             agg.unsupported += r.unsupported || 0
+            agg.replaced = (agg.replaced || 0) + (r.replaced || 0)
             if (r.unsupportedNames?.length) agg.unsupportedNames.push(...r.unsupportedNames)
-            if (t.rootId === this.activeRootId) {
+            if (t.rootId === this.activeRootId && r.created) {
               await this.insertOrderAt(t.rel, r.name, idx)
               if (idx != null) idx += 1
             }
