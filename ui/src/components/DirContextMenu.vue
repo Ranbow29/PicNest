@@ -72,7 +72,7 @@ function renameLib() {
   if (!node.id) return
   const current = node.display_name || node.name || ''
   run(() => {
-    ask.value = { title: '重命名资料库（仅显示名）', initial: current, selectBase: true, run: (name) => lib.renameLibrary(node.id, name) }
+    ask.value = { title: '重命名根文件（仅显示名）', initial: current, selectBase: true, run: (name) => lib.renameLibrary(node.id, name) }
   })
 }
 /* 根文件 → 在文件管理器中打开（shell.openPath 打开目录本身，不是“显示所在位置”） */
@@ -237,11 +237,11 @@ const sortItems = [
       <div class="dm glass-card" :style="pos" @click.stop>
         <button v-if="isLib" class="mi" @click="revealLib">在文件管理器中打开</button>
         <button class="mi" @click="newSub">新建子文件夹</button>
-        <button v-if="isLib" class="mi" @click="renameLib">重命名资料库…</button>
+        <button v-if="isLib" class="mi" @click="renameLib">重命名根文件…</button>
         <button v-if="!isLib" class="mi" @click="newSibling">新建文件夹</button>
         <button v-if="!isLib" class="mi" @click="rename">重命名</button>
-        <button class="mi" @click="copyItem">{{ isLib ? '复制资料库文件夹' : '复制' }}</button>
-        <button v-if="hasClip" class="mi" @click="pasteItem">粘贴到此{{ isLib ? '资料库' : '文件夹' }}</button>
+        <button class="mi" @click="copyItem">{{ isLib ? '复制根文件' : '复制' }}</button>
+        <button v-if="hasClip" class="mi" @click="pasteItem">粘贴到此{{ isLib ? '根文件' : '文件夹' }}</button>
 
         <div class="mi group" @click.stop="toggle('sort')">
           <span>排序</span><i class="caret" :class="{ on: sortOpen }">▸</i>

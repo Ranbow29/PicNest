@@ -315,7 +315,7 @@ export const useLibrary = defineStore('library', {
     async deleteDirs(rels) {
       if (!this.tree) return { ok: false, error: '无目录树' }
       const list = this.topLevelDirs(rels).filter((r) => r !== '')
-      if (!list.length) return { ok: false, error: '资料库根不能删除' }
+      if (!list.length) return { ok: false, error: '根文件不能删除' }
       let deleted = 0, failed = 0, files = 0
       for (const rel of list) {
         try {
@@ -349,7 +349,7 @@ export const useLibrary = defineStore('library', {
     },
     copyDirsFrom(rootId, rels) {
       const root = this.roots.find((r) => r.id === rootId)
-      if (!root) return { ok: false, error: '资料库不存在' }
+      if (!root) return { ok: false, error: '根文件不存在' }
       const tops = this.topLevelDirs(rels)
       const paths = tops.map((rel) => root.path + (rel ? '\\' + rel.split('/').join('\\') : ''))
       if (!paths.length) return { ok: false }
@@ -357,7 +357,7 @@ export const useLibrary = defineStore('library', {
       this.clipboard = { kind: 'dirs', paths, count: paths.length, root: hasRoot }
       try { window.picrand.copyFilesToClipboard?.(paths) } catch { /* 静默 */ }
       const label = hasRoot
-        ? `已复制资料库文件夹「${root.display_name || String(root.path).split(/[\\/]/).pop()}」`
+        ? `已复制根文件「${root.display_name || String(root.path).split(/[\\/]/).pop()}」`
         : `已复制 ${paths.length} 个文件夹`
       this.showNote(`${label} · Ctrl+V 粘贴`)
       return { ok: true, count: paths.length, root: hasRoot }
@@ -377,7 +377,7 @@ export const useLibrary = defineStore('library', {
       if (!clip?.kind) return { ok: false, error: '剪贴板为空' }
       const t = this.normTarget(target || this.pasteTarget())
       const targetDir = this.absOfTarget(t)
-      if (!targetDir) return { ok: false, error: '目标资料库不可用' }
+      if (!targetDir) return { ok: false, error: '目标根文件不可用' }
       /* 自包含预检（避免确认后才发现不可粘贴） */
       const norm = (p) => String(p).replace(/[\\/]+$/, '').toLowerCase()
       const dstNorm = norm(targetDir)
@@ -390,8 +390,8 @@ export const useLibrary = defineStore('library', {
       }
       if (clip.kind === 'dirs' && clip.root) {
         const ok = await this.askConfirm({
-          title: '复制资料库文件夹',
-          message: '将复制整个资料库文件夹（仅图片/视频），可能需要较长时间。继续？',
+          title: '复制根文件',
+          message: '将复制整个根文件（仅图片/视频），可能需要较长时间。继续？',
           details: [
             `源：${clip.paths[0]}`,
             `目标：${targetDir}`,
@@ -499,7 +499,7 @@ export const useLibrary = defineStore('library', {
     /* 资料库区的绝对路径操作（不依赖当前活动库） */
     async mkdirInLibrary(rootId, name) {
       const root = this.roots.find((r) => r.id === rootId)
-      if (!root) return { ok: false, error: '资料库不存在' }
+      if (!root) return { ok: false, error: '根文件不存在' }
       const r = await api.mkdir(root.path, name)
       if (!r?.ok) { if (r?.error) this.error = r.error; return r }
       try { await api.syncFolderSnapshot(root.path) } catch { /* 静默 */ }
@@ -522,7 +522,7 @@ export const useLibrary = defineStore('library', {
     },
     async exportLibrary(rootId) {
       const root = this.roots.find((r) => r.id === rootId)
-      if (!root) return { ok: false, error: '资料库不存在' }
+      if (!root) return { ok: false, error: '根文件不存在' }
       return api.exportDir(root.path)
     },
 
@@ -540,10 +540,10 @@ export const useLibrary = defineStore('library', {
     /* 把图片设为其所在文件夹的封面（子文件夹卡片用；库根散图没有卡片） */
     async setFolderCover(filePath, thumbPath) {
       const root = this.activeRoot
-      if (!root?.path) return { ok: false, error: '无资料库' }
+      if (!root?.path) return { ok: false, error: '无根文件' }
       const rp = String(root.path).replace(/\//g, '\\').replace(/\\+$/, '')
       const pp = String(filePath || '').replace(/\//g, '\\')
-      if (!pp.toLowerCase().startsWith(rp.toLowerCase() + '\\')) return { ok: false, error: '文件不在当前资料库' }
+      if (!pp.toLowerCase().startsWith(rp.toLowerCase() + '\\')) return { ok: false, error: '文件不在当前根目录' }
       const rel = pp.slice(rp.length + 1).split('\\').slice(0, -1).join('/')
       if (!rel) {
         this.showNote('库根散图不能设为子文件夹封面', [], 'muted')

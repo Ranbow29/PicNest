@@ -11,7 +11,7 @@ const selectedSet = computed(() => new Set(f.value.selected))
 
 const scopeLabel = computed(() => {
   const root = lib.roots.find((r) => r.id === f.value.rootId)
-  const name = root?.display_name || root?.name || String(root?.path || '').split('\\').pop() || '资料库'
+  const name = root?.display_name || root?.name || String(root?.path || '').split('\\').pop() || '根文件'
   return f.value.rel ? `${name} / ${f.value.rel.replace(/\//g, ' / ')}` : `${name} · 全库`
 })
 const pct = computed(() => {
