@@ -106,6 +106,7 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 - **安全**：绑定 127.0.0.1；Origin 只放行 `chrome-extension://` / `extension://` / 本机 localhost 页面；CORS + Private-Network 预检；**暂无 token**（开源发布前补）。
 - **目标根跟随活动根**：store `syncCollectRoot()` 在 init / addRootByPath / switchRoot / removeRoot 调 `picnest-collect-set-root`；扩展可另选根（服务端 `picnestCollectRootId`，默认第一个）。
 - **Eagle 兼容层暂缓**：只读调研确认 Eagle for Edge 3.1.29 用 `41595`（library/folder/tag/item addFromURL）+ `41593`（form：image / save-url / screen capture / import-images）。但 Eagle 运行时会占这两个端口（不能共存），且闭源扩展 EULA 需在开源前核实；协议事实记录在此，代码不抄、不捆绑。未来作为「Eagle 关闭时可选开启」的桥。
+- **采集查重**：服务端写入前按「同根 + 同 file_size」筛候选（≤6）→ MD5 确认；命中则不落盘，返回 `duplicate` + matches（文件名/所在夹）。按住面板显示「图库里已有相同图片」+ **跳过 / 仍然保存**（`force:true`）；右键存图与页面截图只提示跳过（通知/文案）。只查目标根内、未软删；历史已有重复需用应用内查重清理。
 - 扩展 v0.1 边界：图片 + 可见区域截图；不支持整页滚动/视频/PDF；不发送标签（标签系统未做）；服务端下载不带 Cookie，防盗链图片可能失败；按住采集只支持主 frame 的 `<img>`（跨域 iframe、CSS 背景图暂不做）。
 
 ### 详情 / 视觉分层

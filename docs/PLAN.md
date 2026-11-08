@@ -327,3 +327,5 @@ PicNest/
     不影响页面自身拖拽；Esc/点外部/页面滚动关闭；只处理主 frame 的 `<img>`，popup 可关闭手势（`holdCollect`）。
     面板固定白底（不随浏览器暗色，任何主题页面都清晰）；同一份扩展可在 Chrome `chrome://extensions` 开发者模式加载
     （Chrome 137+ 禁用 `--load-extension` 命令行），只使用标准 MV3 API（contextMenus/scripting/notifications/storage/tabs）。
+    **采集查重**：写入前按同根 + 同 file_size 筛候选（≤6）→ MD5；命中不落盘，返回 `duplicate` + matches；
+    按住面板显示「跳过 / 仍然保存」（`force:true`），右键/页面截图只提示跳过。历史重复不自动清理。

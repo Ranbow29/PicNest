@@ -12,15 +12,18 @@ chrome.runtime.onInstalled.addListener(() => {
   })
 })
 
-async function api(path, body, method) {
+async function apiRaw(path, body, method) {
   const init = { method: method || (body ? 'POST' : 'GET') }
   if (body) {
     init.headers = { 'Content-Type': 'application/json' }
     init.body = JSON.stringify(body)
   }
   const res = await fetch(API + path, init)
-  const data = await res.json().catch(() => ({}))
-  if (!res.ok || !data.ok) throw new Error(data.error || ('HTTP ' + res.status))
+  return await res.json().catch(() => ({}))
+}
+async function api(path, body, method) {
+  const data = await apiRaw(path, body, method)
+  if (!data.ok) throw new Error(data.error || ('HTTP ' + (data.status || '?')))
   return data
 }
 
@@ -128,10 +131,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           title: msg.title,
           rootId: msg.rootId,
           rel: msg.rel || '',
+          force: !!msg.force,
         }
-        const r = await api('/api/v1/save', body)
+        const data = await apiRaw('/api/v1/save', body)
+        if (data.duplicate) {
+          sendResponse({
+            ok: false, duplicate: true, matches: data.matches || [],
+            error: data.error || '已存在相同图片，未保存',
+            rootId: data.rootId, rel: data.rel,
+          })
+          return
+        }
+        if (!data.ok) throw new Error(data.error || '保存失败')
         if (msg.rootId != null) await chrome.storage.local.set({ rootId: Number(msg.rootId), rel: msg.rel || '' })
-        sendResponse({ ok: true, name: r.saved?.[0]?.name || '已保存' })
+        sendResponse({ ok: true, name: data.saved?.[0]?.name || '已保存' })
       } else {
         sendResponse({ ok: false, error: 'unknown message' })
       }

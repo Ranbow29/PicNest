@@ -1751,8 +1751,36 @@ async function picnestCollectFetchImage(src) {
     return { buf: Buffer.from(ab), contentType: res.headers.get("content-type") || "" };
   } finally { clearTimeout(timer); }
 }
-function picnestCollectInsert(root, absFile, meta = {}) {
-  const st = fs.statSync(absFile);
+/* 采集查重：同根内同尺寸候选 → MD5；返回已存在项（用于扩展面板的重复提醒） */
+function picnestCollectDupes(root, buf) {
+  try {
+    const rows = getDb().prepare(
+      "SELECT file_path, file_name, width, height FROM images WHERE folder_id = ? AND file_size = ? AND deleted_at IS NULL LIMIT 6"
+    ).all(root.id, buf.length);
+    if (!rows.length) return [];
+    const md5 = crypto.createHash("md5").update(buf).digest("hex");
+    const rootAbs = path.resolve(root.path);
+    const out = [];
+    for (const r of rows) {
+      try {
+        if (!fs.existsSync(r.file_path)) continue;
+        if (picnestMd5(r.file_path) !== md5) continue;
+        let folder = root.display_name || path.basename(rootAbs);
+        try {
+          const p = path.resolve(r.file_path);
+          if (p.startsWith(rootAbs + path.sep)) {
+            const rel = p.slice(rootAbs.length + 1);
+            const i = rel.lastIndexOf(path.sep);
+            if (i > 0) folder = rel.slice(0, i).split(path.sep).pop();
+          }
+        } catch (e) {}
+        out.push({ file_path: r.file_path, file_name: r.file_name, width: r.width, height: r.height, folder });
+      } catch (e) {}
+    }
+    return out;
+  } catch (e) { return []; }
+}
+function picnestCollectInsert(root, absFile, meta = {}) {  const st = fs.statSync(absFile);
   insertImagesBatch(root.id, [{
     file_path: absFile,
     file_name: path.basename(absFile),
@@ -1796,6 +1824,12 @@ async function picnestCollectSaveOne(item) {
     base = picnestCollectSafeName(item.title || "图片");
   }
   if (!/^image\//i.test(contentType) && !/\.(jpe?g|png|gif|webp|avif|bmp|svg)$/i.test(ext)) throw new Error("不是图片内容");
+  if (!item.force) {
+    const matches = picnestCollectDupes(t.root, buf);
+    if (matches.length) {
+      return { ok: false, duplicate: true, matches, rootId: t.root.id, rel: t.rel, error: "已存在相同图片，未保存" };
+    }
+  }
   let dest = path.join(t.abs, base + ext);
   let n = 2;
   while (fs.existsSync(dest)) dest = path.join(t.abs, `${base} (${n++})${ext}`);
@@ -1873,9 +1907,14 @@ function picnestStartCollectServer() {
       if (req.method === "POST" && url.pathname === "/api/v1/save") {
         const body = await picnestCollectReadJson(req);
         const items = Array.isArray(body.items) ? body.items : [body];
-        const saved = [];
-        for (const it of items) saved.push(await picnestCollectSaveOne(it));
-        return picnestCollectJson(res, 200, { ok: true, saved, count: saved.length });
+        const results = [];
+        for (const it of items) results.push(await picnestCollectSaveOne(it));
+        const dup = results.find((x) => x.duplicate);
+        const payload = { ok: results.every((x) => x.ok), saved: results, count: results.length };
+        if (dup) Object.assign(payload, {
+          duplicate: true, matches: dup.matches, rootId: dup.rootId, rel: dup.rel, error: dup.error,
+        });
+        return picnestCollectJson(res, 200, payload);
       }
       return picnestCollectJson(res, 404, { ok: false, error: "not found" });
     } catch (e) {

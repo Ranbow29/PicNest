@@ -77,6 +77,16 @@
     .state { margin-left: auto; color: #4f7d5e; }
     .state.err { color: #b4463b; }
     .state.saving { color: #8a8a8a; }
+    .dup { margin: 0 10px 10px; padding: 10px 12px; border: 1px solid rgba(194,90,77,.35);
+      background: #fff8f7; border-radius: 10px; color: #8a3b32; font-size: 11.5px; }
+    .dup b { display: block; font-size: 12px; margin-bottom: 4px; }
+    .dup ul { margin: 4px 0 8px; padding-left: 16px; max-height: 86px; overflow-y: auto; }
+    .dup li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .dup .btns { display: flex; gap: 8px; }
+    .dup button { flex: 1; height: 27px; border-radius: 7px; border: 1px solid rgba(194,90,77,.4);
+      background: #fff; color: #8a3b32; font-size: 11.5px; cursor: pointer; }
+    .dup button[data-act="force"] { background: #b4884b; border-color: #b4884b; color: #fff; }
+    .dup button:hover { filter: brightness(.98); }
     @media (prefers-color-scheme: dark) {
       .ring .bg { stroke: rgba(255,255,255,.25); }
     }
@@ -95,6 +105,15 @@
       e.stopPropagation()
       if (!session || !session.opened || session.saving) return
       if (Date.now() < (session.skipClick || 0)) return
+      let act = ''
+      for (const n of (e.composedPath?.() || [])) {
+        if (n && n.closest) {
+          const a = n.closest('[data-act]')
+          if (a) { act = a.dataset.act; break }
+        }
+      }
+      if (act === 'skip') { closePanel(); return }
+      if (act === 'force') { saveTo(session, session.pendingRel, true); return }
       const row = rowFromEvent(e)
       if (row) saveTo(session, row.dataset.rel)
     })
@@ -137,6 +156,39 @@
     el.textContent = s.holding
       ? '拖到目标松开 · 松开空白处停留 · Esc 取消'
       : '点击目标保存 · 滚轮列表 · Esc 取消'
+  }
+  function removeDup(s) {
+    try { s.panel?.querySelector('.dup')?.remove() } catch { /* 静默 */ }
+  }
+  function showDuplicate(s, matches) {
+    removeDup(s)
+    if (!s.panel) return
+    const dup = document.createElement('div')
+    dup.className = 'dup'
+    const title = document.createElement('b')
+    title.textContent = '图库里已有相同图片'
+    const ul = document.createElement('ul')
+    for (const m of (matches || []).slice(0, 3)) {
+      const li = document.createElement('li')
+      li.textContent = `${m.file_name || ''}${m.folder ? ' · ' + m.folder : ''}`
+      ul.appendChild(li)
+    }
+    const btns = document.createElement('div')
+    btns.className = 'btns'
+    const skip = document.createElement('button')
+    skip.dataset.act = 'skip'
+    skip.textContent = '跳过'
+    const force = document.createElement('button')
+    force.dataset.act = 'force'
+    force.textContent = '仍然保存'
+    btns.appendChild(skip)
+    btns.appendChild(force)
+    dup.appendChild(title)
+    dup.appendChild(ul)
+    dup.appendChild(btns)
+    s.panel.insertBefore(dup, s.panel.querySelector('.foot'))
+    s.skipClick = 0
+    setStatus(s, '', '发现相同图片')
   }
 
   function showRing(s) {
@@ -292,10 +344,12 @@
     }
   }
 
-  async function saveTo(s, rel) {
+  async function saveTo(s, rel, force) {
     if (s.saving || !s.root) return
     s.saving = true
+    s.pendingRel = rel
     s.skipClick = Date.now() + 500
+    removeDup(s)
     setStatus(s, 'saving', '保存中…')
     const src = (s.img.currentSrc || s.img.src || '').trim()
     if (!src) { s.saving = false; setStatus(s, 'err', '没有图片地址'); return }
@@ -313,8 +367,17 @@
         ...payload,
         rootId: s.root.id,
         rel,
+        force: !!force,
       }, (res) => {
         if (session !== s) return
+        if (res?.duplicate) {
+          s.saving = false
+          s.holding = false
+          s.pendingRel = rel
+          setHint(s)
+          showDuplicate(s, res.matches || [])
+          return
+        }
         if (res?.ok) {
           setStatus(s, '', '已保存：' + (res.name || ''))
           setTimeout(() => { if (session === s) closePanel() }, 750)
