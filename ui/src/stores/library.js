@@ -69,6 +69,8 @@ export const useLibrary = defineStore('library', {
     clipboard: { kind: '', paths: [], count: 0, root: false }, // 应用内复制剪贴板（kind: dirs | files）
     trashFolders: [],       // 回收站里的文件夹条目（文件夹形式软删）
     trashMenu: { open: false, x: 0, y: 0 },
+    suppressSyncUntil: 0,   // 内部移动/排序后短暂忽略 watcher 触发的全量刷新
+    suppressWaveUntil: 0,   // 内部移动/排序时抑制入场波动画
     dropHint: { active: false, zone: '', label: '', x: 0, y: 0, key: null }, // 外部拖入落点提示（分区高亮 + 跟随光标）
     viewer: { scale: 1, tx: 0, ty: 0, rot: 0, flopX: false, showInspector: false, /* 初始收起：让用户先看图，详情随点随开 */ cropMode: false, fitNonce: 0 },
     filterBarOpen: false,
@@ -152,6 +154,7 @@ export const useLibrary = defineStore('library', {
             return
           }
           if (data?.type === 'add' || data?.type === 'unlink') {
+            if (Date.now() < (this.suppressSyncUntil || 0)) return // 内部移动已本地增量处理
             clearTimeout(this._deb)
             this._deb = setTimeout(() => { this.refreshTree(); this.loadImages() }, 600)
           }
@@ -471,6 +474,16 @@ export const useLibrary = defineStore('library', {
       this.dirMemory = { ...this.dirMemory, [rel]: { ...(this.dirMemory[rel] || {}), ...patch } }
       try { await api.dirMemorySet(rel, patch) } catch { /* 静默 */ }
     },
+    /* 从正文进入子文件夹：把左侧树的祖先层（含库根）展开，选中行随即可见 */
+    async revealDir(rel) {
+      if (!rel) return
+      if (this.dirMemory['']?.expanded === false) await this.patchDirMemory('', { expanded: true })
+      const parts = String(rel).split('/')
+      for (let i = 1; i < parts.length; i++) {
+        const p = parts.slice(0, i).join('/')
+        if (!this.dirMemory[p]?.expanded) await this.patchDirMemory(p, { expanded: true })
+      }
+    },
 
     async openDir(rel) {
       // 树上点文件夹 = 离开大图模式和特殊视图，跳进该目录浏览
@@ -481,6 +494,7 @@ export const useLibrary = defineStore('library', {
       localStorage.setItem('picnest.lastView', 'all')
       localStorage.setItem('picnest.lastDirRel', rel || '')
       this.currentDirRel = rel ?? null
+      if (rel) await this.revealDir(rel)
       await this.loadImages()
     },
 
@@ -887,21 +901,28 @@ export const useLibrary = defineStore('library', {
     async moveImage(filePath, targetRel) {
       if (!this.tree) return { ok: false, error: '无目录树' }
       const targetDir = this.tree.rootPath + (targetRel ? '\\' + targetRel.split('/').join('\\') : '')
+      this.suppressSyncUntil = Date.now() + 3000
+      this.suppressWaveUntil = Date.now() + 1500
       try {
         const r = await window.picrand.picnestMoveImage(filePath, targetDir)
         if (r?.ok) {
-          this.images = this.images.filter((i) => i.file_path !== filePath)
-          this.pruneImageSelection(filePath)
+          if (r.moved !== false) {
+            this.images = this.images.filter((i) => i.file_path !== filePath)
+            this.pruneImageSelection(filePath)
+          }
           this.refreshTree()
         }
         return r
       } catch (e) { return { ok: false, error: String(e?.message || e) } }
     },
 
-    // 多选图片批量物理移动（一次刷新；selectionView 下重载合并视图）
+    // 多选图片批量物理移动（本地增量移除；watcher 触发被短暂抑制，不整表刷新）
     async moveImages(filePaths, targetRel) {
       if (!this.tree) return { ok: false, error: '无目录树' }
       const targetDir = this.tree.rootPath + (targetRel ? '\\' + targetRel.split('/').join('\\') : '')
+      const n = (filePaths || []).length
+      this.suppressSyncUntil = Date.now() + Math.max(3000, n * 400)
+      this.suppressWaveUntil = Date.now() + 3000
       let moved = 0, failed = 0
       for (const p of filePaths || []) {
         try {
@@ -916,8 +937,9 @@ export const useLibrary = defineStore('library', {
         } catch (e) { failed++ }
       }
       if (moved) {
+        this.suppressSyncUntil = Date.now() + 2000
+        this.suppressWaveUntil = Date.now() + 1200
         await this.refreshTree()
-        if (this.selectionView) await this.loadImages()
       }
       return { ok: failed === 0, moved, failed }
     },
@@ -1002,10 +1024,15 @@ export const useLibrary = defineStore('library', {
       try {
         const r = await api.imagesReorder(this.activeRootId, this.currentDirRel, rest)
         if (!r?.ok) { if (r?.error) this.error = r.error; return r }
+        /* 本地增量换序：只替换数组与排序模式，不整表 loadImages（不重放入场波、不清选中） */
+        const map = new Map(this.images.map((i) => [i.file_path, i]))
+        const nextOrder = rest.map((p) => map.get(p)).filter(Boolean)
+        this.suppressWaveUntil = Date.now() + 700
         this.sortMode = 'manual'
         localStorage.setItem('picnest.sortMode', 'manual')
-        await this.loadImages()
-        const exist = new Set(this.images.map((i) => i.file_path))
+        this.images = nextOrder
+        this.layoutTick++
+        const exist = new Set(nextOrder.map((i) => i.file_path))
         this.selectedPaths = keep.filter((p) => exist.has(p))
         this.selectedPath = this.selectedPaths[this.selectedPaths.length - 1] || null
         this.selectionAnchor = this.selectedPath

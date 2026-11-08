@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useLibrary, extractDropUrls } from '../stores/library'
 import DirTreeItem from './DirTreeItem.vue'
 import FolderIcon from './FolderIcon.vue'
@@ -7,6 +7,15 @@ import NamePromptDialog from './NamePromptDialog.vue'
 import DirContextMenu from './DirContextMenu.vue'
 
 const lib = useLibrary()
+/* 从正文进入子文件夹后：祖先展开 + 选中行滚进树视口 */
+let revealTimer = null
+watch(() => lib.currentDirRel, async () => {
+  await nextTick()
+  clearTimeout(revealTimer)
+  revealTimer = setTimeout(() => {
+    document.querySelector('.tree .row.active')?.scrollIntoView({ block: 'nearest' })
+  }, 160)
+})
 
 const entries = computed(() => [
   { key: 'all', label: '全部', count: lib.counts.all ?? 0, enabled: true },

@@ -147,3 +147,9 @@ PicNest/
     插入线用画布绝对坐标绘制（会随滚动），不依赖落点在单元格上。只在文件夹视图允许（全部是跨文件夹入库流）。
     多选组拖动载荷 `x-picnest-files`；外部拖入不拦截，继续冒泡给 shell 录入当前目录。
     点正文空白 = 清图选 + 选中当前文件夹（库根→资料库根）；侧栏空白不接收内部图片（防误落未分类）。
+33. **树联动与增量更新**：`openDir(rel)` 调 `revealDir` 展开祖先（**库根被收起时也要展开**）。`DirTreeItem` 必须
+    watch `dirMemory.expanded` 同步本地 `expanded` ref——只 watch `props.node` 时，补丁展开了 memory 但树行不展开。
+    SideBar watch `currentDirRel` 后 `scrollIntoView` 选中行（等 160ms 让祖先行渲染完）。
+    拖动排序/移动图片**不要整表 `loadImages`**：排序写库后直接重排 `this.images`（对象与选中保留，不重放入场波）；
+    `moveImages` 过滤本地数组 + `refreshTree` 计数即可。内部操作设 `suppressSyncUntil`（默认 2-5s）屏蔽
+    watcher 的 `add/unlink → 600ms 全量刷新`；`suppressWaveUntil` 抑制 sortMode/images.length 变化触发的入场波。

@@ -18,6 +18,10 @@ const isActive = computed(() => lib.currentDirRel === props.node.rel)
 watch(() => props.node, () => {
   if (mem.value.expanded !== undefined) expanded.value = !!mem.value.expanded
 }, { immediate: true })
+/* 自动展开祖先（从正文子文件夹卡片进入时）需要响应 dirMemory 变化 */
+watch(() => mem.value.expanded, (v) => {
+  if (v !== undefined) expanded.value = !!v
+})
 onMounted(() => {
   if (props.depth === 0 && mem.value.expanded === undefined) expanded.value = true
 })

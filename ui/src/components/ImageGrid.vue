@@ -14,6 +14,7 @@ let waveTimer = null
 watch(
   () => [lib.view, lib.currentDirRel, lib.sortMode, lib.sortAsc, lib.layout, lib.activeRootId, lib.images.length, JSON.stringify(lib.filters)],
   () => {
+    if (Date.now() < (lib.suppressWaveUntil || 0)) return // 拖动排序/移动的本地更新不重放入场波
     clearTimeout(waveTimer)
     waveTimer = setTimeout(replayWave, 120)
   },
