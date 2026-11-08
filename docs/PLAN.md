@@ -113,3 +113,6 @@ PicNest/
     拖到资料库行/空白才进对应库根。落点语义（树行/缝隙/主展示区）见 HANDOFF 第三节。
 23. **Vue Transition 在隐藏/最小化窗口会卡死**：transitionend 不触发 → 元素永久留在 DOM（opacity 0 仍可命中点击）。
     结果卡已改为 **CSS 入场动画 + `v-if` 立即卸载**；验证任何动效前先还原并前置窗口（最后台被遮挡也可能 `visibilityState=hidden`，#19）。
+24. **文件系统目录移动必须同步 DB 路径前缀**：`picnest-move-dir` 曾只 `fs.renameSync` 不更新 `images.file_path`，
+    而目录树是从 DB 派生的 → 旧位置仍显示 N 张、新位置 0 张（磁盘实际已搬完）。现在 rename 后按
+    `LIKE 转义前缀` 批量 UPDATE 整棵子树的 file_path/file_name；重命名走全量 sync 兜底。凡是物理移动目录都要查这条。

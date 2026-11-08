@@ -728,7 +728,22 @@ electron.ipcMain.handle("picnest-move-dir", async (_event, dirPath, targetDir) =
     let n = 1;
     while (fs.existsSync(target)) { target = path.join(targetDir, `${path.basename(dirPath)} (${n})`); n++; }
     fs.renameSync(dirPath, target);
-    return { ok: true, dir_path: target, moved: true };
+    /* DB 同步：整棵子树的 file_path 前缀搬家（树从 DB 派生，只 rename 会显示错位） */
+    let movedRows = 0;
+    try {
+      const fromPrefix = dirPath.replace(/[\\/]+$/, "");
+      const toPrefix = target.replace(/[\\/]+$/, "");
+      const rows = getDb().prepare(
+        "SELECT file_path FROM images WHERE file_path LIKE ? ESCAPE '\\'"
+      ).all(picnestLikeEscape(fromPrefix + path.sep) + "%");
+      const upd = getDb().prepare("UPDATE images SET file_path = ?, file_name = ? WHERE file_path = ?");
+      for (const r of rows) {
+        const np = toPrefix + r.file_path.slice(fromPrefix.length);
+        upd.run(np, path.basename(np), r.file_path);
+        movedRows++;
+      }
+    } catch (e) { /* DB 更新失败不阻塞磁盘移动，watcher/sync 兜底 */ }
+    return { ok: true, dir_path: target, moved: true, images: movedRows };
   } catch (e) {
     return { ok: false, error: String(e?.message || e) };
   }
