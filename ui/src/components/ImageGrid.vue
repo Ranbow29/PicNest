@@ -458,9 +458,9 @@ function onCanvasDragOver(e) {
   reorderCtx.value = {
     path: best.file_path,
     before,
-    x: before ? Math.max(0, best.x - 7) : best.x + best.w + 4,
-    y: best.y,
-    h: best.h,
+    x: before ? best.x - 16 : best.x + best.w + 12,
+    y: best.y - 6,
+    h: best.h + 12,
   }
 }
 function onCanvasDragLeave(e) {
@@ -648,7 +648,12 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
 .cell.selected .thumb { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent), 0 0 0 6px var(--accent-weak); }
 .reorder-line {
   position: absolute; width: 3px; border-radius: 2px;
-  background: var(--accent); box-shadow: 0 0 0 2px var(--accent-weak);
+  background: var(--accent);
+  /* 深色描边 + 浅色光环：浅金/米色图片和暗图都能分辨 */
+  box-shadow:
+    0 0 0 1.5px rgba(0, 0, 0, 0.45),
+    0 0 0 4.5px rgba(255, 255, 255, 0.45),
+    0 2px 10px rgba(0, 0, 0, 0.28);
   pointer-events: none; z-index: 5;
 }
 .thumb img { width: 100%; height: 100%; object-fit: cover; }
