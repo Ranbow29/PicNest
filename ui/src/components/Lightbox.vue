@@ -727,7 +727,8 @@ function onKey(e) {
 .text-stage {
   position: absolute; inset: 0; z-index: 10; /* 低于标题栏(20)：否则盖住左上角退出钮 */
   display: flex; flex-direction: column; gap: 8px;
-  padding: 54px 22px 20px; background: var(--panel-strong);
+  padding: 76px 22px 20px; /* 42 标题栏 + 20 玻璃拖尾 + 14 呼吸：工具栏不再被拖尾压住 */
+  background: var(--panel-strong);
 }
 .text-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--text-2); }
 .tb-name { color: var(--text); font-weight: 600; max-width: 32%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

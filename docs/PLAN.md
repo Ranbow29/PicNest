@@ -195,6 +195,8 @@ PicNest/
     编辑器：1.5s 防抖自动保存 + Ctrl+S；关闭/翻页/卸载前 `flushTextSave(true)` 强写；Esc 在输入框内只失焦。
     **文本编辑层 `.text-stage` z-index 必须低于标题栏（20）**：同为 20 时文本层后绘制，0.92 不透明的面板底会把左上角
     「← 退出」糊在下面（现象：Text 模式看不到/点不到退出按钮）；现设 10，Inspector（12/15）仍在编辑层之上。
+    同时 `padding-top` 必须让过 **42px 标题栏 + 20px 玻璃拖尾**（现 76px），否则工具栏顶部 8px 会被拖尾压住，
+    看起来像「编辑器被挡住一半」。
     视频：`<video>` 关闭原生 controls，自绘玻璃 dock（播放/进度拖拽/时间/静音/音量/循环/全屏/前后翻页），进入自动播放，
     空格播放暂停；`loadedmetadata` 取 videoWidth/Height 回填 store 并 fit；裁切/旋转/翻转/1:1 对视频隐藏；
     `url` 来自 `lib.images`（用不在当前列表的路径 openLightbox 会拿不到 src，探针踩过）。
