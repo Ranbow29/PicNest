@@ -124,6 +124,10 @@
   function inHost(e) {
     return !!session?.host && (e.composedPath?.() || []).includes(session.host)
   }
+  function runtimeAlive() {
+    try { return !!chrome.runtime?.id } catch { return false }
+  }
+  function refreshHint() { return '扩展已更新，请刷新此页面后再采集' }
   function imgFromEvent(e) {
     const path = e.composedPath?.() || [e.target]
     for (const n of path) {
@@ -230,6 +234,7 @@
       s.shadow = host.shadowRoot
     }
     try { s.prevDraggable = s.img.draggable; s.img.draggable = false } catch { /* 静默 */ }
+    if (!runtimeAlive()) { renderPanel(s, refreshHint()); return }
     renderPanel(s)
     try {
       chrome.runtime.sendMessage({ type: 'collect-folders', rootId: last.rootId }, (res) => {
@@ -240,7 +245,7 @@
         renderPanel(s)
       })
     } catch {
-      renderPanel(s, '扩展上下文不可用')
+      renderPanel(s, refreshHint())
     }
   }
 
@@ -375,6 +380,11 @@
       payload.dataUrl = dataUrl
     } else payload.src = src
 
+    if (!runtimeAlive()) {
+      s.saving = false
+      setStatus(s, 'err', refreshHint())
+      return
+    }
     try {
       chrome.runtime.sendMessage({
         type: 'save-panel',
@@ -402,7 +412,8 @@
       })
     } catch (e) {
       s.saving = false
-      setStatus(s, 'err', String(e?.message || e))
+      const msg = String(e?.message || e)
+      setStatus(s, 'err', /context invalidated|Extension context/i.test(msg) ? refreshHint() : msg)
     }
   }
 

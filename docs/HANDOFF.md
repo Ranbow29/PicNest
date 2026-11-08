@@ -100,7 +100,7 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 - 详情：文本尺寸显示「文本」、隐藏色板；视频/文本预览用缩略图，不直链原文件。
 
 ### 采集（M6，2026-11-09）
-- **自研开源 MV3 扩展** `extension/`（开发者模式加载；Edge/Chrome **同一份代码**，Chrome 137+ 已禁用 `--load-extension`，用 `chrome://extensions` UI）：右键图片「保存图片到图巢」、右键页面「保存页面截图到图巢」；popup 选「根文件 / 保存到」，选择全局有效。
+- **自研开源 MV3 扩展** `extension/`（开发者模式加载；Edge/Chrome **同一份代码**，Chrome 137+ 已禁用 `--load-extension`，用 `chrome://extensions` UI）：右键图片「保存图片到图巢」、右键页面「保存页面截图到图巢」；popup 选「根文件 / 保存到」，选择全局有效。**重载扩展后已打开的网页必须刷新**——旧 content script 的 `chrome.runtime` 会失效，按住面板会提示「扩展已更新，请刷新此页面」（不是服务端问题）。
 - **网页内按住采集**（2026-11-09）：网页图片上左键按住 380ms（光标处环形进度）→ 双栏面板：左大片「未分类/库根」，右 = 当前根下**全部文件夹**（缩进列表，原生滚动）；**面板固定白底**（不随浏览器暗色，任何主题页面都清晰）；拖到目标松开保存；松开在面板空白则面板停留可点击；提前移动 >6px 取消，不影响页面自身拖拽/点击；Esc/点外部取消。Shadow DOM 注入，只挂主 frame 的 `<img>`；popup 可关闭该手势。**覆盖层 DIV 挡住图片时用 `elementsFromPoint` 按坐标找底层可见 `<img>`**（Pinterest 实测）。
 - **主进程本地服务** `127.0.0.1:41600`（`picnest-handlers.js` 的 M6 块）：`/api/v1/ping`、`context`、`folders?rootId=`、`save`。只写目标根内的文件（`picnestCollectTarget` 防 `..` 逃逸）；写入后 `insertImagesBatch` + `sync-db add` 事件，渲染层自行补缩略图/尺寸；`url/annotation/star` 写 DB。下载外部图片时带**页面 Referer + 常规 Edge/Chrome UA**（Pixiv `i.pximg.net` 防盗链必需；扩展传的 `url` 即页面 URL）。
 - **安全**：绑定 127.0.0.1；Origin 只放行 `chrome-extension://` / `extension://` / 本机 localhost 页面；CORS + Private-Network 预检；**暂无 token**（开源发布前补）。
@@ -210,7 +210,7 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 26. 颜色筛选依赖内存 `palettes`：`loadImages` 末尾必须 `ensurePalettes()`（init 只覆盖启动时文件夹，切换后不补建=颜色筛选恒 0）；FilterBar 取色/灰度、详情现算色板都要兜底触发/回写 `lib.palettes`。
 27. 移出根文件 = 只清 DB 索引/排序键/回收站条目，磁盘文件永不动；回收站非空先拒；watcher 命中该根必须停并清 `_addQueue`，否则根会被 add 事件复活。新增根相关 IPC 走 `picnest-handlers.js` + `apply.mjs` 的 P4b preload 列表两处（渲染层直接 `window.picrand.*`）。
 28. 主题只认 `<html data-theme>`：新颜色同时补 `:root`（light）、`[data-theme="dark"]`、`mono-light`、`mono-charcoal`、`mono-dark` 五块，组件里不要写 `prefers-color-scheme`；auto 的系统联动在 `lib/theme.js`，首屏防闪在 `index.html` 内联脚本；canvas（概览滑尺）换主题要主动重绘。
-29. 采集服务只绑 `127.0.0.1:41600`；写文件前必须过 `picnestCollectTarget`（防 `..` 逃逸）；Origin 只放行 `chrome-extension://`/`extension://`/本机 localhost；扩展代码原创、不打包不引用 Eagle 资源，Eagle 兼容层不默认开启。改采集服务后 `apply.mjs` + 重启；扩展改完在 `edge://extensions` 点重载。
+29. 采集服务只绑 `127.0.0.1:41600`；写文件前必须过 `picnestCollectTarget`（防 `..` 逃逸）；Origin 只放行 `chrome-extension://`/`extension://`/本机 localhost；扩展代码原创、不打包不引用 Eagle 资源，Eagle 兼容层不默认开启。改采集服务后 `apply.mjs` + 重启；扩展改完在 `edge://extensions` 点重载，**并刷新所有已打开网页**（旧 content script 的 runtime 失效，会提示扩展已更新）。
 
 ## 七、验收状态 / 最近提交
 

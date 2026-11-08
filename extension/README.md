@@ -16,6 +16,9 @@
 > storage / tabs），扩展本身没有 Edge 专属调用。
 >
 > 首次保存 `file://` 页面图片时，需要在扩展详情里打开「允许访问文件 URL」。
+>
+> **更新扩展后**：在 `edge://extensions` / `chrome://extensions` 点重载，并**刷新所有已打开的网页**。
+> 旧页面里的 content script 会失效，按住面板会提示「扩展已更新，请刷新此页面」。
 
 ## 用法
 
