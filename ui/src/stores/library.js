@@ -64,7 +64,7 @@ export const useLibrary = defineStore('library', {
     dimsFilling: false,
     thumbsFilling: false,
     lightbox: { open: false, path: null },
-    brief: { open: false, path: null }, // 简报模式（全屏演示）
+    brief: { open: false, path: null, scale: 1, tx: 0, ty: 0 }, // 简报模式（全屏演示）
     grayscaleMode: localStorage.getItem('picnest.grayscale') === '1', // 黑白预览（全局显示开关）
     contextMenu: { open: false, x: 0, y: 0, image: null },
     renaming: false,
@@ -1165,6 +1165,7 @@ export const useLibrary = defineStore('library', {
         if (this.selectionAnchor && set.has(this.selectionAnchor)) this.selectionAnchor = this.selectedPaths[this.selectedPaths.length - 1] || null
         if (this.selectedPath && set.has(this.selectedPath)) this.selectedPath = this.selectedPaths[this.selectedPaths.length - 1] || null
         if (this.lightbox.open && set.has(this.lightbox.path)) this.closeLightbox()
+        if (this.brief.open && set.has(this.brief.path)) this.closeBrief()
         await this.refreshTree()
         this.showNote(`已移入回收站 ${ok} 张${failed ? ` · 失败 ${failed}` : ''}`)
       }
@@ -1760,6 +1761,7 @@ export const useLibrary = defineStore('library', {
 
     /* ---- M3: 灯箱 / 右键菜单 / 详情操作 ---- */
     openLightbox(path) {
+      if (this.brief.open) this.closeBrief()
       if (path) this.selectedPath = path
       if (this.selectedPath) {
         this.selectedPaths = [this.selectedPath]
@@ -1789,14 +1791,14 @@ export const useLibrary = defineStore('library', {
       if (this.lightbox.open) this.closeLightbox()
       const p = path || this.selectedPath || this.images[0]?.file_path || null
       if (!p) return
-      this.brief = { open: true, path: p }
+      this.brief = { open: true, path: p, scale: 1, tx: 0, ty: 0 }
       try {
         const pr = document.documentElement.requestFullscreen?.()
         if (pr?.catch) pr.catch(() => {})
       } catch (e) {}
     },
     closeBrief() {
-      this.brief = { open: false, path: null }
+      this.brief = { open: false, path: null, scale: 1, tx: 0, ty: 0 }
       try {
         if (document.fullscreenElement) {
           const pr = document.exitFullscreen?.()
@@ -1809,7 +1811,7 @@ export const useLibrary = defineStore('library', {
       if (!list.length) return
       const i = list.findIndex((x) => x.file_path === this.brief.path)
       const n = ((i < 0 ? 0 : i) + dir + list.length) % list.length
-      this.brief.path = list[n].file_path
+      this.brief = { open: true, path: list[n].file_path, scale: 1, tx: 0, ty: 0 }
     },
 
     /* ---- 移入未分类：物理移到库根并保留索引（替代“从库中移除”，避免幽灵文件） ---- */
@@ -1838,6 +1840,8 @@ export const useLibrary = defineStore('library', {
       if (moved) parts.push(`已移入未分类 ${moved} 张`)
       if (already.length) parts.push(`已在未分类 ${already.length} 张`)
       if (failed) parts.push(`失败 ${failed} 张`)
+      if (this.brief.open && moved) this.closeBrief() // 路径已变，简报里的旧路径失效
+      if (this.lightbox.open && moved) this.closeLightbox()
       this.showNote(parts.join(' · ') || '没有可移动的文件', [], failed ? 'error' : 'ok')
       return { ok: failed === 0, moved, failed, already: already.length }
     },
@@ -1887,6 +1891,7 @@ export const useLibrary = defineStore('library', {
       try { await window.picrand.picnestRemove(path) } catch (e) { this.error = String(e?.message || e) }
       this.closeContextMenu()
       if (this.lightbox.open && this.lightbox.path === path) this.closeLightbox()
+      if (this.brief.open && this.brief.path === path) this.closeBrief()
       // watcher unlink → sync-db → 统一刷新；这里先本地摘除保证即时反馈
       this.images = this.images.filter((i) => i.file_path !== path)
       this.pruneImageSelection(path)

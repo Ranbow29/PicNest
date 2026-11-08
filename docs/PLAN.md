@@ -253,8 +253,12 @@ PicNest/
     物理移动到**库根**（`moveImages(paths, '')` → `picnestMoveImage`，重名自动 `(n)`、`sort_order=0`）并保留索引；
     已在根层的路径跳过；移动后若 `!currentDirRel`（库根/未分类/最近等）要 `loadImages()`，否则会把仍在视图里的图错误过滤掉。
     ④简报模式（Eagle 语义：asar 里 `slideshowOn` + `setFullScreen(true)`）：`BriefMode.vue` 全屏黑底 overlay，
-    单击下一张、右键上一张、←→、Esc；进入调 `document.documentElement.requestFullscreen()`（页面级，不是 Electron 窗口 fullscreen）；
+    单击下一张、右键菜单、←→、Esc；进入调 `document.documentElement.requestFullscreen()`（页面级，不是 Electron 窗口 fullscreen）；
     监听 `fullscreenchange` 兜底关闭。视频静音循环，文本占位。导航用 `lib.images` 顺序（不是网格的 sortedImages，可能与大图顺序有差）。
+    **简报缩放/平移/右键**：`brief` 状态带 `scale/tx/ty`（切图/重开都重置）；滚轮以光标为锚点缩放（0.2–8×，
+    `t' = p - (s'/s)(p - t)`），拖拽 4px 阈值后才算平移，未拖动 pointerup 才算单击切图；右键呼出图片菜单。
+    Brief z-index 必须 **890 < ContextMenu 900**，否则菜单被全屏层盖住；删除/移入未分类等会改变路径的操作要顺手 `closeBrief()`。
+    **灯箱右键**：`.viewer` 上 `@contextmenu`，输入框/dock/裁剪层保留原生；菜单操作移动/删除时关掉灯箱。
     ⑤黑白预览（Eagle 语义：asar 里 `isGrayscaleMode` checkbox，全局显示开关）：`lib.grayscaleMode` 存 localStorage；
     网格 `.thumb.gray img`、大图 `.stage.gray`、详情预览/堆叠、简报统一 `filter: grayscale(1)`；右键菜单文案前加 ✓。
     ⑥**Vite dev 假象**：往 App.vue 新增组件后 Page.reload 也可能不挂载——Vite 的 App 模板缓存没失效（脚本 import 在、组件树里没有）。

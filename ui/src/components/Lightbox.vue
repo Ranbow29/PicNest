@@ -82,6 +82,7 @@ function onWheel(e) {
 }
 function onDown(e) {
   if (lib.viewer.cropMode || kind.value !== 'image') return // 文本/视频不拖拽平移
+  if (e.button !== 0) return // 右键交给菜单
   dragging.value = true; lastX = e.clientX; lastY = e.clientY
 }
 function onMove(e) {
@@ -92,6 +93,17 @@ function onMove(e) {
   lastX = e.clientX; lastY = e.clientY
 }
 function onUp() { dragging.value = false }
+/* 灯箱右键：图片/视频/文本舞台都可呼出同一套图片菜单；输入框保留原生右键 */
+function onContext(e) {
+  const t = e.target
+  if (!lib.lightbox.open) return
+  if (t && (t.tagName === 'TEXTAREA' || t.tagName === 'INPUT')) return
+  if (t?.closest?.('.dock, .crop-bar, .crop-layer, .ask-veil, button, input')) return
+  const m = meta.value
+  if (!m) return
+  e.preventDefault()
+  lib.openContextMenu(e, m)
+}
 
 /* ---------- 视频：自绘控制条（原生 UI 全关） ---------- */
 const videoEl = ref(null)
@@ -547,7 +559,7 @@ function onKey(e) {
 <template>
   <div
     ref="stageEl" class="viewer"
-    @wheel="onWheel"
+    @wheel="onWheel" @contextmenu="onContext"
     @mousedown="onDown" @mousemove="onMove" @mouseup="onUp" @mouseleave="onUp"
   >
     <!-- 视频：自绘控制条（无原生 UI） -->
