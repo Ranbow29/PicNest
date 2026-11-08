@@ -720,7 +720,7 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
 }
 .sf-cover img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .sf-card:hover .sf-cover { border-color: var(--accent); transform: translateY(-2px); box-shadow: var(--shadow); }
-.sf-card.sel .sf-cover { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-weak); }
+.sf-card.sel .sf-cover { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent), 0 0 0 6px var(--accent-weak); }
 .sf-card.drop-into .sf-cover { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-weak); background: var(--accent-weak); }
 .sf-name { margin-top: 7px; font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sf-count { margin-top: 2px; font-size: 11px; color: var(--text-2); }
