@@ -127,7 +127,8 @@ PicNest/
     排查技巧：先看 `window.picrand.<方法>.length`（形参个数）是否包含新参数。
 28. **子文件夹卡片条与布局**：`contentTop = HEADER_H + stripH + 10` 必须参与 grid/justified/masonry 三种布局的起始 Y；
     无图片时 `totalH` 也要给 header+strip 高度（否则 canvas 高度 0 裁掉卡片条）。`ImageGrid` 是 fragment 根
-    （canvas + viewport），App 传入的 `.insp-open` class 无法继承 → 卡片条在详情打开时手动 `right:312px` 避让。
+    （canvas + viewport），App 传入的 `.insp-open` class 无法继承；**详情让位已改为 `.browse` 上的 `--insp-reserve`（见 item 44），
+    卡片条不要再手动 `right:312px`**（那会与 viewport padding 二次扣宽，只剩 2 列）。
 29. **Pinia/Vue 响应式数组不能直接过 IPC**：把 store 里的 `clipboard.paths` 原样传给 `ipcRenderer.invoke`
     会抛 `An object could not be cloned`（structured clone 不支持 Proxy）。复制粘贴的图片分支需传 `[...clip.paths]`；
     规则：所有 IPC 参数先转普通值（展开/`slice`），删除/移动等路径字符串数组同样注意。
