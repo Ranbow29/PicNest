@@ -11,8 +11,8 @@ const pos = computed(() => ({
   top: Math.max(4, Math.min(menu.value.y ?? 0, window.innerHeight - 280)) + 'px',
 }))
 
-/* 图片右键查重：扫图片所在文件夹（库根散图=全库），入口不再只藏在文件夹菜单里 */
-function dupForImage() {
+/* 图片所在文件夹（库根散图 rel=''）；查重与设封面共用 */
+function imageRelInfo() {
   const p = menu.value.image?.file_path || ''
   const root = lib.activeRoot || lib.roots.find((r) => p.toLowerCase().startsWith(String(r.path || '').toLowerCase()))
   let rel = ''
@@ -23,12 +23,22 @@ function dupForImage() {
       rel = pp.slice(rp.length + 1).split('\\').slice(0, -1).join('/')
     }
   }
+  return { root, rel }
+}
+/* 图片右键查重：扫图片所在文件夹（库根散图=全库），入口不再只藏在文件夹菜单里 */
+function dupForImage() {
+  const { root, rel } = imageRelInfo()
   lib.openDupFinder(root?.id ?? lib.activeRootId, rel)
+}
+function setAsFolderCover() {
+  const im = menu.value.image
+  if (im) lib.setFolderCover(im.file_path, im.thumbnail_path)
 }
 
 const items = computed(() => {
   if (!menu.value.image) return []
   const nSel = lib.selectedPaths.length
+  const relInfo = imageRelInfo()
   if (lib.view === 'trash') {
     return [
       { key: 'restore', label: nSel > 1 ? `还原到原文件夹（${nSel} 张）` : '还原到原文件夹', run: () => lib.restoreSelectedFromTrash() },
@@ -53,6 +63,7 @@ const items = computed(() => {
       run: () => lib.paste({ rootId: lib.activeRootId, rel: lib.currentDirRel }),
     }] : []),
     { key: 'copypath', label: '复制文件路径', run: async () => { try { await navigator.clipboard.writeText(menu.value.image.file_path) } catch {} } },
+    ...(relInfo.rel ? [{ key: 'cover', label: '设为文件夹封面', run: setAsFolderCover }] : []),
     { key: 'dupes', label: '查找重复…', run: dupForImage },
     { key: 'uncat', label: nSel > 1 ? `移入未分类（${nSel} 张）` : '移入未分类', run: () => {
       const path = menu.value.image.file_path

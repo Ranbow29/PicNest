@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, watch, onMounted } from 'vue'
 import { useLibrary, extractDropUrls } from '../stores/library'
-import { isExternalDT } from '../lib/dnd'
+import { isExternalDT, dndTypes } from '../lib/dnd'
 import FolderIcon from './FolderIcon.vue'
 
 const props = defineProps({ node: { type: Object, required: true }, depth: { type: Number, default: 0 } })
@@ -60,13 +60,26 @@ function onDragStart(e) {
   if (group.length > 1) e.dataTransfer.setData('application/x-picnest-dirs', JSON.stringify(group))
   e.dataTransfer.effectAllowed = 'move'
 }
+function isInternalImagesDT(e) {
+  const t = dndTypes(e)
+  return t.includes('application/x-picnest-file') || t.includes('application/x-picnest-files')
+}
 function onDragOver(e) {
+  /* 图片拖入：只认文件夹行、只做“放进文件夹”，不提供上/下缝隙插入，避免手滑进父级/未分类 */
+  if (isInternalImagesDT(e)) {
+    if (!props.node.rel) { dropMark.value = ''; e.dataTransfer.dropEffect = 'none'; return } // 库根行不接图片
+    e.preventDefault()
+    e.stopPropagation()
+    e.dataTransfer.dropEffect = 'move'
+    dropMark.value = 'into'
+    return
+  }
   e.preventDefault()
   const external = isExternalDT(e) // 内部拖拽优先：text/uri-list 是浏览器自动附带的，不能当外部文件
   e.dataTransfer.dropEffect = external ? 'copy' : 'move'
   const r = e.currentTarget.getBoundingClientRect()
   const y = e.clientY - r.top
-  /* 外部拖入与内部拖动同规则：上/下 30% = 缝隙插入，中间 = 放进该文件夹 */
+  /* 外部拖入与内部文件夹拖动同规则：上/下 30% = 缝隙插入，中间 = 放进该文件夹 */
   dropMark.value = y < r.height * 0.3 ? 'before' : y > r.height * 0.7 ? 'after' : 'into'
   if (external) {
     e.stopPropagation() // 抢占落点：主展示区/侧栏空白不再覆盖
@@ -95,8 +108,10 @@ function dragHintLabel(mark) {
 async function onDrop(e) {
   e.stopPropagation()
   lib.clearDropHint()
-  const mark = dropMark.value
+  const internalImages = isInternalImagesDT(e)
+  const mark = internalImages ? 'into' : dropMark.value
   dropMark.value = ''
+  if (internalImages && !props.node.rel) return // 库根行不接图片（走侧栏「未分类」入口）
   // 外部拖入（Eagle 式）：文件/文件夹 → 按落点录入
   if (isExternalDT(e)) {
     const paths = [...(e.dataTransfer.files || [])].map((f) => window.picrand.getFilePath?.(f)).filter(Boolean)

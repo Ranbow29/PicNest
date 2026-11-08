@@ -274,3 +274,12 @@ PicNest/
     `application/x-picnest-file/files/dir/dirs`，命中即 internal，external 必须 `!internal && (Files||uri-list)`。
     App / ImageGrid / DirTreeItem / SideBar 全部落点统一使用；合成验证：内部载荷 + uri-list 拖到树行 → 正确移动、无录入提示。
     ③空白处右键当前文件夹菜单尝试过，Feb 明确不要，已撤（保留图片/文件夹卡片/文件夹行/资料库行入口）。
+45. **图片拖入落点 / 未分类入口 / 文件夹封面（2026-11-09，Feb 指定）**：
+    ①图片内部拖拽在树行**只认中间落点**：`DirTreeItem.onDragOver` 检测 `x-picnest-file(s)` 后直接 `dropMark='into'` 并
+    `stopPropagation`，不画上/下插入线；**根行（rel=''）不 preventDefault、不接图片**，避免手滑落进未分类。
+    文件夹拖拽/外部文件拖入仍保留 30% 缝隙规则。侧栏「未分类」视图入口与「回收站」同款：
+    `drop-uncat` 虚线高亮 + 浮签「移入未分类」，drop 调 `moveToUncategorized`（物理移到库根，保留索引）。
+    ②**文件夹封面**：`dirMemory[rel].cover / coverThumb`（config.json）；右键图片（正文/灯箱/简报共用 ContextMenu）
+    →「设为文件夹封面」→ `lib.setFolderCover` 反推图片所在文件夹 rel（库根散图 rel='' 不显示该项）；
+    ImageGrid 子文件夹卡片封面优先用 coverThumb/cover，watch 依赖里要带 `dirMemory[f.rel].cover` 才能即时刷新。
+    ③dev 稳定性：`vite.config.js` 开 `server.watch.usePolling:true, interval:350`，否则快速连续改文件会命中 Vite 旧模板缓存。

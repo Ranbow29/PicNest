@@ -6,7 +6,10 @@ import vue from '@vitejs/plugin-vue'
 export default defineConfig({
   plugins: [vue()],
   base: './', // 必须：主进程用 loadFile(file://) 加载 dist，绝对路径会指向盘符根
-  server: { port: 5173, strictPort: true, host: '127.0.0.1' }, // IPv4：Chromium 对 ::1-only 监听会 ERR_CONNECTION_REFUSED
+  server: {
+    port: 5173, strictPort: true, host: '127.0.0.1', // IPv4：Chromium 对 ::1-only 监听会 ERR_CONNECTION_REFUSED
+    watch: { usePolling: true, interval: 350 }, // 工作区盘/杀软下原生 watch 会漏改动，导致模板缓存不失效
+  },
   build: {
     outDir: '../app/resources/app/dist',
     emptyOutDir: true,

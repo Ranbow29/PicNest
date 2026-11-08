@@ -144,7 +144,12 @@ const fmtTrashDate = (ms) => {
 const covers = ref({})
 let coverToken = 0
 watch(
-  () => [lib.activeRootId, lib.currentDirRel, subfolders.value.map((f) => f.rel).join('|')].join('::'),
+  () => [
+    lib.activeRootId,
+    lib.currentDirRel,
+    subfolders.value.map((f) => f.rel).join('|'),
+    subfolders.value.map((f) => lib.dirMemory[f.rel]?.cover || '').join('|'),
+  ].join('::'),
   async () => {
     const list = subfolders.value
     const token = ++coverToken
@@ -152,6 +157,8 @@ watch(
     const out = {}
     await Promise.all(list.map(async (f) => {
       try {
+        const mem = lib.dirMemory[f.rel] || {}
+        if (mem.cover) { out[f.rel] = fileUrl(mem.coverThumb || mem.cover); return } // 手动设置的封面优先
         /* 取前几张挑封面：文本/视频没有缩略图时会退化成裂图，宁可回落到文件夹图标 */
         const rows = await api.imagesByDir(lib.activeRootId, f.rel, 0, 6, 'added', false)
         const pick = (rows || []).find((im) => im.thumbnail_path && im.thumbnail_path !== 'SKIP')

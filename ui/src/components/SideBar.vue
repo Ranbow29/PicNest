@@ -58,33 +58,45 @@ function onViewMenu(e, entry) {
   e.stopPropagation()
   lib.openTrashMenu(e)
 }
-/* 图片拖到「回收站」入口 = 软删 */
+/* 图片拖到「回收站」= 软删；拖到「未分类」= 移到库根（与回收站同为显式落点，避免手滑误落） */
 const trashOver = ref(false)
+const uncatOver = ref(false)
 function isInternalImagesDT(e) {
   const t = [...(e.dataTransfer?.types || [])]
   return t.includes('application/x-picnest-file') || t.includes('application/x-picnest-files')
 }
 function onViewDragOver(e, entry) {
-  if (entry.key !== 'trash' || !isInternalImagesDT(e)) return
-  e.preventDefault()
-  e.stopPropagation()
-  e.dataTransfer.dropEffect = 'move'
-  trashOver.value = true
-  lib.setDropHint('trash', '移入回收站', e.clientX, e.clientY)
+  if (!isInternalImagesDT(e)) return
+  if (entry.key === 'trash') {
+    e.preventDefault(); e.stopPropagation()
+    e.dataTransfer.dropEffect = 'move'
+    trashOver.value = true; uncatOver.value = false
+    lib.setDropHint('trash', '移入回收站', e.clientX, e.clientY)
+  } else if (entry.key === 'uncategorized') {
+    e.preventDefault(); e.stopPropagation()
+    e.dataTransfer.dropEffect = 'move'
+    uncatOver.value = true; trashOver.value = false
+    lib.setDropHint('uncat', '移入未分类', e.clientX, e.clientY)
+  }
 }
 function onViewDragLeave(entry) {
   if (entry.key === 'trash') trashOver.value = false
+  if (entry.key === 'uncategorized') uncatOver.value = false
 }
 async function onViewDrop(e, entry) {
-  if (entry.key !== 'trash' || !isInternalImagesDT(e)) return
+  if (!isInternalImagesDT(e)) return
+  if (entry.key !== 'trash' && entry.key !== 'uncategorized') return
   e.preventDefault()
   e.stopPropagation()
   trashOver.value = false
+  uncatOver.value = false
   lib.clearDropHint()
   const multi = dtList(e.dataTransfer, 'application/x-picnest-files')
   const single = e.dataTransfer.getData('application/x-picnest-file')
   const paths = multi.length ? multi : (single ? [single] : [])
-  if (paths.length) await lib.trashImages(paths)
+  if (!paths.length) return
+  if (entry.key === 'trash') await lib.trashImages(paths)
+  else await lib.moveToUncategorized(paths)
 }
 
 /* 拖到侧栏空白 = 外部文件录进当前库根 / 内部目录移回根 */
@@ -165,7 +177,7 @@ async function dropOnLib(e, l) {
     <nav class="views">
       <div
         v-for="e in entries" :key="e.key"
-        class="view-item" :class="{ active: !lib.selectionView && lib.view === e.key && (e.key !== 'all' || !lib.currentDirRel), disabled: !e.enabled, 'drop-trash': e.key === 'trash' && trashOver }"
+        class="view-item" :class="{ active: !lib.selectionView && lib.view === e.key && (e.key !== 'all' || !lib.currentDirRel), disabled: !e.enabled, 'drop-trash': e.key === 'trash' && trashOver, 'drop-uncat': e.key === 'uncategorized' && uncatOver }"
         @click="e.enabled && lib.view !== e.key && lib.switchView(e.key)"
         @contextmenu="onViewMenu($event, e)"
         @dragover="onViewDragOver($event, e)" @dragleave="onViewDragLeave(e)" @drop.prevent="onViewDrop($event, e)"
@@ -229,6 +241,7 @@ async function dropOnLib(e, l) {
 .view-item:hover:not(.disabled) { background: var(--accent-weak); color: var(--text); }
 .view-item.active { background: var(--accent-weak); color: var(--accent); font-weight: 600; }
 .view-item.drop-trash { background: rgba(194, 90, 77, 0.14); color: #cf6b5c; outline: 1.5px dashed #c25a4d; outline-offset: -2px; }
+.view-item.drop-uncat { background: var(--accent-weak); color: var(--accent); outline: 1.5px dashed var(--accent); outline-offset: -2px; }
 .view-item.disabled { opacity: 0.45; }
 .label { flex: 1; font-size: 13px; }
 .count { font-size: 11px; font-variant-numeric: tabular-nums; }

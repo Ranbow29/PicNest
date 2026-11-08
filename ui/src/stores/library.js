@@ -496,6 +496,23 @@ export const useLibrary = defineStore('library', {
       this.dirMemory = { ...this.dirMemory, [rel]: { ...(this.dirMemory[rel] || {}), ...patch } }
       try { await api.dirMemorySet(rel, patch) } catch { /* 静默 */ }
     },
+    /* 把图片设为其所在文件夹的封面（子文件夹卡片用；库根散图没有卡片） */
+    async setFolderCover(filePath, thumbPath) {
+      const root = this.activeRoot
+      if (!root?.path) return { ok: false, error: '无资料库' }
+      const rp = String(root.path).replace(/\//g, '\\').replace(/\\+$/, '')
+      const pp = String(filePath || '').replace(/\//g, '\\')
+      if (!pp.toLowerCase().startsWith(rp.toLowerCase() + '\\')) return { ok: false, error: '文件不在当前资料库' }
+      const rel = pp.slice(rp.length + 1).split('\\').slice(0, -1).join('/')
+      if (!rel) {
+        this.showNote('库根散图不能设为子文件夹封面', [], 'muted')
+        return { ok: false }
+      }
+      const thumb = thumbPath && thumbPath !== 'SKIP' ? thumbPath : ''
+      await this.patchDirMemory(rel, { cover: filePath, coverThumb: thumb })
+      this.showNote(`已把「${rel.split('/').pop()}」的封面换掉`)
+      return { ok: true, rel }
+    },
     /* 从正文进入子文件夹：把左侧树的祖先层（含库根）展开，选中行随即可见 */
     async revealDir(rel) {
       if (!rel) return
