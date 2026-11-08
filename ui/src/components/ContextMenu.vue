@@ -23,7 +23,6 @@ const items = computed(() => {
     ]
   }
   return [
-    { key: 'open', label: '打开（灯箱）', run: () => lib.openLightbox(menu.value.image.file_path) },
     { key: 'reveal', label: '在文件管理器打开', run: () => lib.reveal(menu.value.image.file_path) },
     { key: 'brief', label: '进入简报模式', run: () => lib.openBrief(menu.value.image.file_path) },
     { key: 'gray', label: (lib.grayscaleMode ? '✓ ' : '') + '黑白预览', run: () => lib.toggleGrayscale() },
