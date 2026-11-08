@@ -66,6 +66,7 @@ export const useLibrary = defineStore('library', {
     dupDialog: { open: false, items: [], targetRel: undefined, resolve: null },
     confirmDialog: { open: false, title: '', message: '', details: [], confirmText: '确定', danger: false, resolve: null },
     importResult: { open: false, nonce: 0, summary: '', details: [], tone: 'ok' }, // 录入汇总结果卡
+    clipboard: { kind: '', paths: [], count: 0, root: false }, // 应用内复制剪贴板（kind: dirs | files）
     dropHint: { active: false, zone: '', label: '', x: 0, y: 0, key: null }, // 外部拖入落点提示（分区高亮 + 跟随光标）
     viewer: { scale: 1, tx: 0, ty: 0, rot: 0, flopX: false, showInspector: false, /* 初始收起：让用户先看图，详情随点随开 */ cropMode: false, fitNonce: 0 },
     filterBarOpen: false,
@@ -232,25 +233,157 @@ export const useLibrary = defineStore('library', {
       return { ...r, rel: newRel }
     },
 
-    /* 删除文件夹：整包移入 Windows 回收站（可还原）+ 清索引；资料库根不可删 */
-    async deleteDir(rel) {
-      if (!this.tree || !rel) return { ok: false, error: '资料库根不能删除' }
-      const abs = this.absPathOf(rel)
-      const parentRel = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : ''
+    /* 顶层文件夹过滤：父文件夹已选中时不再重复处理其后代；资料库根 '' 覆盖全部 */
+    topLevelDirs(rels) {
+      const list = [...new Set((rels || []).filter((r) => r !== null && r !== undefined))]
+      if (list.includes('')) return ['']
+      return list.filter((r) => !list.some((o) => o !== r && r.startsWith(o + '/')))
+    },
+    showNote(summary, details = [], tone = 'ok') {
+      this.importResult = { open: true, nonce: Date.now(), summary, details, tone }
+    },
+
+    /* 删除文件夹（多选穿透：父子同选只删父级；资料库根不可删） */
+    async deleteDirs(rels) {
+      if (!this.tree) return { ok: false, error: '无目录树' }
+      const list = this.topLevelDirs(rels).filter((r) => r !== '')
+      if (!list.length) return { ok: false, error: '资料库根不能删除' }
+      let deleted = 0, failed = 0, files = 0
+      for (const rel of list) {
+        try {
+          const r = await api.deleteDir(this.absPathOf(rel), rel)
+          if (r?.ok) { deleted++; files += r.count || 0 } else failed++
+        } catch (e) { failed++ }
+      }
+      const inAny = (x) => list.some((rel) => x === rel || (x || '').startsWith(rel + '/'))
+      if (inAny(this.currentDirRel)) {
+        const hit = list.find((rel) => this.currentDirRel === rel || (this.currentDirRel || '').startsWith(rel + '/'))
+        this.currentDirRel = hit && hit.includes('/') ? hit.slice(0, hit.lastIndexOf('/')) : null
+      }
+      this.selectedDirs = this.selectedDirs.filter((x) => !inAny(x))
+      if (this.dirAnchor != null && inAny(this.dirAnchor)) this.dirAnchor = null
+      if (this.selectionView && this.selectedDirs.length < 2) this.selectionView = false
+      await this.refreshTree()
+      await this.loadImages()
+      this.showNote(`已删除 ${deleted} 个文件夹${failed ? ` · 失败 ${failed}` : ''}（回收站可还原）`, [], failed ? 'error' : 'ok')
+      return { ok: failed === 0, deleted, failed, files }
+    },
+    async deleteDir(rel) { return this.deleteDirs([rel]) },
+
+    /* ---- 复制 / 粘贴（应用内剪贴板 + 系统剪贴板；父子同选按父级穿透） ---- */
+    copyFiles(paths) {
+      const list = [...new Set((paths || []).filter(Boolean))]
+      if (!list.length) return { ok: false }
+      this.clipboard = { kind: 'files', paths: list, count: list.length, root: false }
+      try { window.picrand.copyFilesToClipboard?.(list) } catch { /* 静默 */ }
+      this.showNote(`已复制 ${list.length} 张图片 · Ctrl+V 粘贴`)
+      return { ok: true, count: list.length }
+    },
+    copyDirsFrom(rootId, rels) {
+      const root = this.roots.find((r) => r.id === rootId)
+      if (!root) return { ok: false, error: '资料库不存在' }
+      const tops = this.topLevelDirs(rels)
+      const paths = tops.map((rel) => root.path + (rel ? '\\' + rel.split('/').join('\\') : ''))
+      if (!paths.length) return { ok: false }
+      const hasRoot = tops.includes('')
+      this.clipboard = { kind: 'dirs', paths, count: paths.length, root: hasRoot }
+      try { window.picrand.copyFilesToClipboard?.(paths) } catch { /* 静默 */ }
+      const label = hasRoot
+        ? `已复制资料库文件夹「${root.display_name || String(root.path).split(/[\\/]/).pop()}」`
+        : `已复制 ${paths.length} 个文件夹`
+      this.showNote(`${label} · Ctrl+V 粘贴`)
+      return { ok: true, count: paths.length, root: hasRoot }
+    },
+    copySelection() {
+      /* 图片优先：合并视图里点图后 Ctrl+C 复制图片，而不是底下的文件夹 */
+      if (this.selectedPaths.length) return this.copyFiles(this.selectedPaths)
+      if (this.selectedDirs.length) return this.copyDirsFrom(this.activeRootId, this.selectedDirs)
+      return { ok: false }
+    },
+    pasteTarget() {
+      if (this.selectedDirs.length === 1) return { rootId: this.activeRootId, rel: this.selectedDirs[0] }
+      return { rootId: this.activeRootId, rel: this.currentDirRel || '' }
+    },
+    async paste(target) {
+      const clip = this.clipboard
+      if (!clip?.kind) return { ok: false, error: '剪贴板为空' }
+      const t = this.normTarget(target || this.pasteTarget())
+      const targetDir = this.absOfTarget(t)
+      if (!targetDir) return { ok: false, error: '目标资料库不可用' }
+      /* 自包含预检（避免确认后才发现不可粘贴） */
+      const norm = (p) => String(p).replace(/[\\/]+$/, '').toLowerCase()
+      const dstNorm = norm(targetDir)
+      if (clip.kind === 'dirs' && clip.paths.some((src) => {
+        const s = norm(src)
+        return dstNorm === s || dstNorm.startsWith(s + '\\') || dstNorm.startsWith(s + '/')
+      })) {
+        this.showNote('不能把文件夹粘贴进自身或其子目录', [], 'error')
+        return { ok: false, error: '目标在源文件夹内' }
+      }
+      if (clip.kind === 'dirs' && clip.root) {
+        const ok = await this.askConfirm({
+          title: '复制资料库文件夹',
+          message: '将复制整个资料库文件夹（仅图片/视频），可能需要较长时间。继续？',
+          details: [
+            `源：${clip.paths[0]}`,
+            `目标：${targetDir}`,
+          ],
+          confirmText: '开始复制',
+        })
+        if (!ok) return { ok: false, canceled: true }
+      }
+      const agg = { ok: true, copied: 0, skipped: 0, failed: 0, unsupported: 0, dirs: [], errors: [] }
       try {
-        const r = await api.deleteDir(abs, rel)
-        if (!r?.ok) { this.error = r?.error || '删除失败'; return r }
-        const inSub = (x) => x === rel || (x || '').startsWith(rel + '/')
-        if (inSub(this.currentDirRel)) this.currentDirRel = parentRel || null
-        this.selectedDirs = this.selectedDirs.filter((x) => !inSub(x))
-        if (this.dirAnchor != null && inSub(this.dirAnchor)) this.dirAnchor = parentRel || null
-        if (this.selectionView && this.selectedDirs.length < 2) this.selectionView = false
-        await this.refreshTree()
-        await this.loadImages()
-        return r
+        if (clip.kind === 'dirs') {
+          for (const src of clip.paths) {
+            const r = await window.picrand.picnestImportDirCopy(src, targetDir, { unique: true })
+            if (r?.ok) {
+              agg.dirs.push(r)
+              agg.copied += r.copied || 0
+              agg.skipped += r.skipped || 0
+              agg.failed += r.failed || 0
+              agg.unsupported += r.unsupported || 0
+              if (t.rootId === this.activeRootId) await this.insertOrderAt(t.rel, r.name, null)
+            } else {
+              agg.ok = false
+              agg.failed++
+              agg.errors.push(`${(String(src).split(/[\\/]/).pop() || src)}：${r?.error || '复制失败'}`)
+            }
+          }
+        } else {
+          const r = await window.picrand.picnestCopyImages([...clip.paths], targetDir)
+          if (r?.ok || r?.copied) {
+            agg.copied += r.copied || 0
+            agg.failed += r.failed || 0
+            if (!r?.ok) agg.ok = false
+          } else {
+            agg.ok = false
+            agg.errors.push(r?.error || '复制失败')
+          }
+        }
+        if (agg.copied > 0 || agg.dirs.length > 0) {
+          const rootRec = this.roots.find((x) => x.id === t.rootId)
+          if (rootRec) await api.syncFolderSnapshot(rootRec.path).catch(() => {})
+          if (t.rootId === this.activeRootId) { await this.refreshTree(); await this.loadImages() }
+        }
+        const parts = []
+        if (agg.copied) parts.push(`粘贴 ${agg.copied} 张`)
+        if (agg.dirs.length) parts.push(`文件夹 ${agg.dirs.length} 个`)
+        if (agg.skipped) parts.push(`跳过 ${agg.skipped}`)
+        if (agg.failed) parts.push(`失败 ${agg.failed}`)
+        let cross = ''
+        if (t.rootId !== this.activeRootId) {
+          const rec = this.roots.find((x) => x.id === t.rootId)
+          const name = rec?.display_name || String(rec?.path || '').split(/[\\/]/).pop()
+          cross = name ? ` → ${name}` : ''
+        }
+        const details = (agg.dirs || []).map((d) => ({ label: d.name, text: `粘贴 ${d.copied}${d.failed ? ` · 失败 ${d.failed}` : ''}` }))
+        if (agg.errors.length) details.push({ label: '错误', text: agg.errors.join('；') })
+        this.showNote((parts.length ? parts.join(' · ') : (agg.ok ? '没有可粘贴的内容' : '粘贴失败')) + cross, details, agg.ok ? 'ok' : 'error')
+        return agg
       } catch (e) {
         const r = { ok: false, error: String(e?.message || e) }
-        this.error = r.error
+        this.showNote(r.error, [], 'error')
         return r
       }
     },
@@ -292,6 +425,35 @@ export const useLibrary = defineStore('library', {
     async exportDir(rel) {
       const r = await api.exportDir(this.absPathOf(rel))
       return r
+    },
+    /* 资料库区的绝对路径操作（不依赖当前活动库） */
+    async mkdirInLibrary(rootId, name) {
+      const root = this.roots.find((r) => r.id === rootId)
+      if (!root) return { ok: false, error: '资料库不存在' }
+      const r = await api.mkdir(root.path, name)
+      if (!r?.ok) { if (r?.error) this.error = r.error; return r }
+      try { await api.syncFolderSnapshot(root.path) } catch { /* 静默 */ }
+      if (rootId === this.activeRootId) { await this.refreshTree(); await this.loadImages() }
+      return r
+    },
+    async sortLibrary(rootId, mode) {
+      const root = this.roots.find((r) => r.id === rootId)
+      if (!root) return { ok: false }
+      const r = await api.dirSort('', root.path, mode)
+      if (r?.ok && rootId === this.activeRootId) await this.refreshTree()
+      return r
+    },
+    async sortLibraryRecursive(rootId, mode) {
+      const root = this.roots.find((r) => r.id === rootId)
+      if (!root) return { ok: false }
+      const r = await api.dirSortRecursive(root.path, '', mode)
+      if (r?.ok && rootId === this.activeRootId) await this.refreshTree()
+      return r
+    },
+    async exportLibrary(rootId) {
+      const root = this.roots.find((r) => r.id === rootId)
+      if (!root) return { ok: false, error: '资料库不存在' }
+      return api.exportDir(root.path)
     },
 
     /* 文件夹统计（详情面板）：当前库 + 若干 rel，union 去重 */
@@ -986,8 +1148,7 @@ export const useLibrary = defineStore('library', {
     /* 多选文件夹拖拽：整组移动（跳过根、自身、后代；父子同时选中只搬父级） */
     async dropOnDirs(srcRels, targetRel, pos) {
       const destParent = pos === 'into' ? targetRel : (targetRel.includes('/') ? targetRel.split('/').slice(0, -1).join('/') : '')
-      let rels = [...new Set((srcRels || []).filter((r) => r !== ''))]
-      rels = rels.filter((r) => !rels.some((o) => o !== r && r.startsWith(o + '/'))) // 去掉被父级覆盖的子项
+      const rels = this.topLevelDirs(srcRels).filter((r) => r !== '') // 父子同选只搬父级
       const valid = rels.filter((r) => r !== destParent && !(destParent && (destParent + '/').startsWith(r + '/')))
       if (!valid.length) return { ok: true, moved: 0 }
 

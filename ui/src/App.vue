@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted } from 'vue'
+import { computed, onBeforeUnmount, onMounted } from 'vue'
 import { useLibrary, extractDropUrls } from './stores/library'
 import TitleBar from './components/TitleBar.vue'
 import SideBar from './components/SideBar.vue'
@@ -15,7 +15,33 @@ import ResizeHandle from './components/ResizeHandle.vue'
 // ZCode 式嵌套结构：左栏底层(可拖宽) → 主面板工作区（浏览 ⇄ 大图双模式）→ 详情计划式浮岛(可收起可拖宽)
 // 外部拖入 = 位置即意图：主展示区/树行/缝隙/资料库栏各自高亮 + 跟随光标的落点提示
 const lib = useLibrary()
-onMounted(() => lib.init())
+/* 复制/粘贴快捷键（输入框内保留原生行为；有文本选择时让浏览器复制文本） */
+function isTypingTarget(el) {
+  if (!el) return false
+  const tag = el.tagName
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable
+}
+function onKeydown(e) {
+  if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return
+  const key = String(e.key || '').toLowerCase()
+  if (key !== 'c' && key !== 'v') return
+  if (isTypingTarget(e.target)) return
+  if (lib.confirmDialog.open || lib.dupDialog.open) return
+  if (key === 'c') {
+    if (String(window.getSelection?.() || '').trim()) return
+    const r = lib.copySelection()
+    if (r?.ok) e.preventDefault()
+  } else {
+    if (!lib.clipboard?.kind) return
+    e.preventDefault()
+    lib.paste()
+  }
+}
+onMounted(() => {
+  lib.init()
+  window.addEventListener('keydown', onKeydown)
+})
+onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
 
 function isExternal(e) {
   const types = [...(e.dataTransfer?.types || [])]

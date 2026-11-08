@@ -269,8 +269,9 @@ electron.ipcMain.handle("picnest-import-files", async (_event, paths, targetDir)
 
 /* 外部拖入文件夹（PicNest P7）：复制为目标目录下的同名子文件夹（保留内部结构，仅收录图片/视频）
    目标同名文件夹 → 合并；同名同大小 → 跳过；同名不同内容 → 加序号。空目录不落盘。 */
-electron.ipcMain.handle("picnest-import-dir-copy", async (_event, srcDir, targetDir) => {
+electron.ipcMain.handle("picnest-import-dir-copy", async (_event, srcDir, targetDir, opts) => {
   const detail = { ok: false, name: "", dest: "", copied: 0, skipped: 0, failed: 0, unsupported: 0, unsupportedNames: [], dirsCreated: 0 };
+  const unique = !!(opts && opts.unique); // 复制粘贴：永远生成副本（同名加序号），不合并
   try {
     if (!srcDir || !fs.existsSync(srcDir)) return { ...detail, error: "源文件夹不存在" };
     if (!fs.existsSync(targetDir)) return { ...detail, error: "目标目录不存在" };
@@ -283,12 +284,16 @@ electron.ipcMain.handle("picnest-import-dir-copy", async (_event, srcDir, target
       return { ...detail, error: "不能把文件夹复制进自身或其子目录" };
     }
     const base = path.basename(srcDir).replace(/[\\/:*?"<>|]/g, "_") || "导入文件夹";
-    if (normPath(path.join(targetDir, base)) === srcNorm) {
+    if (!unique && normPath(path.join(targetDir, base)) === srcNorm) {
       return { ...detail, error: "文件夹已在此位置" };
     }
     let dest = path.join(targetDir, base);
-    for (let n = 1; fs.existsSync(dest) && !fs.statSync(dest).isDirectory(); n++) {
-      dest = path.join(targetDir, base + " (" + n + ")");
+    if (unique) {
+      for (let n = 1; fs.existsSync(dest); n++) dest = path.join(targetDir, base + " (" + n + ")");
+    } else {
+      for (let n = 1; fs.existsSync(dest) && !fs.statSync(dest).isDirectory(); n++) {
+        dest = path.join(targetDir, base + " (" + n + ")");
+      }
     }
     const madeDirs = new Set();
     const ensureDir = (abs) => {
@@ -340,6 +345,31 @@ electron.ipcMain.handle("picnest-import-dir-copy", async (_event, srcDir, target
     return detail;
   } catch (e) {
     return { ...detail, error: String(e?.message || e) };
+  }
+});
+
+/* 复制粘贴：图片文件复制到目标目录（永远生成副本，同名加序号；不查重） */
+electron.ipcMain.handle("picnest-copy-images", async (_event, paths, targetDir) => {
+  let copied = 0, failed = 0;
+  try {
+    if (!fs.existsSync(targetDir)) return { ok: false, error: "目标目录不存在" };
+    for (const p of paths || []) {
+      try {
+        if (!p || !fs.existsSync(p)) { failed++; continue; }
+        const st = fs.statSync(p);
+        if (!st.isFile()) { failed++; continue; }
+        const ext = path.extname(p).toLowerCase();
+        if (!PICNEST_DROP_EXTS.has(ext)) { failed++; continue; }
+        const stem = path.basename(p, ext);
+        let target = path.join(targetDir, path.basename(p));
+        for (let n = 1; fs.existsSync(target); n++) target = path.join(targetDir, stem + " (" + n + ")" + ext);
+        fs.copyFileSync(p, target);
+        copied++;
+      } catch (e) { failed++; }
+    }
+    return { ok: failed === 0, copied, failed };
+  } catch (e) {
+    return { ok: false, error: String(e?.message || e), copied, failed };
   }
 });
 

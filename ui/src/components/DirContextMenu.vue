@@ -46,10 +46,12 @@ function toggle(which) {
 
 function newSub() {
   const rel = relOf(menu.value.rel)
+  const isLibrary = isLib.value
+  const rootId = menu.value.node?.id
   run(() => {
     ask.value = { title: '新建子文件夹', initial: '', run: async (name) => {
-      const r = await lib.mkdirIn(rel, name)
-      if (r?.ok) lib.patchDirMemory(rel, { expanded: true })
+      const r = isLibrary ? await lib.mkdirInLibrary(rootId, name) : await lib.mkdirIn(rel, name)
+      if (r?.ok && !isLibrary) lib.patchDirMemory(rel, { expanded: true })
     } }
   })
 }
@@ -89,11 +91,13 @@ async function moveTo() {
 }
 function exportDir() {
   const rel = relOf(menu.value.rel)
+  const isLibrary = isLib.value
+  const rootId = menu.value.node?.id
   run(async () => {
     lib.scanning = true
     lib.scanNote = '导出中…'
     try {
-      const r = await lib.exportDir(rel)
+      const r = isLibrary ? await lib.exportLibrary(rootId) : await lib.exportDir(rel)
       if (r?.ok) lib.scanNote = `已导出 ${r.count} 张 → ${r.dest}`
       else if (r?.canceled) lib.scanNote = ''
       else lib.scanNote = r?.error || '导出失败'
@@ -103,8 +107,18 @@ function exportDir() {
     }
   })
 }
-function sortLevel(mode) { run(() => lib.sortDir(relOf(menu.value.rel), mode)) }
-function sortRecursive(mode) { run(() => lib.sortDirRecursive(relOf(menu.value.rel), mode)) }
+function sortLevel(mode) {
+  const rel = relOf(menu.value.rel)
+  const isLibrary = isLib.value
+  const rootId = menu.value.node?.id
+  run(() => (isLibrary ? lib.sortLibrary(rootId, mode) : lib.sortDir(rel, mode)))
+}
+function sortRecursive(mode) {
+  const rel = relOf(menu.value.rel)
+  const isLibrary = isLib.value
+  const rootId = menu.value.node?.id
+  run(() => (isLibrary ? lib.sortLibraryRecursive(rootId, mode) : lib.sortDirRecursive(rel, mode)))
+}
 function setColor(key) {
   const rel = relOf(menu.value.rel)
   run(() => lib.patchDirMemory(rel, { color: key }))
@@ -119,20 +133,46 @@ const fmtSize = (n) => {
 function deleteDir() {
   const rel = relOf(menu.value.rel)
   if (!rel) return
-  const name = nameOf(rel)
+  const useSelection = lib.selectedDirs.length > 1 && lib.selectedDirs.includes(rel)
+  const rels = lib.topLevelDirs(useSelection ? lib.selectedDirs : [rel]).filter((r) => r !== '')
+  if (!rels.length) return
+  const names = rels.map((r) => r.split('/').pop())
   run(async () => {
-    const stats = await lib.dirStats([rel])
+    const stats = await lib.dirStats(rels)
     const ok = await lib.askConfirm({
-      title: '删除文件夹',
-      message: `确定删除「${name}」？`,
+      title: rels.length > 1 ? `删除 ${rels.length} 个文件夹` : '删除文件夹',
+      message: rels.length > 1 ? `确定删除这 ${rels.length} 个文件夹？` : `确定删除「${names[0]}」？`,
       details: [
         stats?.ok ? `${stats.count} 个文件 · ${fmtSize(stats.size)}` : '无法读取文件夹统计',
+        rels.length > 1 ? `包含：${names.join('、')}` : '',
         '整个文件夹会移入 Windows 回收站（可还原），并从资料库移除索引。',
-      ],
+      ].filter(Boolean),
       confirmText: '移入回收站',
       danger: true,
     })
-    if (ok) await lib.deleteDir(rel)
+    if (ok) await lib.deleteDirs(rels)
+  })
+}
+const hasClip = computed(() => !!lib.clipboard?.kind)
+/* 复制：右键行属于多选时复制整个选区（穿透由 store.topLevelDirs 负责） */
+function copyItem() {
+  const rel = relOf(menu.value.rel)
+  const isLibrary = isLib.value
+  const rootId = menu.value.node?.id
+  const useSelection = !isLibrary && lib.selectedDirs.length > 1 && lib.selectedDirs.includes(rel)
+  const sel = [...lib.selectedDirs]
+  run(() => {
+    if (isLibrary) lib.copyDirsFrom(rootId, [''])
+    else lib.copyDirsFrom(lib.activeRootId, useSelection ? sel : [rel])
+  })
+}
+function pasteItem() {
+  const rel = relOf(menu.value.rel)
+  const isLibrary = isLib.value
+  const rootId = menu.value.node?.id
+  run(() => {
+    if (isLibrary) lib.paste({ rootId, rel: '' })
+    else lib.paste({ rootId: lib.activeRootId, rel })
   })
 }
 
@@ -154,6 +194,8 @@ const sortItems = [
         <button v-if="isLib" class="mi" @click="renameLib">重命名资料库…</button>
         <button v-if="!isLib" class="mi" @click="newSibling">新建文件夹</button>
         <button v-if="!isLib" class="mi" @click="rename">重命名</button>
+        <button class="mi" @click="copyItem">{{ isLib ? '复制资料库文件夹' : '复制' }}</button>
+        <button v-if="hasClip" class="mi" @click="pasteItem">粘贴到此{{ isLib ? '资料库' : '文件夹' }}</button>
 
         <div class="mi group" @click.stop="toggle('sort')">
           <span>排序</span><i class="caret" :class="{ on: sortOpen }">▸</i>

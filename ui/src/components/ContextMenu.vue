@@ -25,7 +25,17 @@ const items = computed(() => {
     { key: 'open', label: '打开（灯箱）', run: () => lib.openLightbox(menu.value.image.file_path) },
     { key: 'reveal', label: '在文件管理器打开', run: () => lib.reveal(menu.value.image.file_path) },
     { key: 'rename', label: '重命名', run: () => { lib.selectedPath = menu.value.image.file_path; lib.renaming = true } },
-    { key: 'copy', label: '复制文件', run: async () => { try { await window.picrand.copyFilesToClipboard?.([menu.value.image.file_path]) } catch {} } },
+    { key: 'copy', label: '复制', run: () => {
+      const path = menu.value.image.file_path
+      const paths = (lib.selectedPaths.length > 1 && lib.selectedPaths.includes(path))
+        ? lib.selectedPaths.slice()
+        : [path]
+      lib.copyFiles(paths)
+    } },
+    ...(lib.clipboard?.kind && lib.currentDirRel ? [{
+      key: 'paste', label: '粘贴到当前文件夹',
+      run: () => lib.paste({ rootId: lib.activeRootId, rel: lib.currentDirRel }),
+    }] : []),
     { key: 'copypath', label: '复制文件路径', run: async () => { try { await navigator.clipboard.writeText(menu.value.image.file_path) } catch {} } },
     { key: 'remove', label: '从库中移除（文件保留）', run: () => lib.removeFromLibrary(menu.value.image.file_path) },
     { sep: true },
