@@ -26,6 +26,10 @@ const LAYOUTS = [
 ]
 const layoutMeta = computed(() => LAYOUTS.find((l) => l.key === lib.layout) || LAYOUTS[0])
 const panelOpen = ref(false)
+const topPinned = ref(false)
+async function refreshTopPinned() { try { topPinned.value = !!(await window.picrand.windowIsAlwaysOnTop()) } catch { /* 静默 */ } }
+async function toggleTop() { api.windowToggleAlwaysOnTop(); await refreshTopPinned() }
+onMounted(refreshTopPinned)
 function togglePanel() { panelOpen.value = !panelOpen.value; lib.filterBarOpen = false; collectiveShake() }
 function toggleFilterBar() { lib.filterBarOpen = !lib.filterBarOpen; panelOpen.value = false; collectiveShake() }
 function closePanel(e) {
@@ -150,7 +154,7 @@ function onKey(e) {
     <!-- 窗控 + 详情开关：圆形亮色，内联右端（与其他窗口右上角对齐） -->
     <div class="bar-controls">
       <button class="wc" :class="{ on: lib.viewer.showInspector }" title="详情面板（收起/放出）" @click="lib.toggleInspector()"><AnimIcon name="contents" :size="14" ambient /></button>
-      <button class="wc" title="置顶" @click="api.windowToggleAlwaysOnTop()"><AnimIcon name="pin" :size="14" ambient /></button>
+      <button class="wc" :class="{ on: topPinned }" :title="topPinned ? '取消置顶（当前置顶中）' : '置顶窗口'" @click="toggleTop"><AnimIcon name="pin" :size="14" :active="topPinned" ambient /></button>
       <button class="wc" title="最小化" @click="api.windowMinimize()">─</button>
       <button class="wc" title="最大化" @click="api.windowMaximize()">▢</button>
       <button class="wc close" title="关闭" @click="api.windowClose()">✕</button>
