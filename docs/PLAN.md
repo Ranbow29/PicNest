@@ -221,3 +221,6 @@ PicNest/
     改为上下各 70 → `rect.height - 140`。原因：flex 居中会把总留白对半分，旧值只给上下各 55px，而玻璃顶栏 42+拖尾 20=62、
     dock 46+底距 16=62，导致顶边钻拖尾 7px、底边压 dock 7px（帧实测 img top 68 < trailerBottom 75）。
     改后实测 img top 83 > 75、img bottom 1015 < dockTop 1023，各留 8px 呼吸。若日后改标题栏高度/拖尾/dock 尺寸，必须重算这 70。
+40. **大图顶栏完全透明（2026-11-09，Feb 指定）**：`.titlebar` 加 `lb-clear` 类（`lib.lightbox.open` 时），
+    `.glass` 背景置透明并去掉 `backdrop-filter`，`::after` 拖尾 `display:none`。浏览模式不受影响。
+    注意大图「适应」仍按 70px 上留白算（顶栏变透明但控件仍占 42px 高），不要误以为可以去掉那段安全区。

@@ -105,7 +105,7 @@ function onKey(e) {
 </script>
 
 <template>
-  <header class="titlebar">
+  <header class="titlebar" :class="{ 'lb-clear': lib.lightbox.open }">
     <div class="glass"></div>
     <div class="drag-surface" @mousedown="startWindowDrag" @dblclick="onBarDblclick">
     <div class="bar-content">
@@ -221,6 +221,13 @@ function onKey(e) {
   background: linear-gradient(180deg, var(--glass-weak), transparent);
   pointer-events: none;
 }
+/* 大图模式：顶栏底完全透明（玻璃与拖尾都关掉），只留悬浮控件 */
+.titlebar.lb-clear .glass {
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+.titlebar.lb-clear::after { display: none; }
 .bar-content {
   position: relative; height: 42px; display: flex; align-items: center;
 }
