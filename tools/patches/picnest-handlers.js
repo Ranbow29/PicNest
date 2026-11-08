@@ -1789,18 +1789,23 @@ async function picnestAiCompare(cfg, dataA, dataB) {
   if (!reasoningModel) body.temperature = 0;
   if (reasoningModel) body.max_completion_tokens = 2048;
   else body.max_tokens = 1024;
+  // MiMo 聊天接口支持关闭思考；查重只需要一个 JSON 判断，关掉可显著降低单次延迟。
+  if (isMimo) body.thinking = { type: "disabled" };
   const ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
   const timer = setTimeout(() => { try { ctl?.abort(); } catch (e) {} }, 90000);
   try {
     let res = null;
-    for (let attempt = 0; attempt < 2; attempt++) {
+    for (let attempt = 0; attempt < 3; attempt++) {
       res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: "Bearer " + cfg.apiKey },
         body: JSON.stringify(body),
         signal: ctl?.signal,
       });
-      if (res.status === 429 || res.status >= 500) { if (attempt === 0) { await new Promise((r) => setTimeout(r, 1200)); continue; } }
+      if ((res.status === 429 || res.status >= 500) && attempt < 2) {
+        await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+        continue;
+      }
       break;
     }
     if (!res.ok) {
@@ -2007,25 +2012,51 @@ electron.ipcMain.handle("picnest-ai-dup-scan", async (event, folderId, rel, maxP
     const picked = pairs.slice(0, cap);
     send({ phase: "ai", done: 0, total: picked.length, candidates: pairs.length });
     const dataCache = new Map();
-    const getData = async (idx) => {
+    const getData = (idx) => {
       if (dataCache.has(idx)) return dataCache.get(idx);
-      const d = await picnestAiThumbData(valid[idx]);
-      dataCache.set(idx, d);
-      return d;
+      const task = picnestAiThumbData(valid[idx])
+        .then((d) => { dataCache.set(idx, d); return d; })
+        .catch((e) => { dataCache.delete(idx); throw e; });
+      dataCache.set(idx, task);
+      return task;
     };
     const confirmed = [];
     let checked = 0;
-    for (const p of picked) {
-      if (picnestAiCancel) return { ok: false, error: "已取消" };
-      let da = "", db = "";
-      try { da = await getData(p.i); db = await getData(p.j); } catch (e) { checked++; continue; }
-      const same = await picnestAiCompare(cfg, da, db);
-      checked++;
-      if (same) confirmed.push(p);
-      if (checked % 2 === 0 || checked === picked.length) {
-        send({ phase: "ai", done: checked, total: picked.length, candidates: pairs.length });
+    let nextPair = 0;
+    let fatalError = null;
+    const aiConcurrency = 4;
+    const worker = async () => {
+      while (!picnestAiCancel && !fatalError) {
+        const idx = nextPair++;
+        if (idx >= picked.length) return;
+        const p = picked[idx];
+        let da = "", db = "";
+        try {
+          da = await getData(p.i); db = await getData(p.j);
+        } catch (e) {
+          checked++;
+          if (checked % 2 === 0 || checked === picked.length) {
+            send({ phase: "ai", done: checked, total: picked.length, candidates: pairs.length });
+          }
+          continue;
+        }
+        try {
+          const same = await picnestAiCompare(cfg, da, db);
+          if (same) confirmed.push(p);
+        } catch (e) {
+          fatalError = e;
+          return;
+        } finally {
+          checked++;
+          if (checked % 2 === 0 || checked === picked.length) {
+            send({ phase: "ai", done: checked, total: picked.length, candidates: pairs.length });
+          }
+        }
       }
-    }
+    };
+    await Promise.all(Array.from({ length: Math.min(aiConcurrency, picked.length) }, worker));
+    if (fatalError) throw fatalError;
+    if (picnestAiCancel) return { ok: false, error: "已取消" };
     const parent = valid.map((_, i) => i);
     const find = (x) => { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
     const union = (a, b) => { a = find(a); b = find(b); if (a !== b) parent[b] = a; };
@@ -2063,6 +2094,7 @@ electron.ipcMain.handle("picnest-ai-dup-scan", async (event, folderId, rel, maxP
       colorLimit,
       colorBypass,
       phashLimit,
+      aiConcurrency,
       groups: groups.length,
       files: groups.reduce((s, g) => s + g.count, 0),
       wasted: groups.reduce((s, g) => s + g.wasted, 0),
