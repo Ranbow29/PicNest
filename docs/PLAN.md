@@ -203,6 +203,7 @@ PicNest/
 38. **视觉分层（2026-11-09，Feb 要求"白窗体悬浮于左栏、详情悬浮于正文"）**：新增 token `--shadow-float`
     （`0 1px 2px` 近影 + `0 12px 32px` 主影 + `0 28px 70px` 柔光）与 `--panel-edge`（顶缘 1px 高光）；
     主面板 `margin:10px 10px 10px 8px` + `inset 0 1px 0 --panel-edge`，靠留白和投影压在左栏之上；
-    详情浮岛 right/bottom 10（与主面板内缘对齐）、`--panel-inspector` 提到 0.94 并加 `backdrop-filter: blur(20px)`——
-    **0.85 半透明在文字密集页面会透底**，看起来像浮不起来；圆角维持主面板 6 / 浮岛 14（Feb 既有定稿，勿顺手改）。
+    详情浮岛 right/bottom 10（与主面板内缘对齐）、底色为竖向玻璃渐变（top .97 → mid .93@46% → low .86@74% → bot .60）
+    并加 `backdrop-filter: blur(22px)`——**0.85 半透明在文字密集页面会透底**，看起来像浮不起来；纯色实白又会失去玻璃感。
+    渐变必须「上实下透」（Feb 指定仿顶栏玻璃，方向相反），底部 0.60 是阅读性下限，再透按钮文字会掉对比。圆角维持主面板 6 / 浮岛 14（既有定稿，勿顺手改）。
     改定位时注意 `.insp-overlay` / `.browse` 两处 Inspector 与 resize-handle 的 bottom 要一起改（8→10）。
