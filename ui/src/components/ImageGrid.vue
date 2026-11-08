@@ -419,9 +419,11 @@ const cells = computed(() =>
     const isGif = /\.gif$/i.test(img.file_path)
     const hasThumb = img.thumbnail_path && img.thumbnail_path !== 'SKIP'
     const wantOriginal = (img.w > 500 || !hasThumb) && !isVideo && !isText
+    const ver = img.modify_time || 0
+    const withVer = (u) => (u ? `${u}?v=${ver}` : '')
     const src = isText
-      ? (hasThumb ? fileUrl(img.thumbnail_path) + '?v=' + (img.modify_time || 0) : '')
-      : ((hasThumb && !wantOriginal) ? fileUrl(img.thumbnail_path) : (isVideo ? '' : fileUrl(img.file_path)))
+      ? (hasThumb ? withVer(fileUrl(img.thumbnail_path)) : '')
+      : ((hasThumb && !wantOriginal) ? withVer(fileUrl(img.thumbnail_path)) : (isVideo ? '' : withVer(fileUrl(img.file_path))))
     const sizeText = (n) => !n ? '' : n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : n >= 1024 ? Math.round(n / 1024) + ' KB' : n + ' B'
     const res = isText
       ? ['文本', extOf(img.file_path).slice(1).toUpperCase(), sizeText(img.file_size)].filter(Boolean).join(' · ')

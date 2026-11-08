@@ -38,12 +38,14 @@ const fmtDate = (ms) => {
 }
 const fmtFolderDate = (ms) => fmtDate(ms)
 const extLabel = (p) => (p ? (p.split('.').pop() || '').toUpperCase() : '')
+const fullSrc = (im) => fileUrl(im.file_path) + '?v=' + (im.modify_time || 0)
 const thumbSrc = (im) => {
+  const ver = im.modify_time || 0
   if (im.thumbnail_path && im.thumbnail_path !== 'SKIP') {
-    return fileUrl(im.thumbnail_path) + (isTextPath(im.file_path) ? '?v=' + (im.modify_time || 0) : '')
+    return fileUrl(im.thumbnail_path) + '?v=' + ver
   }
   if (isTextPath(im.file_path) || isVideoPath(im.file_path)) return '' // 文本/视频无缩略图时不直链
-  return fileUrl(im.file_path)
+  return fileUrl(im.file_path) + '?v=' + ver
 }
 
 /* ---------- 单选图片 ---------- */
@@ -301,8 +303,8 @@ async function exportFolder() {
     <!-- ========== 单选图片 ========== -->
     <template v-if="mode === 'img' && img">
       <div class="preview">
-        <img v-if="!isTextImg && !isVideoImg" :src="fileUrl(img.file_path)" :class="{ gray: lib.grayscaleMode }" loading="lazy" draggable="false" />
-        <img v-else-if="img.thumbnail_path && img.thumbnail_path !== 'SKIP'" :src="fileUrl(img.thumbnail_path)" :class="{ gray: lib.grayscaleMode }" loading="lazy" draggable="false" />
+        <img v-if="!isTextImg && !isVideoImg" :src="fullSrc(img)" :class="{ gray: lib.grayscaleMode }" loading="lazy" draggable="false" />
+        <img v-else-if="img.thumbnail_path && img.thumbnail_path !== 'SKIP'" :src="thumbSrc(img)" :class="{ gray: lib.grayscaleMode }" loading="lazy" draggable="false" />
         <div v-else class="preview-doc">{{ extLabel(img.file_path) }}</div>
       </div>
 

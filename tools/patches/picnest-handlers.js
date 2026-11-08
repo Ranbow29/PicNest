@@ -776,6 +776,44 @@ electron.ipcMain.handle("picnest-crop-as", async (_event, filePath, opts) => {
   }
 });
 
+/* 保存旋转/翻转：写回原图（先备份到缓存），并让缩略图/色板失效重算 */
+electron.ipcMain.handle("picnest-apply-transform", async (_event, filePath, opts) => {
+  try {
+    const sharp = (await import("sharp")).default;
+    const rot = ((Math.round(Number(opts?.rot) || 0) % 360) + 360) % 360;
+    const flopX = !!opts?.flopX;
+    if (!rot && !flopX) return { ok: true, changed: false };
+    if (!fs.existsSync(filePath)) return { ok: false, error: "文件不存在" };
+    const ext = path.extname(filePath).toLowerCase();
+    let pipe = sharp(filePath);
+    if (flopX) pipe = pipe.flop(); // CSS 是 scaleX(-1) 后再 rotate，这里同序
+    if (rot) pipe = pipe.rotate(rot);
+    const buf = await pipe.toBuffer();
+    const key = crypto.createHash("md5").update(filePath).digest("hex");
+    const backup = path.join(cacheDir, `transform-backup-${key}-${Date.now()}${ext}`);
+    try { fs.copyFileSync(filePath, backup) } catch (e) {}
+    const tmp = filePath + ".picnest-transform-tmp";
+    fs.writeFileSync(tmp, buf);
+    fs.renameSync(tmp, filePath);
+    const m = await sharp(filePath).metadata();
+    const st = fs.statSync(filePath);
+    const width = m.width || 0;
+    const height = m.height || 0;
+    try {
+      getDb().prepare(
+        "UPDATE images SET width = ?, height = ?, file_size = ?, modify_time = ?, palettes = NULL, thumbnail_path = '' WHERE file_path = ?"
+      ).run(width, height, st.size, Math.floor(st.mtimeMs / 1e3), filePath);
+    } catch (e) {}
+    for (const suffix of [ext, ".webp", ".jpg"]) {
+      const t = path.join(cacheDir, key + suffix);
+      if (fs.existsSync(t)) { try { fs.unlinkSync(t); } catch (e) {} }
+    }
+    return { ok: true, changed: true, width, height, size: st.size, backup };
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
+  }
+});
+
 /* 兄弟排序关系（文件系统无顺序，存 config；key: 父目录 rel，根层用 __root__） */
 function picnestDirOrderRead() {
   try { return JSON.parse(fs.readFileSync(configPath, "utf-8")).picnestDirOrder || {} } catch (e) { return {} }

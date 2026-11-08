@@ -19,6 +19,7 @@ export const api = {
   readText: (filePath) => invoke('picnestReadText', filePath),
   saveText: (filePath, content, expectedMtimeMs) => invoke('picnestSaveText', filePath, content, expectedMtimeMs),
   findDuplicates: (folderId, rel) => invoke('picnestFindDuplicates', folderId, rel),
+  applyTransform: (filePath, opts) => invoke('picnestApplyTransform', filePath, opts),
   fillImageDims: (paths) => invoke('fillImageDims', paths),
   windowMinimize: () => p().windowMinimize?.(),
   windowMaximize: () => p().windowMaximize?.(),

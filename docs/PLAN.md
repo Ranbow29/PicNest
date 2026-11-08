@@ -283,3 +283,13 @@ PicNest/
     →「设为文件夹封面」→ `lib.setFolderCover` 反推图片所在文件夹 rel（库根散图 rel='' 不显示该项）；
     ImageGrid 子文件夹卡片封面优先用 coverThumb/cover，watch 依赖里要带 `dirMemory[f.rel].cover` 才能即时刷新。
     ③dev 稳定性：`vite.config.js` 开 `server.watch.usePolling:true, interval:350`，否则快速连续改文件会命中 Vite 旧模板缓存。
+46. **旋转/翻转写回 / 封面开关（2026-11-09，Feb 指定）**：
+    ①大图图片 dock 的「保存」按钮（`hasTransform = rot%360 || flopX` 时高亮）→ `picnest-apply-transform`。
+    sharp 顺序必须 **flop 后 rotate**（CSS 是 `rotate(...) scaleX(-1)`，右到左先翻后转）；90° 倍数不产生黑边。
+    写前 `fs.copyFileSync` 到 `cache/transform-backup-<md5>-<ts><ext>`，再 `.picnest-transform-tmp` + rename 原子覆写；
+    DB 更新 width/height/file_size/modify_time，`palettes=NULL`、`thumbnail_path=''`；删除 cache 里 `md5+ext/.webp/.jpg` 三种缩略图。
+    保存后 rot/flop 复位、fitNonce++，异步重生成缩略图；如果该图是某文件夹封面，要同步更新 `coverThumb`（否则卡片用到已删缩略图）。
+    **同路径覆写必须带版本号刷新**：图片/视频 URL 用 `?v=modify_time`（网格、大图、详情统一），否则 Chromium 吃旧缓存。
+    ②封面菜单是**文件夹级开关**：`folderHasCover = !!dirMemory[rel].cover`；已有手动封面时任意同夹图片的菜单都显示
+    「✓ 设为文件夹封面」，再按走 `clearFolderCover` 恢复自动；要换新封面需先清除再对新图设置（Feb 明确接受两次）。
+    判断必须用文件夹 cover 是否存在，而不是“这张图是不是 cover”，否则菜单不会变成开关态。

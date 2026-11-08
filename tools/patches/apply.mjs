@@ -158,6 +158,7 @@ const bridge = [
   '  picnestSaveText: (filePath, content, expectedMtimeMs) => electron.ipcRenderer.invoke("picnest-save-text", filePath, content, expectedMtimeMs),',
   '  picnestTextThumbnails: (paths) => electron.ipcRenderer.invoke("picnest-text-thumbnails", paths),',
   '  picnestFindDuplicates: (folderId, rel) => electron.ipcRenderer.invoke("picnest-find-duplicates", folderId, rel),',
+  '  picnestApplyTransform: (filePath, opts) => electron.ipcRenderer.invoke("picnest-apply-transform", filePath, opts),',
   '  onPicnestDupProgress: (cb) => electron.ipcRenderer.on("picnest-dup-progress", (_e, d) => cb(d)),',
   '  picnestMoveImage: (filePath, targetDir) => electron.ipcRenderer.invoke("picnest-move-image", filePath, targetDir),',
   '  picnestMoveDir: (dirPath, targetDir) => electron.ipcRenderer.invoke("picnest-move-dir", dirPath, targetDir),',

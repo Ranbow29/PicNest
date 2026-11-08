@@ -513,6 +513,43 @@ export const useLibrary = defineStore('library', {
       this.showNote(`已把「${rel.split('/').pop()}」的封面换掉`)
       return { ok: true, rel }
     },
+    async clearFolderCover(rel) {
+      if (!rel) return { ok: false }
+      await this.patchDirMemory(rel, { cover: '', coverThumb: '' })
+      this.showNote(`已恢复「${rel.split('/').pop()}」的自动封面`)
+      return { ok: true, rel }
+    },
+    /* 保存旋转/翻转到原图：写回后失效缩略图/色板，并刷新自身与可能的封面 */
+    async applyImageTransform() {
+      if (!this.lightbox.open) return { ok: false }
+      const p = this.lightbox.path
+      const img = this.images.find((i) => i.file_path === p)
+      if (!img) return { ok: false, error: '图片不在当前列表' }
+      const rot = this.viewer.rot % 360
+      const flopX = !!this.viewer.flopX
+      if (!rot && !flopX) return { ok: true, changed: false }
+      const r = await window.picrand.picnestApplyTransform(p, { rot, flopX })
+      if (!r?.ok) return r
+      if (r.width) img.width = r.width
+      if (r.height) img.height = r.height
+      if (r.size) img.file_size = r.size
+      img.modify_time = Math.floor(Date.now() / 1000)
+      img.thumbnail_path = ''
+      delete this.palettes[p]
+      this.viewer.rot = 0
+      this.viewer.flopX = false
+      this.viewer.fitNonce++
+      this.layoutTick++
+      api.generateThumbnailsBatch([p]).then(async (res) => {
+        const hit = (res?.results || [])[0]
+        const thumb = hit?.thumbnail_path || ''
+        if (thumb) { img.thumbnail_path = thumb; this.layoutTick++ }
+        for (const [rel, mem] of Object.entries(this.dirMemory)) {
+          if (mem.cover === p) await this.patchDirMemory(rel, { coverThumb: thumb })
+        }
+      }).catch(() => {})
+      return r
+    },
     /* 从正文进入子文件夹：把左侧树的祖先层（含库根）展开，选中行随即可见 */
     async revealDir(rel) {
       if (!rel) return

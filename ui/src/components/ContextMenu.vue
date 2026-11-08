@@ -39,6 +39,7 @@ const items = computed(() => {
   if (!menu.value.image) return []
   const nSel = lib.selectedPaths.length
   const relInfo = imageRelInfo()
+  const folderHasCover = !!relInfo.rel && !!lib.dirMemory[relInfo.rel]?.cover
   if (lib.view === 'trash') {
     return [
       { key: 'restore', label: nSel > 1 ? `还原到原文件夹（${nSel} 张）` : '还原到原文件夹', run: () => lib.restoreSelectedFromTrash() },
@@ -63,7 +64,11 @@ const items = computed(() => {
       run: () => lib.paste({ rootId: lib.activeRootId, rel: lib.currentDirRel }),
     }] : []),
     { key: 'copypath', label: '复制文件路径', run: async () => { try { await navigator.clipboard.writeText(menu.value.image.file_path) } catch {} } },
-    ...(relInfo.rel ? [{ key: 'cover', label: '设为文件夹封面', run: setAsFolderCover }] : []),
+    ...(relInfo.rel ? [{
+      key: 'cover',
+      label: (folderHasCover ? '✓ ' : '') + '设为文件夹封面',
+      run: () => (folderHasCover ? lib.clearFolderCover(relInfo.rel) : setAsFolderCover()),
+    }] : []),
     { key: 'dupes', label: '查找重复…', run: dupForImage },
     { key: 'uncat', label: nSel > 1 ? `移入未分类（${nSel} 张）` : '移入未分类', run: () => {
       const path = menu.value.image.file_path

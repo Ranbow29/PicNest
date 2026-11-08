@@ -12,16 +12,20 @@ const imgEl = ref(null)
 const dragging = ref(false)
 let lastX = 0, lastY = 0
 
-const url = computed(() => {
-  const img = lib.images.find((i) => i.file_path === lib.lightbox.path)
-  return img?.file_path ? fileUrl(img.file_path) : ''
-})
 const meta = computed(() => lib.images.find((i) => i.file_path === lib.lightbox.path) || null)
 const kind = computed(() => {
   const p = lib.lightbox.path
   return isVideoPath(p) ? 'video' : isTextPath(p) ? 'text' : 'image'
 })
+const url = computed(() => {
+  const img = meta.value
+  if (!img?.file_path) return ''
+  const base = fileUrl(img.file_path)
+  /* 图片/视频带版本号：保存旋转/翻转后同一路径能强制刷新 */
+  return kind.value === 'text' ? base : base + '?v=' + (img.modify_time || 0)
+})
 const fileName = computed(() => String(lib.lightbox.path || '').split(/[\\/]/).pop())
+const hasTransform = computed(() => lib.viewer.rot % 360 !== 0 || lib.viewer.flopX)
 
 function fitToWindow() {
   if (!stageEl.value || kind.value === 'text') return
@@ -103,6 +107,23 @@ function onContext(e) {
   if (!m) return
   e.preventDefault()
   lib.openContextMenu(e, m)
+}
+
+/* 把当前旋转/翻转写回原图（先备份、失效缩略图/色板） */
+const saveBusy = ref(false)
+const saveNote = ref('')
+async function saveTransform() {
+  if (!hasTransform.value || saveBusy.value) return
+  saveBusy.value = true
+  try {
+    const r = await lib.applyImageTransform()
+    saveNote.value = r?.ok ? (r.changed === false ? '没有可保存的变换' : '已保存到原图（原件已备份）') : (r?.error || '保存失败')
+  } catch (e) {
+    saveNote.value = String(e?.message || e)
+  } finally {
+    saveBusy.value = false
+    setTimeout(() => { saveNote.value = '' }, 2600)
+  }
 }
 
 /* ---------- 视频：自绘控制条（原生 UI 全关） ---------- */
@@ -645,6 +666,9 @@ function onKey(e) {
               :title="lib.viewer.cropMode ? '退出裁切' : '裁切（旋转/翻转时不可用）'"
               @click="toggleCrop">⛶</button>
       <i class="vsep" />
+      <button class="dock-btn wide" :class="{ on: hasTransform }" :disabled="!hasTransform || saveBusy"
+              title="保存旋转/翻转（写回原图，原件自动备份）" @click="saveTransform">{{ saveBusy ? '保存中…' : '保存' }}</button>
+      <i class="vsep" />
       <button class="dock-btn wide" title="原始大小（1:1）" @click="oneToOne">1:1</button>
       <button class="dock-btn wide" title="缩放到窗口大小" @click="fitToWindow">⤢ 适应</button>
     </div>
@@ -669,6 +693,7 @@ function onKey(e) {
     <div v-if="!url" class="empty">图片不存在</div>
     <!-- 裁剪结果 toast：不随 cropMode 消失（挂在舞台根层） -->
     <div v-if="cropNote" class="crop-toast">{{ cropNote }}</div>
+    <div v-if="saveNote" class="crop-toast">{{ saveNote }}</div>
 
     <!-- 应用裁剪：三选一（另存为副本 / 覆盖原图 / 取消） -->
     <div v-if="cropAsk" class="ask-veil" @mousedown.self="cropAsk = false">
