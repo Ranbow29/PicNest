@@ -141,7 +141,7 @@ async function dropOnLib(e, l) {
 
     <div v-if="lib.scanning" class="scanning">{{ lib.scanNote }}</div>
     <div v-else-if="!lib.tree" class="empty">还没有资料库，点 ⌂ 导入</div>
-    <div v-else class="tree">
+    <div v-else class="tree" @click.self="lib.clearDirSelection()">
       <DirTreeItem :node="lib.tree.tree" :depth="0" @open="openNode" />
     </div>
 

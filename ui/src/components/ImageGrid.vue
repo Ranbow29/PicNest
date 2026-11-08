@@ -325,6 +325,12 @@ const cells = computed(() =>
     }
   })
 )
+
+/* 选择：Shift=范围（按 filteredImages 可见顺序），Alt/Ctrl=加选/减选 */
+const selectedSet = computed(() => new Set(lib.selectedPaths))
+function onCellClick(e, img) {
+  lib.selectImage(img.file_path, { shift: e.shiftKey, add: e.altKey || e.ctrlKey || e.metaKey })
+}
 </script>
 
 <template>
@@ -332,7 +338,7 @@ const cells = computed(() =>
           @pointerdown.prevent="onRulerDown" @pointermove="onRulerMove"
           @pointerup="onRulerUp" @pointercancel="onRulerUp" />
   <div ref="viewport" class="grid-viewport" @wheel="onViewportWheel">
-    <div class="canvas" :style="{ height: totalH + 'px' }">
+    <div class="canvas" :style="{ height: totalH + 'px' }" @click.self="lib.clearImageSelection()">
       <!-- 编辑排印头块：滚动时整体穿入玻璃顶栏（同 Wenku8） -->
       <header :key="'head-' + waveSeq" class="page-head wi" style="--d: 0ms" @mousedown="startWindowDrag">
         <h2 class="head-big">{{ header.big }}</h2>
@@ -341,11 +347,11 @@ const cells = computed(() =>
       </header>
       <div
         v-for="img in cells" :key="img.id + '-' + waveSeq"
-        class="cell" :class="{ selected: img.file_path === lib.selectedPath }"
+        class="cell" :class="{ selected: selectedSet.has(img.file_path) }"
         :style="{ transform: `translate(${img.x}px, ${img.y + 0}px)`, width: img.w + 'px', height: img.h + 'px', '--d': waveDelay(img.gi) + 'ms' }"
         draggable="true"
         @dragstart="onCellDragStart($event, img)"
-        @click="lib.select(img.file_path)"
+        @click="onCellClick($event, img)"
         @dblclick="lib.openLightbox(img.file_path)"
         @contextmenu.prevent="lib.openContextMenu($event, img)"
       >

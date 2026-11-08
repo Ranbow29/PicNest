@@ -45,6 +45,10 @@ export const useLibrary = defineStore('library', {
     scanNote: '',
     error: '',
     selectedPath: null,
+    selectedPaths: [],        // 多选（Shift 范围 / Alt 加选）；selectedPath = 主选中（详情/大图）
+    selectionAnchor: null,    // Shift 范围锚点
+    selectedDirs: [],         // 文件夹多选（rel）
+    dirAnchor: null,
     hoverLabels: true,    // 网格悬停显字（M5 视图选项可关）
     layout: localStorage.getItem('picnest.layout') || 'grid',       // grid | justified | masonry（持久化）
     zoom: Number(localStorage.getItem('picnest.zoom')) || 1,          // 顶栏缩放滑条（持久化）
@@ -190,6 +194,8 @@ export const useLibrary = defineStore('library', {
       this.currentDirRel = null
       this.view = 'all'
       this.dirMemory = {}
+      this.clearDirSelection()
+      this.clearImageSelection()
       localStorage.setItem('picnest.activeRootId', String(id))
       await this.refreshTree()
       await this.loadImages()
@@ -226,6 +232,10 @@ export const useLibrary = defineStore('library', {
       if (this.currentDirRel === rel || (this.currentDirRel || '').startsWith(rel + '/')) {
         this.currentDirRel = newRel + this.currentDirRel.slice(rel.length)
       }
+      /* 多选 rel 同步迁移（选区不指向旧路径） */
+      const fixSel = (x) => (x === rel ? newRel : (x || '').startsWith(rel + '/') ? newRel + x.slice(rel.length) : x)
+      this.selectedDirs = this.selectedDirs.map(fixSel)
+      if (this.dirAnchor != null) this.dirAnchor = fixSel(this.dirAnchor)
       await this.refreshTree()
       await this.loadImages()
       return { ...r, rel: newRel }
@@ -270,6 +280,7 @@ export const useLibrary = defineStore('library', {
     async switchView(v) {
       if (this.lightbox.open) this.closeLightbox()
       collectiveShake()
+      this.clearDirSelection()
       this.view = v
       localStorage.setItem('picnest.lastView', v)
       if (v !== 'all') localStorage.setItem('picnest.lastDirRel', '')
@@ -300,6 +311,8 @@ export const useLibrary = defineStore('library', {
           this.images = await api.imagesByDir(this.activeRootId, this.currentDirRel, 0, 100000, inAll ? 'added' : this.sortMode, inAll ? false : this.sortAsc)
         }
         this.selectedPath = null
+        this.selectedPaths = []
+        this.selectionAnchor = null
         this.randomNonce++
         this.fillDimsInBackground()
         this.harvestThumbs().then(() => this.fillAllThumbsInBackground()) // 先收割存量，再单张串行补缺
@@ -323,12 +336,14 @@ export const useLibrary = defineStore('library', {
     async restoreFromTrash(path) {
       try { await window.picrand.picnestTrashRestore(path) } catch { /* 静默 */ }
       this.images = this.images.filter((i) => i.file_path !== path)
+      this.pruneImageSelection(path)
       await this.refreshTree()
     },
 
     async purgeFromTrash(path) {
       try { await window.picrand.picnestTrashPurge(path) } catch { /* 静默 */ }
       this.images = this.images.filter((i) => i.file_path !== path)
+      this.pruneImageSelection(path)
       await this.refreshTree()
     },
 
@@ -341,7 +356,7 @@ export const useLibrary = defineStore('library', {
       /* 从库中移除 = 只摘索引（DB 行删除），文件原地保留——曾误接软删（会进回收站视图） */
       try { await window.picrand.dbDeleteImage(path) } catch { /* 静默 */ }
       this.images = this.images.filter((i) => i.file_path !== path)
-      if (this.selectedPath === path) this.selectedPath = null
+      this.pruneImageSelection(path)
       await this.refreshTree()
     },
 
@@ -520,6 +535,8 @@ export const useLibrary = defineStore('library', {
           img.file_name = r.file_path.split('\\').pop().split('/').pop()
         }
         if (this.selectedPath === oldPath) this.selectedPath = r.file_path
+        this.selectedPaths = this.selectedPaths.map((p) => (p === oldPath ? r.file_path : p))
+        if (this.selectionAnchor === oldPath) this.selectionAnchor = r.file_path
         if (this.lightbox.path === oldPath) this.lightbox.path = r.file_path
         this.fillAllThumbsInBackground() // 新路径无缩略图，补
         return r
@@ -540,7 +557,7 @@ export const useLibrary = defineStore('library', {
         const r = await window.picrand.picnestMoveImage(filePath, targetDir)
         if (r?.ok) {
           this.images = this.images.filter((i) => i.file_path !== filePath)
-          if (this.selectedPath === filePath) this.selectedPath = null
+          this.pruneImageSelection(filePath)
           this.refreshTree()
         }
         return r
@@ -567,13 +584,19 @@ export const useLibrary = defineStore('library', {
       try {
         const r = await window.picrand.picnestMoveDir(srcPath, dstPath)
         if (r?.ok) {
-          // 当前目录若在被移走的子树里，修正到新路径
+          /* 移动后 rel 迁移：目录本身 → dstRel/原名；子树 → 新前缀（当前浏览位置与多选同步） */
           const srcPrefix = srcRel + '/'
-          const fix = (rel) => (rel === srcRel || rel?.startsWith(srcPrefix)
-            ? (dstRel ? dstRel + '/' + rel.slice(srcPrefix.length) : rel.slice(srcPrefix.length))
-            : rel)
+          const base = srcRel.split('/').pop()
+          const newRel = dstRel ? dstRel + '/' + base : base
+          const fix = (rel) => {
+            if (rel == null) return rel
+            if (rel === srcRel) return newRel
+            if (rel.startsWith(srcPrefix)) return newRel + '/' + rel.slice(srcPrefix.length)
+            return rel
+          }
           this.currentDirRel = fix(this.currentDirRel)
-          if (dstRel === this.currentDirRel || (this.currentDirRel || '').startsWith(dstRel + '/')) this.currentDirRel = dstRel || null
+          this.selectedDirs = this.selectedDirs.map((x) => fix(x))
+          if (this.dirAnchor != null) this.dirAnchor = fix(this.dirAnchor)
           await this.refreshTree()
           await this.loadImages()
         } else if (r?.error) {
@@ -856,8 +879,93 @@ export const useLibrary = defineStore('library', {
       return null
     },
 
-    select(path) {
+    /* 图片多选：单击=单选；Shift=按当前可见顺序范围选；Alt/Ctrl=加选/减选（可与 Shift 叠加） */
+    selectImage(path, opts = {}) {
+      const shift = !!opts.shift
+      const add = !!opts.add
+      const list = this.filteredImages.map((i) => i.file_path)
+      this.clearDirSelection()
+      if (shift && this.selectionAnchor != null) {
+        const a = list.indexOf(this.selectionAnchor)
+        const b = list.indexOf(path)
+        if (a >= 0 && b >= 0) {
+          const [lo, hi] = a < b ? [a, b] : [b, a]
+          const range = list.slice(lo, hi + 1)
+          this.selectedPaths = add ? [...new Set([...this.selectedPaths, ...range])] : range
+          this.selectedPath = path
+          return
+        }
+      }
+      if (add) {
+        const i = this.selectedPaths.indexOf(path)
+        if (i >= 0) {
+          this.selectedPaths.splice(i, 1)
+          if (this.selectedPath === path) this.selectedPath = this.selectedPaths[this.selectedPaths.length - 1] || null
+        } else {
+          this.selectedPaths.push(path)
+          this.selectedPath = path
+        }
+        this.selectionAnchor = path
+        return
+      }
+      this.selectedPaths = [path]
       this.selectedPath = path
+      this.selectionAnchor = path
+    },
+    clearImageSelection() {
+      this.selectedPath = null
+      this.selectedPaths = []
+      this.selectionAnchor = null
+    },
+    /* 图片从当前列表消失（删除/移走）时收缩多选，主选中顺延到最后一项 */
+    pruneImageSelection(path) {
+      this.selectedPaths = this.selectedPaths.filter((p) => p !== path)
+      if (this.selectionAnchor === path) this.selectionAnchor = this.selectedPaths[this.selectedPaths.length - 1] || null
+      if (this.selectedPath === path) this.selectedPath = this.selectedPaths[this.selectedPaths.length - 1] || null
+    },
+    /* 文件夹多选：可见顺序 = 展开态下的树遍历（根行默认展开，与 DirTreeItem 一致） */
+    flatVisibleDirs() {
+      const out = []
+      const mem = this.dirMemory || {}
+      const walk = (n, depth) => {
+        out.push(n.rel)
+        const open = mem[n.rel]?.expanded ?? depth === 0
+        if (open) for (const c of n.children || []) walk(c, depth + 1)
+      }
+      if (this.tree?.tree) walk(this.tree.tree, 0)
+      return out
+    },
+    selectDir(rel, opts = {}) {
+      const shift = !!opts.shift
+      const add = !!opts.add
+      this.clearImageSelection()
+      const list = this.flatVisibleDirs()
+      if (shift && this.dirAnchor != null) {
+        const a = list.indexOf(this.dirAnchor)
+        const b = list.indexOf(rel)
+        if (a >= 0 && b >= 0) {
+          const [lo, hi] = a < b ? [a, b] : [b, a]
+          const range = list.slice(lo, hi + 1)
+          this.selectedDirs = add ? [...new Set([...this.selectedDirs, ...range])] : range
+          return
+        }
+      }
+      if (add) {
+        const i = this.selectedDirs.indexOf(rel)
+        if (i >= 0) this.selectedDirs.splice(i, 1)
+        else this.selectedDirs.push(rel)
+        this.dirAnchor = rel
+        return
+      }
+      this.selectedDirs = [rel]
+      this.dirAnchor = rel
+    },
+    clearDirSelection() {
+      this.selectedDirs = []
+      this.dirAnchor = null
+    },
+    select(path) {
+      this.selectImage(path)
     },
 
     async markOpened(filePath) {
@@ -867,6 +975,11 @@ export const useLibrary = defineStore('library', {
     /* ---- M3: 灯箱 / 右键菜单 / 详情操作 ---- */
     openLightbox(path) {
       if (path) this.selectedPath = path
+      if (this.selectedPath) {
+        this.selectedPaths = [this.selectedPath]
+        this.selectionAnchor = this.selectedPath
+      }
+      this.clearDirSelection()
       this.lightbox = { open: true, path: path || this.selectedPath }
       if (this.lightbox.path) this.markOpened(this.lightbox.path)
       this.viewer.rot = 0; this.viewer.flopX = false
@@ -889,10 +1002,17 @@ export const useLibrary = defineStore('library', {
       const n = (i + dir + this.images.length) % this.images.length
       this.lightbox.path = this.images[n].file_path
       this.selectedPath = this.lightbox.path
+      this.selectedPaths = [this.lightbox.path]
+      this.selectionAnchor = this.lightbox.path
       this.markOpened(this.lightbox.path)
     },
     openContextMenu(e, image) {
       this.contextMenu = { open: true, x: e.clientX, y: e.clientY, image }
+      this.clearDirSelection()
+      if (!this.selectedPaths.includes(image.file_path)) {
+        this.selectedPaths = [image.file_path]
+        this.selectionAnchor = image.file_path
+      }
       this.selectedPath = image.file_path
     },
     openDirMenu(e, node) {
@@ -920,7 +1040,7 @@ export const useLibrary = defineStore('library', {
       if (this.lightbox.open && this.lightbox.path === path) this.closeLightbox()
       // watcher unlink → sync-db → 统一刷新；这里先本地摘除保证即时反馈
       this.images = this.images.filter((i) => i.file_path !== path)
-      if (this.selectedPath === path) this.selectedPath = null
+      this.pruneImageSelection(path)
       if (this.counts) this.counts.trash = (this.counts.trash ?? 0) + 1
     },
   },

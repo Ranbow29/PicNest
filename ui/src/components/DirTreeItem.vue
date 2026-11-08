@@ -4,7 +4,7 @@ import { useLibrary, extractDropUrls } from '../stores/library'
 import FolderIcon from './FolderIcon.vue'
 
 const props = defineProps({ node: { type: Object, required: true }, depth: { type: Number, default: 0 } })
-defineEmits(['open'])
+const emit = defineEmits(['open'])
 const lib = useLibrary()
 const expanded = ref(false)
 const dropMark = ref('') // '' | 'before' | 'after' | 'into'
@@ -28,7 +28,14 @@ function toggleExpand() {
 }
 
 function onContextMenu(e) {
+  if (!lib.selectedDirs.includes(rel.value)) lib.selectDir(rel.value, {})
   lib.openDirMenu(e, { rel: rel.value, node: props.node })
+}
+/* 单击=打开并单选；Shift=范围多选（不打开）；Alt/Ctrl=加选/减选（不打开） */
+function onClick(e) {
+  const add = e.altKey || e.ctrlKey || e.metaKey
+  lib.selectDir(rel.value, { shift: e.shiftKey, add })
+  if (!e.shiftKey && !add) emit('open', props.node)
 }
 
 function onDragStart(e) {
@@ -100,10 +107,10 @@ async function onDrop(e) {
 <template>
   <div class="dir-item">
     <div
-      class="row" :class="{ active: isActive, into: dropMark === 'into' }"
+      class="row" :class="{ active: isActive, into: dropMark === 'into', selected: lib.selectedDirs.includes(rel) }"
       :style="{ paddingLeft: 6 + depth * 13 + 'px' }"
       draggable="true"
-      @click="$emit('open', node)" @dblclick="toggleExpand"
+      @click="onClick" @dblclick="toggleExpand"
       @dragstart="onDragStart" @dragover="onDragOver" @dragleave="onDragLeave" @drop.prevent="onDrop"
       @contextmenu.prevent="onContextMenu"
     >
@@ -135,6 +142,11 @@ async function onDrop(e) {
 }
 .row.active .name { color: var(--accent); }
 .row.active :deep(.folder-ico) { filter: drop-shadow(0 0 3px var(--accent-weak)); }
+.row.selected { background: var(--accent-weak); }
+.row.selected::before {
+  content: ''; position: absolute; left: -1px; top: 5px; bottom: 5px;
+  width: 2.5px; border-radius: 2px; background: var(--accent); pointer-events: none;
+}
 .row.into { background: var(--accent-weak); outline: 1.5px dashed var(--accent); outline-offset: -2px; }
 .guide {
   position: absolute; top: -13px; bottom: -13px; width: 1px;
