@@ -132,6 +132,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           rootId: msg.rootId,
           rel: msg.rel || '',
           force: !!msg.force,
+          overwrite: !!msg.overwrite,
         }
         const data = await apiRaw('/api/v1/save', body)
         if (data.duplicate) {
@@ -144,7 +145,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         }
         if (!data.ok) throw new Error(data.error || '保存失败')
         if (msg.rootId != null) await chrome.storage.local.set({ rootId: Number(msg.rootId), rel: msg.rel || '' })
-        sendResponse({ ok: true, name: data.saved?.[0]?.name || '已保存' })
+        sendResponse({ ok: true, name: data.saved?.[0]?.name || '已保存', overwritten: data.saved?.[0]?.overwritten || 0 })
       } else {
         sendResponse({ ok: false, error: 'unknown message' })
       }

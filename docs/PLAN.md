@@ -328,6 +328,9 @@ PicNest/
     面板固定白底（不随浏览器暗色，任何主题页面都清晰）；同一份扩展可在 Chrome `chrome://extensions` 开发者模式加载
     （Chrome 137+ 禁用 `--load-extension` 命令行），只使用标准 MV3 API（contextMenus/scripting/notifications/storage/tabs）。
     **采集查重**：写入前按同根 + 同 file_size 筛候选（≤6）→ MD5；命中不落盘，返回 `duplicate` + matches；
-    按住面板显示「跳过 / 仍然保存」（`force:true`），右键/页面截图只提示跳过。历史重复不自动清理。
+    按住面板显示「跳过 / 覆盖旧图 / 仍然保存」：覆盖=先写新图，成功后旧匹配项 `deleted_at` 软删（图巢回收站）+ unlink，
+    物理文件保留；仍然保存=`force` 保留旧图再存一份。右键/页面截图只提示跳过。历史重复不自动清理。
+    **未分类图标**：移植 PicNest FolderIcon（Wenku8 `archive_icon_fold_art`，GPL-2.0-or-later）几何 + `springAt`，
+    面板打开/悬停时播放一次 640ms 弹簧手势。
     **防盗链/覆盖层**：服务端下载外部图片带页面 Referer + 常规 Edge/Chrome UA（Pixiv `i.pximg.net` 必需）；
     按住目标先用事件路径找 IMG，失败再 `elementsFromPoint` 按坐标找底层可见 `<img>`（Pinterest 覆盖层实测）。

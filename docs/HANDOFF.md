@@ -101,12 +101,12 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 
 ### 采集（M6，2026-11-09）
 - **自研开源 MV3 扩展** `extension/`（开发者模式加载；Edge/Chrome **同一份代码**，Chrome 137+ 已禁用 `--load-extension`，用 `chrome://extensions` UI）：右键图片「保存图片到图巢」、右键页面「保存页面截图到图巢」；popup 选「根文件 / 保存到」，选择全局有效。**重载扩展后已打开的网页必须刷新**——旧 content script 的 `chrome.runtime` 会失效，按住面板会提示「扩展已更新，请刷新此页面」（不是服务端问题）。
-- **网页内按住采集**（2026-11-09）：网页图片上左键按住 380ms（光标处环形进度）→ 双栏面板：左大片「未分类/库根」，右 = 当前根下**全部文件夹**（缩进列表，原生滚动）；**面板固定白底**（不随浏览器暗色，任何主题页面都清晰）；拖到目标松开保存；松开在面板空白则面板停留可点击；提前移动 >6px 取消，不影响页面自身拖拽/点击；Esc/点外部取消。Shadow DOM 注入，只挂主 frame 的 `<img>`；popup 可关闭该手势。**覆盖层 DIV 挡住图片时用 `elementsFromPoint` 按坐标找底层可见 `<img>`**（Pinterest 实测）。
+- **网页内按住采集**（2026-11-09）：网页图片上左键按住 380ms（光标处环形进度）→ 双栏面板：左大片「未分类/库根」，右 = 当前根下**全部文件夹**（缩进列表，原生滚动）；**面板固定白底**（不随浏览器暗色，任何主题页面都清晰）；左块用移植的 PicNest FolderIcon 几何（Wenku8 `archive_icon_fold_art`，GPL-2.0-or-later，来源见 `content.js` 注释），**面板打开 / 悬停未分类时播放 640ms 弹簧手势**；拖到目标松开保存；松开在面板空白则面板停留可点击；提前移动 >6px 取消，不影响页面自身拖拽/点击；Esc/点外部取消。Shadow DOM 注入，只挂主 frame 的 `<img>`；popup 可关闭该手势。**覆盖层 DIV 挡住图片时用 `elementsFromPoint` 按坐标找底层可见 `<img>`**（Pinterest 实测）。
 - **主进程本地服务** `127.0.0.1:41600`（`picnest-handlers.js` 的 M6 块）：`/api/v1/ping`、`context`、`folders?rootId=`、`save`。只写目标根内的文件（`picnestCollectTarget` 防 `..` 逃逸）；写入后 `insertImagesBatch` + `sync-db add` 事件，渲染层自行补缩略图/尺寸；`url/annotation/star` 写 DB。下载外部图片时带**页面 Referer + 常规 Edge/Chrome UA**（Pixiv `i.pximg.net` 防盗链必需；扩展传的 `url` 即页面 URL）。
 - **安全**：绑定 127.0.0.1；Origin 只放行 `chrome-extension://` / `extension://` / 本机 localhost 页面；CORS + Private-Network 预检；**暂无 token**（开源发布前补）。
 - **目标根跟随活动根**：store `syncCollectRoot()` 在 init / addRootByPath / switchRoot / removeRoot 调 `picnest-collect-set-root`；扩展可另选根（服务端 `picnestCollectRootId`，默认第一个）。
 - **Eagle 兼容层暂缓**：只读调研确认 Eagle for Edge 3.1.29 用 `41595`（library/folder/tag/item addFromURL）+ `41593`（form：image / save-url / screen capture / import-images）。但 Eagle 运行时会占这两个端口（不能共存），且闭源扩展 EULA 需在开源前核实；协议事实记录在此，代码不抄、不捆绑。未来作为「Eagle 关闭时可选开启」的桥。
-- **采集查重**：服务端写入前按「同根 + 同 file_size」筛候选（≤6）→ MD5 确认；命中则不落盘，返回 `duplicate` + matches（文件名/所在夹）。按住面板显示「图库里已有相同图片」+ **跳过 / 仍然保存**（`force:true`）；右键存图与页面截图只提示跳过（通知/文案）。只查目标根内、未软删；历史已有重复需用应用内查重清理。
+- **采集查重**：服务端写入前按「同根 + 同 file_size」筛候选（≤6）→ MD5 确认；命中则不落盘，返回 `duplicate` + matches（文件名/所在夹）。按住面板显示「图库里已有相同图片」+ **跳过 / 覆盖旧图 / 仍然保存**：覆盖=先写新图，成功后把旧匹配项软删（`deleted_at`，进图巢回收站）并发 unlink，物理文件保留可彻底删除；仍然保存=`force:true` 保留旧图再存一份。右键存图与页面截图只提示跳过（通知/文案）。只查目标根内、未软删；历史已有重复需用应用内查重清理。
 - 扩展 v0.1 边界：图片 + 可见区域截图；不支持整页滚动/视频/PDF；不发送标签（标签系统未做）；服务端下载不带 Cookie，防盗链图片可能失败；按住采集只支持主 frame 的 `<img>`（跨域 iframe、CSS 背景图暂不做）。
 
 ### 详情 / 视觉分层

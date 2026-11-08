@@ -28,7 +28,59 @@
   } catch { /* 扩展上下文失效时不影响页面 */ }
 
   const FOLDER_ICO = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M1.8 4.3h4l1.4 1.6h7v6.3H1.8z"/></svg>'
-  const NEST_ICO = '<svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 17c0 6 5 10 11 10s11-4 11-10"/><path d="M7 15c1-3 4-5 9-5s8 2 9 5"/><ellipse cx="16" cy="12" rx="4.2" ry="5" fill="currentColor" stroke="none" opacity=".85"/></svg>'
+  /* 未分类图标：移植 PicNest FolderIcon（Wenku8 archive_icon_fold_art, GPL-2.0-or-later） */
+  const GESTURE_MS = 640
+  const KF_T = [0, 0.1, 0.36, 0.64, 0.82, 1]
+  const KF_V = [0, -0.12, 1, -0.2, 0.065, 0]
+  function easeInOutCubic(t) {
+    return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2
+  }
+  function springAt(t) {
+    if (t <= 0) return KF_V[0]
+    if (t >= 1) return KF_V[KF_V.length - 1]
+    for (let i = 1; i < KF_T.length; i++) {
+      if (t <= KF_T[i]) {
+        const k = (t - KF_T[i - 1]) / (KF_T[i] - KF_T[i - 1])
+        return KF_V[i - 1] + (KF_V[i] - KF_V[i - 1]) * easeInOutCubic(k)
+      }
+    }
+    return 0
+  }
+  function layerAt(t, delayMs) {
+    const d = delayMs / GESTURE_MS
+    const tt = t <= d ? 0 : (t - d) / (1 - d)
+    return springAt(tt)
+  }
+  function folderIconSvg() {
+    return `<svg class="folder-ico" data-folder-ico viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round">
+      <path class="fi-back" d="M6 4.6 L15.8 4.6 L18.6 7.4 L18.6 17.9 L6 17.9 Z" fill="currentColor" stroke="currentColor" stroke-width="1.4" opacity=".4"/>
+      <path class="fi-front" d="M3 8.4 L8 8.4 L10.4 10 L21.5 10 L19.7 20.2 L4.4 20.2 Z" fill="currentColor" stroke="currentColor" stroke-width="1.4" opacity=".85"/>
+      <circle cx="6.2" cy="16.7" r="1.15" fill="#fff" stroke="none" opacity=".95"/>
+      <line x1="9.2" y1="17.4" x2="12.5" y2="17.4" stroke="#fff" stroke-width="1.4" opacity=".95"/>
+    </svg>`
+  }
+  function setFolderPhase(svg, p, q) {
+    const cardY = 4.6 - 2.6 * q
+    const lip = (b) => b + 2.1 * p
+    const back = svg.querySelector('.fi-back')
+    const front = svg.querySelector('.fi-front')
+    if (back) back.setAttribute('d', `M6 ${cardY} L15.8 ${cardY} L18.6 ${cardY + 2.8} L18.6 ${cardY + 13.3} L6 ${cardY + 13.3} Z`)
+    if (front) front.setAttribute('d', `M3 ${lip(8.4)} L8 ${lip(8.4)} L10.4 ${lip(10)} L21.5 ${lip(10)} L19.7 20.2 L4.4 20.2 Z`)
+  }
+  function playFolderIcon(panel) {
+    const svg = panel?.querySelector('[data-folder-ico]')
+    if (!svg) return
+    cancelAnimationFrame(svg._picnestRaf)
+    const t0 = performance.now()
+    const tick = (now) => {
+      if (!svg.isConnected) { svg._picnestRaf = 0; return }
+      const t = (now - t0) / GESTURE_MS
+      if (t >= 1) { setFolderPhase(svg, 0, 0); svg._picnestRaf = 0; return }
+      setFolderPhase(svg, layerAt(t, 0), layerAt(t, 55))
+      svg._picnestRaf = requestAnimationFrame(tick)
+    }
+    svg._picnestRaf = requestAnimationFrame(tick)
+  }
 
   const CSS = `
     :host { all: initial; }
@@ -58,7 +110,8 @@
       background: #fbfaf7;
       display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
       cursor: pointer; color: #6f6a60; text-align: center; padding: 12px 8px; }
-    .uncat svg { width: 30px; height: 30px; color: #b4884b; }
+    .uncat svg { width: 34px; height: 34px; color: #b4884b; overflow: visible; }
+    .folder-ico { display: block; }
     .uncat b { color: #262626; font-size: 12.5px; }
     .uncat span { font-size: 10.5px; }
     .uncat:hover, .uncat.on { border-color: #b4884b; background: rgba(180,136,75,.10); }
@@ -85,6 +138,7 @@
     .dup .btns { display: flex; gap: 8px; }
     .dup button { flex: 1; height: 27px; border-radius: 7px; border: 1px solid rgba(194,90,77,.4);
       background: #fff; color: #8a3b32; font-size: 11.5px; cursor: pointer; }
+    .dup button[data-act="overwrite"] { border-color: rgba(180,68,59,.5); color: #b4463b; }
     .dup button[data-act="force"] { background: #b4884b; border-color: #b4884b; color: #fff; }
     .dup button:hover { filter: brightness(.98); }
     @media (prefers-color-scheme: dark) {
@@ -113,6 +167,7 @@
         }
       }
       if (act === 'skip') { closePanel(); return }
+      if (act === 'overwrite') { saveTo(session, session.pendingRel, false, true); return }
       if (act === 'force') { saveTo(session, session.pendingRel, true); return }
       const row = rowFromEvent(e)
       if (row) saveTo(session, row.dataset.rel)
@@ -196,10 +251,15 @@
     const skip = document.createElement('button')
     skip.dataset.act = 'skip'
     skip.textContent = '跳过'
+    const overwrite = document.createElement('button')
+    overwrite.dataset.act = 'overwrite'
+    overwrite.textContent = '覆盖旧图'
+    overwrite.title = '删除根文件下的旧图（移入图巢回收站），保存新图'
     const force = document.createElement('button')
     force.dataset.act = 'force'
     force.textContent = '仍然保存'
     btns.appendChild(skip)
+    btns.appendChild(overwrite)
     btns.appendChild(force)
     dup.appendChild(title)
     dup.appendChild(ul)
@@ -269,7 +329,7 @@
     panel.innerHTML = `
       <div class="head"><span>保存到</span><b class="root-name"></b><span class="sub">PicNest 图巢</span></div>
       <div class="body">
-        <div class="uncat" data-rel="">${NEST_ICO}<b>未分类</b><span>库根</span></div>
+        <div class="uncat" data-rel="">${folderIconSvg()}<b>未分类</b><span>库根</span></div>
         <div class="listwrap">
           <div class="cap">文件夹</div>
           <div class="list"></div>
@@ -315,8 +375,10 @@
     }
     const uncat = panel.querySelector('.uncat')
     if (last.rootId != null && String(last.rootId) === String(s.root?.id) && (last.rel || '') === '') uncat.classList.add('last')
+    uncat.addEventListener('mouseenter', () => playFolderIcon(panel))
     setHint(s)
     positionPanel(s, panel)
+    if (s.folders || error) playFolderIcon(panel)
   }
 
   function positionPanel(s, panel) {
@@ -363,7 +425,7 @@
     }
   }
 
-  async function saveTo(s, rel, force) {
+  async function saveTo(s, rel, force, overwrite) {
     if (s.saving || !s.root) return
     s.saving = true
     s.pendingRel = rel
@@ -392,6 +454,7 @@
         rootId: s.root.id,
         rel,
         force: !!force,
+        overwrite: !!overwrite,
       }, (res) => {
         if (session !== s) return
         if (res?.duplicate) {
@@ -403,7 +466,8 @@
           return
         }
         if (res?.ok) {
-          setStatus(s, '', '已保存：' + (res.name || ''))
+          const extra = res.overwritten ? `（旧图 ${res.overwritten} 张已进回收站）` : ''
+          setStatus(s, '', '已保存：' + (res.name || '') + extra)
           setTimeout(() => { if (session === s) closePanel() }, 750)
         } else {
           s.saving = false

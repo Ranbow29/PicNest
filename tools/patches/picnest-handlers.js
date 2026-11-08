@@ -1834,19 +1834,33 @@ async function picnestCollectSaveOne(item) {
     base = picnestCollectSafeName(item.title || "图片");
   }
   if (!/^image\//i.test(contentType) && !/\.(jpe?g|png|gif|webp|avif|bmp|svg)$/i.test(ext)) throw new Error("不是图片内容");
-  if (!item.force) {
-    const matches = picnestCollectDupes(t.root, buf);
-    if (matches.length) {
-      return { ok: false, duplicate: true, matches, rootId: t.root.id, rel: t.rel, error: "已存在相同图片，未保存" };
-    }
+  /* 覆盖模式：先照常写新图，成功后再把旧匹配项软删（进图巢回收站）；普通模式命中即拦截 */
+  const matches = (item.overwrite || !item.force) ? picnestCollectDupes(t.root, buf) : [];
+  if (matches.length && !item.overwrite && !item.force) {
+    return { ok: false, duplicate: true, matches, rootId: t.root.id, rel: t.rel, error: "已存在相同图片，未保存" };
   }
   let dest = path.join(t.abs, base + ext);
   let n = 2;
   while (fs.existsSync(dest)) dest = path.join(t.abs, `${base} (${n++})${ext}`);
   fs.writeFileSync(dest, buf);
   picnestCollectInsert(t.root, dest, item);
+  let overwritten = 0;
+  if (matches.length && item.overwrite) {
+    const now = Date.now();
+    const stmt = getDb().prepare("UPDATE images SET deleted_at = ?, trash_group = NULL WHERE file_path = ? AND deleted_at IS NULL");
+    for (const m of matches) {
+      try {
+        const r = stmt.run(now, m.file_path);
+        if (r.changes) {
+          overwritten++;
+          if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("sync-db", { type: "unlink", path: m.file_path });
+        }
+      } catch (e) {}
+    }
+    picnestCollectLog("overwrite", `new=${dest}`, `old=${overwritten}`);
+  }
   picnestCollectLog("saved", dest, `${buf.length}B`, `root=${t.root.id}`, `rel=${t.rel || "__root__"}`);
-  return { ok: true, saved: dest, name: path.basename(dest), rootId: t.root.id, rel: t.rel };
+  return { ok: true, saved: dest, name: path.basename(dest), rootId: t.root.id, rel: t.rel, overwritten };
 }
 function picnestCollectCors(req, res) {
   const origin = String(req.headers.origin || "");
