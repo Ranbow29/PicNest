@@ -1873,6 +1873,23 @@ async function picnestAiDHash(file) {
   }
   return [a, b];
 }
+// 32×32 RGB 色块签名：每块量化到 3bit/通道（512 色），比较时统计有多少块颜色不同。
+// 8×8 太粗（文字/小结构会被平均掉），32×32 能区分“同版式不同内容”，又比逐像素抗压缩。
+async function picnestAiColorBlocks(file) {
+  const sharp = (await import("sharp")).default;
+  const src = file.thumbnail_path && fs.existsSync(file.thumbnail_path) ? file.thumbnail_path : file.file_path;
+  return sharp(src).rotate().resize(32, 32, { fit: "fill" })
+    .flatten({ background: "#ffffff" }).removeAlpha().raw().toBuffer();
+}
+function picnestAiColorDiff(a, b) {
+  let diff = 0;
+  for (let i = 0; i < a.length; i += 3) {
+    const ca = ((a[i] >> 5) << 6) | ((a[i + 1] >> 5) << 3) | (a[i + 2] >> 5);
+    const cb = ((b[i] >> 5) << 6) | ((b[i + 1] >> 5) << 3) | (b[i + 2] >> 5);
+    if (ca !== cb) diff++;
+  }
+  return diff;
+}
 async function picnestAiThumbData(file) {
   const sharp = (await import("sharp")).default;
   const src = file.thumbnail_path && fs.existsSync(file.thumbnail_path) ? file.thumbnail_path : file.file_path;
@@ -1912,29 +1929,43 @@ electron.ipcMain.handle("picnest-ai-dup-scan", async (event, folderId, rel, maxP
       if (!PICNEST_AI_IMG_EXT.has(path.extname(r.file_path).toLowerCase())) continue;
       try {
         const st = fs.statSync(r.file_path);
-        if (st.isFile() && st.size > 0) images.push({ ...r, size: st.size, hash: null });
+        if (st.isFile() && st.size > 0) images.push({ ...r, size: st.size, hash: null, color: null });
       } catch (e) {}
     }
     send({ phase: "hash", done: 0, total: images.length });
     let done = 0;
     await picnestMapLimit(images, 4, async (im) => {
-      try { im.hash = await picnestAiDHash(im); } catch (e) { im.hash = null; }
+      const [h, c] = await Promise.allSettled([picnestAiDHash(im), picnestAiColorBlocks(im)]);
+      im.hash = h.status === "fulfilled" ? h.value : null;
+      im.color = c.status === "fulfilled" ? c.value : null;
       done++;
       if (done % 4 === 0 || done === images.length) send({ phase: "hash", done, total: images.length });
     });
     const valid = images.filter((im) => im.hash);
     const threshold = 10;
+    const colorLimit = 128;   // 32×32 中允许 128 块（12.5%）颜色量化不同
+    const colorBypass = 4;    // dHash 距离 ≤4：结构几乎一致，可能是换色/裁剪，直接放行
+    let dhashPairs = 0;
+    let colorFiltered = 0;
     let pairs = [];
     for (let i = 0; i < valid.length; i++) {
       for (let j = i + 1; j < valid.length; j++) {
         const d = picnestAiHam(valid[i].hash, valid[j].hash);
         if (d <= threshold) {
-          pairs.push({ i, j, d });
-          if (pairs.length > 4000) { pairs.sort((x, y) => x.d - y.d); pairs.length = 1000; }
+          dhashPairs++;
+          let cd = null;
+          if (valid[i].color && valid[j].color) cd = picnestAiColorDiff(valid[i].color, valid[j].color);
+          if (d <= colorBypass || cd == null || cd <= colorLimit) {
+            pairs.push({ i, j, d, color: cd });
+            if (pairs.length > 20000) {
+              pairs.sort((x, y) => x.d - y.d || (x.color ?? 9999) - (y.color ?? 9999));
+              pairs.length = 10000;
+            }
+          } else colorFiltered++;
         }
       }
     }
-    pairs.sort((x, y) => x.d - y.d);
+    pairs.sort((x, y) => x.d - y.d || (x.color ?? 9999) - (y.color ?? 9999));
     const cap = Math.max(1, Math.min(200, Number(maxPairs) || 40));
     const picked = pairs.slice(0, cap);
     send({ phase: "ai", done: 0, total: picked.length, candidates: pairs.length });
@@ -1985,11 +2016,15 @@ electron.ipcMain.handle("picnest-ai-dup-scan", async (event, folderId, rel, maxP
     const stats = {
       scopes: images.length,
       hashable: valid.length,
+      dhashPairs,
+      colorFiltered,
       candidates: pairs.length,
       checked,
       caps: cap,
       capped: pairs.length > picked.length,
       threshold,
+      colorLimit,
+      colorBypass,
       groups: groups.length,
       files: groups.reduce((s, g) => s + g.count, 0),
       wasted: groups.reduce((s, g) => s + g.wasted, 0),
