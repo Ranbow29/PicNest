@@ -2,6 +2,7 @@
 import { computed, ref, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useLibrary } from '../stores/library'
 import { fileUrl, api } from '../api'
+import { isTextPath, isVideoPath, extOf } from '../lib/fileKinds'
 
 // 大图工作区：正文内的编辑舞台（顶栏由 TitleBar 按模式变形；底部悬浮工具条 ZCode 输入口风格）
 const lib = useLibrary()
@@ -16,17 +17,30 @@ const url = computed(() => {
   return img?.file_path ? fileUrl(img.file_path) : ''
 })
 const meta = computed(() => lib.images.find((i) => i.file_path === lib.lightbox.path) || null)
+const kind = computed(() => {
+  const p = lib.lightbox.path
+  return isVideoPath(p) ? 'video' : isTextPath(p) ? 'text' : 'image'
+})
+const fileName = computed(() => String(lib.lightbox.path || '').split(/[\\/]/).pop())
 
 function fitToWindow() {
-  const img = meta.value
-  if (!stageEl.value || !img?.width) { lib.viewer.scale = 1; return }
+  if (!stageEl.value || kind.value === 'text') return
+  let iw = 0, ih = 0
+  if (kind.value === 'video') {
+    const v = videoEl.value
+    if (!v || !v.videoWidth) return
+    iw = v.videoWidth; ih = v.videoHeight
+  } else {
+    const img = meta.value
+    if (!img?.width) { lib.viewer.scale = 1; return }
+    const swapped = lib.viewer.rot % 180 !== 0
+    iw = swapped ? img.height : img.width
+    ih = swapped ? img.width : img.height
+  }
   const rect = stageEl.value.getBoundingClientRect()
   const inspW = lib.viewer.showInspector ? lib.inspectorWidth + 16 : 0
   const availW = Math.max(120, rect.width - inspW - 32)
   const availH = Math.max(120, rect.height - 110) /* 顶部玻璃 42 + 拖尾 + 底部工具条 */
-  const swapped = lib.viewer.rot % 180 !== 0
-  const iw = swapped ? img.height : img.width
-  const ih = swapped ? img.width : img.height
   lib.viewer.scale = Math.min(availW / iw, availH / ih) || 1 /* 按工作区适配，可放大不超出 */
   lib.viewer.tx = 0; lib.viewer.ty = 0
 }
@@ -58,12 +72,13 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 
 function onWheel(e) {
   if (lib.viewer.cropMode) return // 裁切中禁缩放：图片矩形一变，裁剪框坐标体系就失配
+  if (kind.value === 'text') return // 文本编辑器里滚轮 = 滚动正文
   e.preventDefault()
     const k = e.deltaY < 0 ? 1.12 : 1 / 1.12
   lib.viewer.scale = Math.min(8, Math.max(0.05, lib.viewer.scale * k))
 }
 function onDown(e) {
-  if (lib.viewer.cropMode) return // 裁切中禁用平移，由裁切层接管
+  if (lib.viewer.cropMode || kind.value !== 'image') return // 文本/视频不拖拽平移
   dragging.value = true; lastX = e.clientX; lastY = e.clientY
 }
 function onMove(e) {
@@ -74,6 +89,209 @@ function onMove(e) {
   lastX = e.clientX; lastY = e.clientY
 }
 function onUp() { dragging.value = false }
+
+/* ---------- 视频：自绘控制条（原生 UI 全关） ---------- */
+const videoEl = ref(null)
+const vid = ref({ time: 0, dur: 0, playing: false, vol: 0.8, muted: false, loop: false, ready: false })
+const seekDrag = ref(false)
+const progressPct = computed(() => (vid.value.dur ? Math.min(100, (vid.value.time / vid.value.dur) * 100) : 0))
+function fmtTime(s) {
+  if (!Number.isFinite(s) || s < 0) s = 0
+  const m = Math.floor(s / 60), sec = Math.floor(s % 60)
+  return `${m}:${String(sec).padStart(2, '0')}`
+}
+function onVideoMeta() {
+  const v = videoEl.value
+  if (!v) return
+  vid.value.dur = Number.isFinite(v.duration) ? v.duration : 0
+  vid.value.ready = true
+  const img = meta.value
+  if (img && v.videoWidth && (!img.width || !img.height)) {
+    img.width = v.videoWidth; img.height = v.videoHeight
+    lib.layoutTick++
+  }
+  v.volume = vid.value.vol
+  v.muted = vid.value.muted
+  v.loop = vid.value.loop
+  nextTick(fitToWindow)
+  v.play?.().catch(() => {}) // 双击进入已有用户手势；被策略拦截就等用户点 ▶
+}
+function onVideoTime() { if (videoEl.value) vid.value.time = videoEl.value.currentTime || 0 }
+function togglePlay() {
+  const v = videoEl.value
+  if (!v) return
+  if (v.paused) v.play?.().catch(() => {})
+  else v.pause()
+}
+function seekTo(clientX, track) {
+  const v = videoEl.value
+  if (!v || !vid.value.dur) return
+  const r = track.getBoundingClientRect()
+  const f = Math.max(0, Math.min(1, (clientX - r.left) / r.width))
+  v.currentTime = f * vid.value.dur
+  vid.value.time = v.currentTime
+}
+function onSeekDown(e) {
+  seekDrag.value = true
+  try { e.currentTarget.setPointerCapture(e.pointerId) } catch { /* 合成指针无法捕获 */ }
+  seekTo(e.clientX, e.currentTarget)
+}
+function onSeekMove(e) { if (seekDrag.value) seekTo(e.clientX, e.currentTarget) }
+function onSeekUp() { seekDrag.value = false }
+function toggleMute() {
+  const v = videoEl.value
+  if (!v) return
+  v.muted = !v.muted
+  vid.value.muted = v.muted
+}
+function setVolume(e) {
+  const v = videoEl.value
+  if (!v) return
+  const val = Number(e.target.value)
+  v.volume = val
+  v.muted = val <= 0
+  vid.value.vol = val
+  vid.value.muted = v.muted
+}
+function toggleLoop() {
+  const v = videoEl.value
+  if (!v) return
+  v.loop = !v.loop
+  vid.value.loop = v.loop
+}
+async function toggleFullscreen() {
+  try {
+    if (document.fullscreenElement) await document.exitFullscreen()
+    else await stageEl.value?.requestFullscreen?.()
+  } catch { /* 静默 */ }
+}
+watch(() => [lib.lightbox.open, lib.lightbox.path], ([open]) => {
+  if (!open || kind.value !== 'video') return
+  nextTick(() => {
+    const v = videoEl.value
+    if (!v) return
+    v.volume = vid.value.vol
+    v.muted = vid.value.muted
+    v.loop = vid.value.loop
+    v.play?.().catch(() => {})
+  })
+})
+
+/* ---------- 文本：内置编辑器（自动保存 + Ctrl+S；>2MB 只读预览） ---------- */
+const textEl = ref(null)
+const textFont = ref(Number(localStorage.getItem('picnest.textFont')) || 14)
+const wrapText = ref(localStorage.getItem('picnest.textWrap') !== '0')
+const emptyText = () => ({ path: '', draft: '', saved: '', encoding: '', eol: '\n', size: 0, mtimeMs: 0, truncated: false, readOnly: false, loading: false, dirty: false, conflict: false, note: '', savedAt: 0 })
+const textState = ref(emptyText())
+let textTimer = null
+const lineCount = computed(() => (textState.value.draft ? textState.value.draft.split('\n').length : 0))
+const saveLabel = computed(() => {
+  const st = textState.value
+  if (st.loading) return '载入中…'
+  if (st.readOnly) return '只读'
+  if (st.note) return '保存失败'
+  if (st.dirty) return '未保存'
+  return st.savedAt ? '已保存' : ''
+})
+function setTextFont(v) {
+  textFont.value = Math.max(11, Math.min(28, v))
+  localStorage.setItem('picnest.textFont', String(textFont.value))
+}
+function toggleWrap() {
+  wrapText.value = !wrapText.value
+  localStorage.setItem('picnest.textWrap', wrapText.value ? '1' : '0')
+}
+async function loadText(p) {
+  const st = textState.value
+  st.path = p
+  st.loading = true
+  st.note = ''
+  try {
+    const r = await api.readText(p)
+    if (textState.value !== st || st.path !== p) return // 已切走
+    if (!r?.ok) { st.note = r?.error || '读取失败'; st.readOnly = true; return }
+    st.draft = r.content || ''
+    st.saved = st.draft
+    st.encoding = r.encoding || ''
+    st.eol = r.eol || '\n'
+    st.size = r.size || 0
+    st.mtimeMs = r.mtimeMs || 0
+    st.truncated = !!r.truncated
+    st.readOnly = !!r.truncated
+    st.dirty = false
+    st.conflict = false
+    st.savedAt = 0
+  } catch (e) { st.note = String(e?.message || e) }
+  finally { if (textState.value === st) st.loading = false }
+}
+function textContentForSave(st) {
+  return st.eol === '\r\n' ? st.draft.replace(/\r?\n/g, '\r\n') : st.draft.replace(/\r\n/g, '\n')
+}
+async function saveTextNow(force = false) {
+  const st = textState.value
+  if (!st.path || st.readOnly || st.loading) return
+  if (!st.dirty && !force) return
+  clearTimeout(textTimer)
+  if (!force) force = st.conflict // 冲突后再点一次保存 = 覆盖
+  const content = textContentForSave(st)
+  try {
+    const r = await window.picrand.picnestSaveText(st.path, content, force ? 0 : st.mtimeMs)
+    if (textState.value !== st) return // 期间已切走，不覆盖新状态
+    if (r?.ok) {
+      st.saved = st.draft
+      st.dirty = false
+      st.conflict = false
+      st.mtimeMs = r.mtimeMs || st.mtimeMs
+      st.encoding = r.encoding || 'UTF-8'
+      st.savedAt = Date.now()
+      st.note = ''
+      const img = lib.images.find((i) => i.file_path === st.path)
+      if (img) {
+        if (r.size) img.file_size = r.size
+        img.modify_time = Math.floor((r.mtimeMs || Date.now()) / 1000)
+        /* 缩略图已失效：立刻重画纸面预览（URL 带修改时间版本号，浏览器不会吃旧缓存） */
+        api.generateTextThumbnails([st.path]).then((t) => {
+          const hit = (t?.results || [])[0]
+          if (hit?.thumbnail_path && textState.value === st) {
+            img.thumbnail_path = hit.thumbnail_path
+            lib.layoutTick++
+          }
+        }).catch(() => {})
+      }
+    } else if (r?.conflict) {
+      st.conflict = true
+      st.note = '文件已被外部修改：再按 Ctrl+S 覆盖'
+    } else {
+      st.note = r?.error || '保存失败'
+    }
+  } catch (e) { if (textState.value === st) st.note = String(e?.message || e) }
+}
+function onTextInput() {
+  const st = textState.value
+  st.dirty = st.draft !== st.saved
+  st.note = ''
+  clearTimeout(textTimer)
+  if (st.dirty && !st.readOnly) textTimer = setTimeout(() => saveTextNow(), 1500)
+}
+function flushTextSave() {
+  clearTimeout(textTimer)
+  const st = textState.value
+  if (!st.path || st.readOnly || st.loading) return
+  if (st.dirty) saveTextNow(true) // 离开前落盘（冲突也强制写，避免丢编辑）
+}
+function onTextEsc(e) { e.target.blur() }
+function insertTab(e) {
+  const el = e.target
+  el.setRangeText('  ', el.selectionStart, el.selectionEnd, 'end')
+  textState.value.draft = el.value
+  onTextInput()
+}
+watch(() => [lib.lightbox.open, lib.lightbox.path], ([open, p]) => {
+  flushTextSave() // 先保存上一个文本（此时 state 还指向旧文件）
+  textState.value = emptyText()
+  if (open && isTextPath(p)) loadText(p)
+}, { immediate: true })
+onBeforeUnmount(flushTextSave)
 
 /* ---------- 专业裁切（Eagle 式）：屏幕坐标系，比例锁定 + 8 向手柄 + 三分网格 ---------- */
 const cropLayer = ref(null)      // 覆盖在 img 上的固定定位层
@@ -157,6 +375,7 @@ function exitCrop() {
   cropAction.value = null
 }
 function toggleCrop() {
+  if (kind.value !== 'image') return // 视频/文本没有裁切
   if (!lib.viewer.cropMode) {
     if (lib.viewer.rot % 180 !== 0 || lib.viewer.flopX) return
     enterCrop()
@@ -299,6 +518,17 @@ async function applyCrop() {
 
 function onKey(e) {
   if (!lib.lightbox.open) return
+  const t = e.target
+  if (t && (t.tagName === 'TEXTAREA' || t.tagName === 'INPUT' || t.isContentEditable)) return // 控件内按键归控件
+  if ((e.ctrlKey || e.metaKey) && String(e.key).toLowerCase() === 's' && kind.value === 'text') {
+    e.preventDefault()
+    saveTextNow(textState.value.conflict)
+    return
+  }
+  if (e.key === ' ') {
+    if (kind.value === 'video') { e.preventDefault(); togglePlay() }
+    return
+  }
   if (e.key === 'Escape') {
     if (cropAsk.value) { cropAsk.value = false }
     else if (lib.viewer.cropMode) { exitCrop() }
@@ -307,7 +537,7 @@ function onKey(e) {
   else if (e.key === 'Enter' && lib.viewer.cropMode && crop.value) applyCrop()
   else if (e.key === 'ArrowLeft' && !lib.viewer.cropMode) lib.lightboxNav(-1)
   else if (e.key === 'ArrowRight' && !lib.viewer.cropMode) lib.lightboxNav(1)
-  else if (e.key === '0') fitToWindow()
+  else if (e.key === '0' && kind.value === 'image') fitToWindow()
 }
 </script>
 
@@ -317,7 +547,44 @@ function onKey(e) {
     @wheel="onWheel"
     @mousedown="onDown" @mousemove="onMove" @mouseup="onUp" @mouseleave="onUp"
   >
+    <!-- 视频：自绘控制条（无原生 UI） -->
+    <video
+      v-if="kind === 'video'"
+      ref="videoEl" :src="url" class="stage video" playsinline
+      :style="{ transform: `translate(${lib.viewer.tx}px, ${lib.viewer.ty}px) scale(${lib.viewer.scale})` }"
+      @loadedmetadata="onVideoMeta" @timeupdate="onVideoTime"
+      @play="vid.playing = true" @pause="vid.playing = false" @ended="vid.playing = false"
+      @click="togglePlay" @dblclick="toggleFullscreen"
+    />
+    <!-- 文本：内置编辑器（自动保存 + Ctrl+S；超 2MB 只读预览） -->
+    <div v-else-if="kind === 'text'" class="text-stage">
+      <div class="text-bar">
+        <button class="tb-btn nav" title="上一张（←）" @click="lib.lightboxNav(-1)">‹</button>
+        <button class="tb-btn nav" title="下一张（→）" @click="lib.lightboxNav(1)">›</button>
+        <span class="tb-name" :title="fileName">{{ fileName }}</span>
+        <span v-if="textState.encoding" class="tb-badge">{{ textState.encoding }}</span>
+        <span v-if="textState.truncated" class="tb-warn">超过 2MB · 只读预览</span>
+        <span v-else-if="/GB/i.test(textState.encoding)" class="tb-warn">保存将转为 UTF-8</span>
+        <span class="tb-spacer" />
+        <span class="tb-stat">{{ lineCount }} 行 · {{ textState.draft.length }} 字符</span>
+        <span class="tb-state" :class="{ dirty: textState.dirty, err: !!textState.note }">{{ saveLabel }}</span>
+        <button class="tb-btn" title="减小字号" @click="setTextFont(textFont - 1)">A−</button>
+        <button class="tb-btn" title="增大字号" @click="setTextFont(textFont + 1)">A＋</button>
+        <button class="tb-btn" :class="{ on: wrapText }" title="自动换行" @click="toggleWrap">换行</button>
+        <button class="tb-btn primary" :disabled="textState.readOnly || !textState.dirty" @click="saveTextNow(textState.conflict)">保存</button>
+      </div>
+      <div v-if="textState.loading" class="text-loading">载入中…</div>
+      <textarea
+        v-else ref="textEl" v-model="textState.draft" class="text-body" :class="{ wrap: wrapText }"
+        :style="{ fontSize: textFont + 'px' }" spellcheck="false" :readonly="textState.readOnly"
+        @input="onTextInput" @keydown.esc.stop="onTextEsc"
+        @keydown.ctrl.s.prevent="saveTextNow(textState.conflict)" @keydown.meta.s.prevent="saveTextNow(textState.conflict)"
+        @keydown.tab.prevent="insertTab"
+      />
+      <div v-if="textState.note" class="text-note">{{ textState.note }}</div>
+    </div>
     <img
+      v-else
       ref="imgEl" :src="url" class="stage" draggable="false"
       :style="{
         transform: `translate(${lib.viewer.tx}px, ${lib.viewer.ty}px) scale(${lib.viewer.scale}) rotate(${lib.viewer.rot}deg)` + (lib.viewer.flopX ? ' scaleX(-1)' : ''),
@@ -351,7 +618,7 @@ function onKey(e) {
     </div>
 
     <!-- 底部悬浮工具条（ZCode 输入口风格） -->
-    <div class="dock glass-pill">
+    <div v-if="kind === 'image'" class="dock glass-pill">
       <button class="dock-btn" title="上一张（←）" @click="lib.lightboxNav(-1)">‹</button>
       <button class="dock-btn" title="下一张（→）" @click="lib.lightboxNav(1)">›</button>
       <i class="vsep" />
@@ -363,6 +630,24 @@ function onKey(e) {
       <i class="vsep" />
       <button class="dock-btn wide" title="原始大小（1:1）" @click="oneToOne">1:1</button>
       <button class="dock-btn wide" title="缩放到窗口大小" @click="fitToWindow">⤢ 适应</button>
+    </div>
+    <!-- 视频工具条：播放/进度/音量/循环/全屏 -->
+    <div v-else-if="kind === 'video'" class="dock glass-pill video-dock">
+      <button class="dock-btn play" :title="vid.playing ? '暂停（空格）' : '播放（空格）'" @click="togglePlay">{{ vid.playing ? '❚❚' : '▶' }}</button>
+      <span class="vtime">{{ fmtTime(vid.time) }}</span>
+      <div class="vtrack" @pointerdown.prevent="onSeekDown" @pointermove="onSeekMove" @pointerup="onSeekUp" @pointercancel="onSeekUp">
+        <i class="vfill" :style="{ width: progressPct + '%' }" />
+        <i class="vhead" :style="{ left: progressPct + '%' }" />
+      </div>
+      <span class="vtime dim">{{ fmtTime(vid.dur) }}</span>
+      <i class="vsep" />
+      <button class="dock-btn" :class="{ on: !vid.muted && vid.vol > 0 }" :title="vid.muted ? '取消静音' : '静音'" @click="toggleMute">{{ vid.muted || !vid.vol ? '✕' : '♪' }}</button>
+      <input class="vrange" type="range" min="0" max="1" step="0.01" :value="vid.muted ? 0 : vid.vol" title="音量" @input="setVolume" />
+      <button class="dock-btn" :class="{ on: vid.loop }" title="循环播放" @click="toggleLoop">↻</button>
+      <button class="dock-btn" title="全屏" @click="toggleFullscreen">⛶</button>
+      <i class="vsep" />
+      <button class="dock-btn" title="上一张（←）" @click="lib.lightboxNav(-1)">‹</button>
+      <button class="dock-btn" title="下一张（→）" @click="lib.lightboxNav(1)">›</button>
     </div>
     <div v-if="!url" class="empty">图片不存在</div>
     <!-- 裁剪结果 toast：不随 cropMode 消失（挂在舞台根层） -->
@@ -421,6 +706,59 @@ function onKey(e) {
 .dock-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .vsep { width: 1px; height: 18px; background: var(--border); margin: 0 3px; }
 .note { font-size: 11.5px; color: var(--accent); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---- 视频：自绘控制条 ---- */
+.stage.video { max-width: none; background: #000; box-shadow: 0 20px 80px rgba(0, 0, 0, 0.45); cursor: pointer; }
+.video-dock { gap: 6px; }
+.video-dock .dock-btn.play { color: var(--accent); font-size: 12px; }
+.vtime { font-family: Consolas, monospace; font-size: 11px; color: var(--text); min-width: 34px; text-align: center; }
+.vtime.dim { color: var(--text-2); }
+.vtrack { position: relative; width: min(36vw, 440px); height: 20px; display: flex; align-items: center; cursor: pointer; touch-action: none; }
+.vtrack::before { content: none; }
+.vtrack::after { content: ''; position: absolute; left: 0; right: 0; height: 3px; border-radius: 2px; background: var(--border); }
+.vfill { position: absolute; left: 0; height: 3px; border-radius: 2px; background: var(--accent); z-index: 1; }
+.vhead {
+  position: absolute; top: 50%; width: 9px; height: 9px; margin-left: -4.5px; margin-top: -4.5px;
+  border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-weak); z-index: 2;
+}
+.vrange { width: 74px; accent-color: var(--accent); cursor: pointer; }
+
+/* ---- 文本：内置编辑器 ---- */
+.text-stage {
+  position: absolute; inset: 0; z-index: 20;
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 54px 22px 20px; background: var(--panel-strong);
+}
+.text-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--text-2); }
+.tb-name { color: var(--text); font-weight: 600; max-width: 32%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tb-badge { border: 1px solid var(--border); border-radius: 6px; padding: 1px 7px; font-size: 10.5px; letter-spacing: 0.4px; }
+.tb-warn { color: #c25a4d; font-size: 11px; }
+.tb-stat { font-size: 11px; opacity: 0.75; }
+.tb-spacer { flex: 1; }
+.tb-state { font-size: 11.5px; color: var(--text-2); }
+.tb-state.dirty { color: var(--accent); font-weight: 600; }
+.tb-state.err { color: #c25a4d; }
+.tb-btn {
+  border: 1px solid var(--border); background: transparent; color: var(--text-2);
+  border-radius: 8px; font-size: 11.5px; padding: 4px 9px; cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.tb-btn:hover { background: var(--accent-weak); color: var(--accent); border-color: var(--accent); }
+.tb-btn.on { background: var(--accent-weak); color: var(--accent); border-color: var(--accent); }
+.tb-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+.tb-btn.primary:disabled { opacity: 0.4; cursor: not-allowed; background: transparent; color: var(--text-2); border-color: var(--border); }
+.tb-btn.nav { padding: 3px 9px; font-size: 14px; line-height: 1; }
+.text-body {
+  flex: 1; width: 100%; min-height: 0; resize: none; outline: none;
+  padding: 16px 18px; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--bg-2); color: var(--text);
+  font-family: Consolas, 'Cascadia Mono', 'Microsoft YaHei', monospace;
+  line-height: 1.65; tab-size: 2;
+}
+.text-body.wrap { white-space: pre-wrap; overflow-wrap: anywhere; overflow-y: auto; }
+.text-body:not(.wrap) { white-space: pre; overflow: auto; }
+.text-loading { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--text-2); font-size: 13px; }
+.text-note { color: #c25a4d; font-size: 12px; }
 
 /* 专业裁切层 */
 .crop-layer { position: fixed; z-index: 30; cursor: default; }

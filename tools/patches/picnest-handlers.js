@@ -248,8 +248,111 @@ electron.ipcMain.handle("picnest-thumb-lookup", (_event, paths) => {
   return out;
 });
 
-/* 外部拖入：目录→返回待处理；图片/视频→复制进目标目录（撞名加序号），watcher 自动入库 */
-const PICNEST_DROP_EXTS = new Set([".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tiff", ".tif", ".avif", ".svg", ".psd", ".heic", ".heif", ".mp4", ".webm", ".mov", ".mkv", ".avi", ".flv", ".f4v"]);
+/* 文本类白名单（渲染层同名判定见 ui/src/lib/fileKinds.js，两侧需同步） */
+const PICNEST_TEXT_EXTS = new Set([".txt", ".md", ".markdown", ".log", ".json", ".jsonc", ".csv", ".tsv", ".ini", ".cfg", ".conf", ".yaml", ".yml"]);
+
+/* ---- 文本类：读取 / 保存 / 文字缩略图 ---- */
+const PICNEST_TEXT_MAX_BYTES = 2 * 1024 * 1024;
+function picnestDecodeText(buf) {
+  if (buf.length >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) return { content: buf.subarray(3).toString("utf8"), encoding: "UTF-8 BOM" };
+  if (buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xfe) return { content: buf.subarray(2).toString("utf16le"), encoding: "UTF-16LE" };
+  try { new TextDecoder("utf-8", { fatal: true }).decode(buf.subarray(0, Math.min(buf.length, 65536))); return { content: new TextDecoder("utf-8").decode(buf), encoding: "UTF-8" }; } catch (e) { /* 非 UTF-8：按 GB18030 */ }
+  try { return { content: new TextDecoder("gb18030").decode(buf), encoding: "GB18030" }; } catch (e) { /* 再退 UTF-8 宽松 */ }
+  return { content: buf.toString("utf8"), encoding: "UTF-8" };
+}
+function picnestTextThumbSvg(title, extLabel, meta, lines) {
+  const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" })[c]).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, "");
+  /* 按显示宽度裁剪（CJK 记 2 单位）：400px 卡面、11.5px 等宽，56 单位约 360px，不越过右缘 */
+  const clipW = (s, maxU) => {
+    let u = 0, out = "";
+    for (const ch of String(s)) {
+      u += ch.charCodeAt(0) > 0x2e80 ? 2 : 1;
+      if (u > maxU) return out + "…";
+      out += ch;
+    }
+    return out;
+  };
+  const rows = lines.slice(0, 23).map((l, i) => `<text x="22" y="${86 + i * 17.5}" font-family="Microsoft YaHei, Consolas, monospace" font-size="11.5" fill="#3d372f">${esc(clipW(l.replace(/\t/g, "  ").trimEnd(), 56))}</text>`).join("");
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="520">
+    <rect width="400" height="520" fill="#f7f3ea"/>
+    <rect width="400" height="40" fill="#ece4d5"/>
+    <text x="18" y="25" font-family="Microsoft YaHei, Segoe UI, sans-serif" font-size="13" font-weight="600" fill="#4a4238">${esc(clipW(title, 40))}</text>
+    <text x="382" y="25" text-anchor="end" font-family="Consolas, monospace" font-size="10" fill="#8a7c68">${esc(extLabel)}</text>
+    <line x1="18" y1="54" x2="382" y2="54" stroke="#d8cfbd"/>
+    <text x="382" y="502" text-anchor="end" font-family="Consolas, monospace" font-size="9" fill="#a2947e">${esc(meta)}</text>
+    ${rows}
+  </svg>`;
+}
+electron.ipcMain.handle("picnest-read-text", (_event, filePath) => {
+  try {
+    const ext = path.extname(filePath).toLowerCase();
+    if (!PICNEST_TEXT_EXTS.has(ext)) return { ok: false, error: "不是文本文件" };
+    const st = fs.statSync(filePath);
+    const truncated = st.size > PICNEST_TEXT_MAX_BYTES;
+    const len = Math.min(st.size, PICNEST_TEXT_MAX_BYTES);
+    const fd = fs.openSync(filePath, "r");
+    const buf = Buffer.alloc(len);
+    try { fs.readSync(fd, buf, 0, len, 0); } finally { fs.closeSync(fd); }
+    const dec = picnestDecodeText(buf);
+    return { ok: true, content: dec.content, encoding: dec.encoding, eol: dec.content.includes("\r\n") ? "\r\n" : "\n", size: st.size, mtimeMs: st.mtimeMs, truncated };
+  } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+});
+electron.ipcMain.handle("picnest-save-text", (_event, filePath, content, expectedMtimeMs) => {
+  try {
+    const ext = path.extname(filePath).toLowerCase();
+    if (!PICNEST_TEXT_EXTS.has(ext)) return { ok: false, error: "不是文本文件" };
+    if (!fs.existsSync(filePath)) return { ok: false, error: "文件不存在" };
+    if (expectedMtimeMs) {
+      const cur = fs.statSync(filePath).mtimeMs;
+      if (Math.abs(cur - expectedMtimeMs) > 1500) return { ok: false, conflict: true, error: "文件已被外部修改" };
+    }
+    const tmp = filePath + ".picnest-tmp";
+    fs.writeFileSync(tmp, Buffer.from(String(content == null ? "" : content), "utf8"));
+    fs.renameSync(tmp, filePath);
+    const st = fs.statSync(filePath);
+    try { getDb().prepare("UPDATE images SET file_size = ?, modify_time = ? WHERE file_path = ?").run(st.size, Math.floor(st.mtimeMs / 1e3), filePath); } catch (e) {}
+    /* 文本缩略图缓存失效：内容变了，纸面预览要重画（渲染层随后调 text-thumbnails 重建） */
+    try {
+      const thumb = path.join(cacheDir, crypto.createHash("md5").update(filePath).digest("hex") + ".webp");
+      if (fs.existsSync(thumb)) fs.unlinkSync(thumb);
+      getDb().prepare("UPDATE images SET thumbnail_path = '' WHERE file_path = ?").run(filePath);
+    } catch (e) {}
+    return { ok: true, size: st.size, mtimeMs: st.mtimeMs, encoding: "UTF-8" };
+  } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+});
+electron.ipcMain.handle("picnest-text-thumbnails", async (_event, paths) => {
+  const results = [], errors = [];
+  let sharp;
+  try { sharp = (await import("sharp")).default; } catch (e) { return { results: (paths || []).map((p) => ({ file_path: p, thumbnail_path: "" })), errors: ["sharp unavailable"] }; }
+  for (const fp of paths || []) {
+    try {
+      const ext = path.extname(fp).toLowerCase();
+      if (!PICNEST_TEXT_EXTS.has(ext)) { results.push({ file_path: fp, thumbnail_path: "" }); continue; }
+      const out = path.join(cacheDir, crypto.createHash("md5").update(fp).digest("hex") + ".webp");
+      if (!fs.existsSync(out)) {
+        const st = fs.statSync(fp);
+        const len = Math.min(st.size, 65536);
+        const fd = fs.openSync(fp, "r");
+        const buf = Buffer.alloc(len);
+        try { fs.readSync(fd, buf, 0, len, 0); } finally { fs.closeSync(fd); }
+        const dec = picnestDecodeText(buf);
+        const lines = dec.content.split(/\r?\n/).slice(0, 40);
+        const sizeText = st.size >= 1048576 ? (st.size / 1048576).toFixed(1) + " MB" : st.size >= 1024 ? (st.size / 1024).toFixed(1) + " KB" : st.size + " B";
+        const svg = picnestTextThumbSvg(path.basename(fp), ext.slice(1).toUpperCase(), `${sizeText} · ${dec.encoding}`, lines);
+        await sharp(Buffer.from(svg)).webp({ quality: 82 }).toFile(out);
+      }
+      try { getDb().prepare("UPDATE images SET thumbnail_path = ?, width = 400, height = 520 WHERE file_path = ?").run(out, fp); } catch (e) {}
+      results.push({ file_path: fp, thumbnail_path: out, width: 400, height: 520, is_text: true });
+    } catch (e) {
+      errors.push(path.basename(fp));
+      results.push({ file_path: fp, thumbnail_path: "" });
+    }
+  }
+  return { results, errors };
+});
+
+/* 外部拖入：目录→返回待处理；图片/视频/文本→复制进目标目录（撞名加序号），watcher 自动入库 */
+const PICNEST_DROP_EXTS = new Set([".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tiff", ".tif", ".avif", ".svg", ".psd", ".heic", ".heif", ".mp4", ".webm", ".mov", ".mkv", ".avi", ".flv", ".f4v", ...PICNEST_TEXT_EXTS]);
 const PICNEST_DROP_JUNK = new Set(["thumbs.db", "desktop.ini"]);
 electron.ipcMain.handle("picnest-import-files", async (_event, paths, targetDir) => {
   const IMG_EXTS = PICNEST_DROP_EXTS;
@@ -653,7 +756,7 @@ electron.ipcMain.handle("picnest-dir-order-set", (_event, parentKey, names) => {
 
 /* ==== 资料库文件夹管理：mkdir / 重命名 / 排序 / 导出 ==== */
 
-const PICNEST_IMG_EXT = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".avif"]);
+const PICNEST_IMG_EXT = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".avif", ...PICNEST_TEXT_EXTS]);
 
 /* 库内新建文件夹：重名自动 " (n)" 递增（真实 mkdir，索引走 watcher/sync） */
 electron.ipcMain.handle("picnest-mkdir", (_event, parentPath, name) => {

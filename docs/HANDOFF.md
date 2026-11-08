@@ -113,12 +113,24 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。
 - 未分类 = 库根散图
 - 持久化：布局/缩放/排序/资料库/侧栏宽/详情宽/树展开/上次浏览位置；详情初始收起
 
+### 文本文件 / 视频
+- **文本类入**（Feb 定：文本类收、代码类不收）：`.txt .md .markdown .log .json .jsonc .csv .tsv .ini .cfg .conf .yaml .yml`；
+  scan-worker / watcher-worker / stats-worker / 拖入 / 文件夹复制 / 导出 全部同步收录；`.js/.ts/.py` 等代码文件仍被忽略
+- **文字缩略图**：主进程把前 23 行渲染成 400×520 纸面 SVG → webp（缓存 `md5(path).webp`），DB 写 `thumbnail_path + width/height`；
+  保存后自动失效重画；网格 URL 带 `?v=modify_time` 防浏览器旧缓存；未生成时格子显示后缀徽标占位卡
+- **大图文本编辑器**：自动识别 UTF-8 / UTF-8 BOM / UTF-16LE / GB18030(GBK)，保留原换行风格（CRLF↔LF）；
+  可编辑 + 1.5s 防抖自动保存 + `Ctrl+S`；关闭/翻页/离开前强制落盘；>2MB 只读预览；
+  外部改动时保存返回冲突提示「再按 Ctrl+S 覆盖」；GBK 原文保存会转 UTF-8（工具栏明示）；字号/换行偏好进 localStorage
+- **视频播放**：`<video>` 无原生 UI，自绘玻璃 dock —— 播放/暂停（空格）、进度拖拽、时间、静音、音量、循环、全屏；进入即自动播放；
+  滚轮缩放/←→翻页照旧；裁切/旋转/翻转对视频隐藏；`loadedmetadata` 回填宽高
+- 详情面板：文本显示「尺寸：文本」、隐藏色板；视频预览用海报缩略图（不再直链 mp4 裂图）
+
 ### 动效 / 滑尺 / 其它
 - 入场波 520ms（1/24 墨水步进）；AnimIcon 六字形；集体晃动总线（切视图/换文件夹/切库/关大图/漏斗与布局弹板/详情开合）
 - **随机自弹已彻底移除**（Feb 明确要求，勿复活）
 - 滑尺 fixed 右缘：48 槽 cos² 波峰 + 单条金色 dash；点击/拖拽跳转
 - 手动拖窗、置顶按钮、颜色筛选对齐 Eagle 真源、裁剪三选一、丢回收站/从库移除
-- **大图目前只支持图片**；视频播放/步进尝试已 revert（0620bbe），未做
+- **大图支持图片 / 视频 / 文本三种形态**；视频与文本的专属工具栏见上节
 
 ## 四、数据模型 / 关键约束
 
@@ -133,6 +145,12 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。
 - Pinia 响应式数组不能直接 invoke：先 `[...arr]`（否则 `An object could not be cloned`）
 - `ImageGrid` 是 fragment 根（canvas+viewport），App 的 `.insp-open` class 无法继承；需要手动处理右边距（卡片条 `right:312px` 等）
 - `loadImages` 会清选中；本地增量操作不要调它
+- **TEXT_EXTS 三处必须同步**：`ui/src/lib/fileKinds.js`、`tools/patches/picnest-handlers.js`（`PICNEST_TEXT_EXTS`）、`tools/patches/apply.mjs` 的 P9a/P9b/P9d/P9e 字面量
+- 文本缩略图走 `picnest-text-thumbnails`，缓存名 `md5(file_path).webp`，DB 同时写 `width=400/height=520`（排版用）；
+  Inspector 对文本显示「尺寸：文本」，不要暴露 400×520
+- `picnest-read-text` 返回 `{content, encoding, eol, size, mtimeMs, truncated}`；`picnest-save-text(filePath, content, expectedMtimeMs)`
+  原子写（`.picnest-tmp` + rename）且**始终写 UTF-8**（GBK 原文会转码，UI 已提示）；`expectedMtimeMs` 差值 >1.5s 判冲突；保存会失效旧缩略图
+- 视频不写 width/height 的兜底：`loadedmetadata` 时回填 store（并 `layoutTick++`）；海报缩略图生成时主进程也会 updateImageDimensions
 
 ## 五、议题 / 下一步
 
@@ -145,7 +163,6 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。
 - [ ] 目录删除的图片确认细化（已软删，若要「删除并清空回收站」可补）
 - [ ] 尺寸/评分排序 SQL 补全（目前前端排序）
 - [ ] 滑尺 Monaco 细节（hover 预览）
-- [ ] 视频播放/帧步进（Eagle Ctrl+←/→ 的语义已挖清，但本轮已按用户要求 revert）
 - [ ] 既有同名副本（如 `风景 (1)`）的「合并到同名文件夹…」动作
 - [ ] M6 采集：Eagle 兼容 localhost:41595 API（复用 Eagle for Edge）
 - [ ] M7 Eagle 库迁移（先只读预演）
@@ -158,14 +175,14 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。
 - 文件夹整包 MD5 查重在主进程同步执行；超大文件夹首次放入会卡一下
 - 同名副本 `风景 (1)` 不会自动合并；删除多余副本或做「合并到…」
 - `.insp-open` 对 grid 的右边距不生效（fragment 根），图片可能滑到详情浮岛下面；卡片条已手动避让
-- 大图无视频播放；标签/批量删除未做
+- 大图无帧步进（Eagle Ctrl+←/→ 未做）；标签/框选外的批量编辑未做
 
 ## 七、关键文件地图
 
 | 文件 | 职责 |
 |---|---|
 | `ui/src/stores/library.js` | 全部状态/动作：资料库、树、录入、选择、排序/增量、复制粘贴、回收站、浏览历史、详情统计 |
-| `ui/src/lib/winDrag.js` · `iconMotion.js` · `wave.js` | 手动拖窗 · 图标弹簧+集体晃动 · 入场波 |
+| `ui/src/lib/winDrag.js` · `iconMotion.js` · `wave.js` · `fileKinds.js` | 手动拖窗 · 图标弹簧+集体晃动 · 入场波 · 文本/视频后缀判定 |
 | `ui/src/components/AnimIcon.vue` · `FolderIcon.vue` | 动效图标 · 文件夹图标 |
 | `ui/src/components/TitleBar.vue` | 顶栏：面包屑/历史箭头/筛选/布局/缩放/搜索/窗控 |
 | `ui/src/components/SideBar.vue` · `DirTreeItem.vue` | 资料库+视图入口/树行/拖拽落点/右键 |
@@ -174,7 +191,7 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。
 | `ui/src/components/DirContextMenu.vue` · `NamePromptDialog.vue` · `ConfirmDialog.vue` | 文件夹菜单/命名/通用确认 |
 | `ui/src/components/ContextMenu.vue` · `DuplicateDialog.vue` · `ImportResultCard.vue` · `TrashMenu.vue` | 图片菜单/重复三选一/录入结果卡/回收站右键菜单 |
 | `ui/src/components/FilterBar.vue` · `ColorPicker.vue` | 筛选 · HSV 取色 |
-| `tools/patches/apply.mjs` · `picnest-handlers.js` | 补丁 P1-P6/P8 + 文件夹/录入/回收站/统计/排序 IPC |
+| `tools/patches/apply.mjs` · `picnest-handlers.js` | 补丁 P1-P6/P8/P9 + 文件夹/录入/回收站/统计/排序/文本 IPC |
 | `tools/cdp-*.mjs` · `shot-prod.ps1` | CDP 探针/截屏 |
 | `docs/MOTION.md` | 动效规格与调参速查 |
 
@@ -197,11 +214,13 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。
 15. 新 IPC 参数三处同步（main/preload/api）；Pinia 数组过 IPC 先展开
 16. 每完成一役 `git commit`；数量对账 `python tools/verify_counts.py`
 17. **`window.picrand` 是 contextBridge 暴露的只读对象**：想替换方法做 spy 会静默失败（曾用假 restore 拦截，赋值没生效，探针真实还原了 2 张回收站图）——验证 IPC 副作用只能只读断言，或临时改源码再验
+18. **主进程里有三份同形 worker 模板**（oversize / scan / stats），`String.replace` 只替第一份：加后缀/改扫描规则必须确认 **scan（真正入库）** 和 **stats（文件数）** 都打了补丁（P9d/P9e 就是这么补出来的）；改完重启应用才会重写 `*.cjs`
 
 ## 九、本轮验收状态 / 最近提交
 
-- 当前 dev 实例运行中，回收站视图；回收站中 1 项为用户数据（验证批量还原时真实还原了 2 张，已回原文件夹）
-- 本轮（多选收尾 + 回收站批量还原）CDP 逻辑验收已过：Ctrl+A 计数=可见数、Esc 分层、框选命中实时更新、Shift 并集、批量删除确认卡可取消且不动数据；回收站多选菜单文案「还原（N 张）/彻底删除（N 张）」、逐张调用、确认卡可取消；构建通过
-- 最近提交（从旧到新）：`0620bbe` revert 视频 → `5fcecc2` 浏览历史/面包屑 → `4982b4b` 卡片选中态 → `e4e21d0` 第七版交接 → `927e102` 多选收尾 → 回收站批量还原修复（见 git log 顶部）
-- 仍需 Feb **物理鼠标**验收：框选手感/边缘自动滚动、框选松手不误触「点空白」、右键批量删除确认卡、**回收站多选批量还原/彻底删除**、格内拖动排序插入线、卡片双击命中、拖图到回收站命中区、浏览历史箭头手感
+- 当前 dev 实例运行中，浏览位置已还原到「粥」；回收站中 1 项为用户数据（验证批量还原时真实还原了 2 张，已回原文件夹）
+- 本轮（多选收尾 + 回收站批量还原）CDP 逻辑验收已过：Ctrl+A 计数=可见数、Esc 分层、框选命中实时更新、Shift 并集、批量删除确认卡可取消且不动数据；回收站多选菜单文案「还原（N 张）/彻底删除（N 张）」、逐张调用、确认卡可取消
+- **文本 / 视频批次验收**：临时文件夹入库 3 个文本 + 忽略 `.js`；SVG 纸面缩略图 3/3 生成、网格无占位卡；编辑器载入 UTF-8/6 行/101 字符、自动保存、Ctrl+S、关闭前 flush 全部回读通过；GB18030 探针正确解码、3MB 文件截断只读；mp4 720×960/16.57s 自动播放、自绘 dock 播放/暂停/拖进度到 8.28s 正常；测试目录已删、DB 行已清、浏览位置还原
+- 最近提交（从旧到新）：`e4e21d0` 第七版交接 → `927e102` 多选收尾 → `6e4cc65` 回收站批量还原 → 本轮文本/视频（见 git log 顶部）
+- 仍需 Feb **物理鼠标**验收：文本编辑器手感（自动保存/字号/换行）、文字缩略图观感、视频自绘控制条（拖动进度/音量/全屏）、以及此前遗留的框选/批量删除/拖动排序/历史箭头
 - dist 已构建；文档三件套已同步（HANDOFF/PLAN/MOTION）

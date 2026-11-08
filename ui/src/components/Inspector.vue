@@ -2,6 +2,7 @@
 import { computed, ref, watch, nextTick } from 'vue'
 import { useLibrary } from '../stores/library'
 import { fileUrl } from '../api'
+import { isTextPath, isVideoPath } from '../lib/fileKinds'
 
 // 右侧详情浮窗（Eagle 式）：图片单选 / 图片多选 / 文件夹单选 / 文件夹多选 四态
 const lib = useLibrary()
@@ -19,6 +20,8 @@ const mode = computed(() => {
   return 'empty'
 })
 const singleDir = computed(() => (dirNodes.value.length === 1 ? dirNodes.value[0] : null))
+const isTextImg = computed(() => !!img.value && isTextPath(img.value.file_path))
+const isVideoImg = computed(() => !!img.value && isVideoPath(img.value.file_path))
 
 const fmtSize = (n) => {
   if (!n) return '—'
@@ -34,8 +37,14 @@ const fmtDate = (ms) => {
   return `${d.getFullYear()}/${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
 const fmtFolderDate = (ms) => fmtDate(ms)
-const extOf = (p) => (p ? (p.split('.').pop() || '').toUpperCase() : '')
-const thumbSrc = (im) => fileUrl(im.thumbnail_path && im.thumbnail_path !== 'SKIP' ? im.thumbnail_path : im.file_path)
+const extLabel = (p) => (p ? (p.split('.').pop() || '').toUpperCase() : '')
+const thumbSrc = (im) => {
+  if (im.thumbnail_path && im.thumbnail_path !== 'SKIP') {
+    return fileUrl(im.thumbnail_path) + (isTextPath(im.file_path) ? '?v=' + (im.modify_time || 0) : '')
+  }
+  if (isTextPath(im.file_path) || isVideoPath(im.file_path)) return '' // 文本/视频无缩略图时不直链
+  return fileUrl(im.file_path)
+}
 
 /* ---------- 单选图片 ---------- */
 const editingName = ref(false)
@@ -84,6 +93,7 @@ const paletteLoading = ref(false)
 watch(() => lib.selectedPath, async (p) => {
   palette.value = []
   if (!p) return
+  if (isTextPath(p)) { paletteLoading.value = false; return } // 文本无色板，不白跑 IPC
   if (lib.palettes[p]) {
     palette.value = lib.palettes[p].slice(0, 9).map((c) => c.color
       ? { color: c.color, ratio: c.ratio }
@@ -157,7 +167,7 @@ function stackStyle(i) {
 }
 const multiSize = computed(() => multiImages.value.reduce((s, i) => s + (i.file_size || 0), 0))
 const multiFormats = computed(() => {
-  const set = new Set(multiImages.value.map((i) => extOf(i.file_path)))
+  const set = new Set(multiImages.value.map((i) => extLabel(i.file_path)))
   return set.size === 1 ? [...set][0] : '混合'
 })
 const multiRating = computed(() => {
@@ -291,7 +301,9 @@ async function exportFolder() {
     <!-- ========== 单选图片 ========== -->
     <template v-if="mode === 'img' && img">
       <div class="preview">
-        <img :src="fileUrl(img.file_path)" loading="lazy" draggable="false" />
+        <img v-if="!isTextImg && !isVideoImg" :src="fileUrl(img.file_path)" loading="lazy" draggable="false" />
+        <img v-else-if="img.thumbnail_path && img.thumbnail_path !== 'SKIP'" :src="fileUrl(img.thumbnail_path)" loading="lazy" draggable="false" />
+        <div v-else class="preview-doc">{{ extLabel(img.file_path) }}</div>
       </div>
 
       <input
@@ -306,14 +318,14 @@ async function exportFolder() {
       <div class="sec">
         <div class="sec-head" @click="toggle('info')"><span>基本信息</span><i>{{ sections.info ? '▾' : '▸' }}</i></div>
         <div v-show="sections.info" class="sec-body">
-          <div class="kv"><span>尺寸</span><b>{{ img.width || '—' }} × {{ img.height || '—' }}</b></div>
+          <div class="kv"><span>尺寸</span><b>{{ isTextImg ? '文本' : (img.width || '—') + ' × ' + (img.height || '—') }}</b></div>
           <div class="kv"><span>文件大小</span><b>{{ fmtSize(img.file_size) }}</b></div>
-          <div class="kv"><span>格式</span><b>{{ extOf(img.file_path) }}</b></div>
+          <div class="kv"><span>格式</span><b>{{ extLabel(img.file_path) }}</b></div>
           <div class="kv"><span>修改日期</span><b>{{ fmtDate(img.modify_time) }}</b></div>
         </div>
       </div>
 
-      <div class="sec">
+      <div class="sec" v-if="!isTextImg && !isVideoImg">
         <div class="sec-head" @click="toggle('palette')"><span>色板</span><i>{{ sections.palette ? '▾' : '▸' }}</i></div>
         <div v-show="sections.palette" class="sec-body">
           <div v-if="paletteLoading" class="muted">分析中…</div>
@@ -370,7 +382,8 @@ async function exportFolder() {
     <template v-else-if="mode === 'multi'">
       <div class="stack">
         <div v-for="(im, i) in stackImgs" :key="im.file_path" class="stack-card" :style="stackStyle(i)">
-          <img :src="thumbSrc(im)" draggable="false" />
+          <img v-if="thumbSrc(im)" :src="thumbSrc(im)" draggable="false" />
+          <div v-else class="stack-doc">{{ extLabel(im.file_path) }}</div>
         </div>
       </div>
       <div class="multi-count">已选 {{ multiImages.length }} 个文件</div>
@@ -480,6 +493,11 @@ async function exportFolder() {
 
 .preview { margin: 10px; border-radius: 10px; overflow: hidden; background: var(--bg-2); border: 1px solid var(--border); }
 .preview img { display: block; width: 100%; max-height: 240px; object-fit: contain; }
+.preview-doc {
+  height: 170px; display: flex; align-items: center; justify-content: center;
+  background: linear-gradient(160deg, #f7f3ea 0%, #eee7d9 100%);
+  color: #6b604f; font-family: Consolas, monospace; font-size: 13px; letter-spacing: 1px;
+}
 
 .name { padding: 0 12px 10px; font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: text; }
 .name:hover { color: var(--accent); }
@@ -563,6 +581,11 @@ async function exportFolder() {
   box-shadow: var(--shadow);
 }
 .stack-card img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.stack-doc {
+  width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;
+  background: linear-gradient(160deg, #f7f3ea, #eee7d9); color: #6b604f;
+  font-family: Consolas, monospace; font-size: 11px; letter-spacing: 1px;
+}
 .multi-count { padding: 11px 12px 12px; text-align: center; font-size: 13px; font-weight: 600; }
 
 /* ---- 文件夹详情 ---- */

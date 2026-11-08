@@ -1,6 +1,7 @@
 <script setup>
 import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useLibrary } from '../stores/library'
+import { isTextPath, isVideoPath } from '../lib/fileKinds'
 import FilterBar from './FilterBar.vue'
 import { api } from '../api'
 import { startWindowDrag, onBarDblclick } from '../lib/winDrag'
@@ -32,6 +33,10 @@ const LAYOUTS = [
   { key: 'masonry', icon: '▥', label: '瀑布流' },
 ]
 const layoutMeta = computed(() => LAYOUTS.find((l) => l.key === lib.layout) || LAYOUTS[0])
+const lightboxKind = computed(() => {
+  const p = lib.lightbox.path
+  return isVideoPath(p) ? 'video' : isTextPath(p) ? 'text' : 'image'
+})
 const panelOpen = ref(false)
 const topPinned = ref(false)
 async function refreshTopPinned() { try { topPinned.value = !!(await window.picrand.windowIsAlwaysOnTop()) } catch { /* 静默 */ } }
@@ -108,12 +113,14 @@ function onKey(e) {
     <template v-if="lib.lightbox.open">
       <button class="ctl back" title="返回浏览（Esc）" @click="lib.closeLightbox()">←</button>
       <span class="pos">{{ lib.images.findIndex((i) => i.file_path === lib.lightbox.path) + 1 }} / {{ lib.images.length }}</span>
-      <div class="zoom-slider">
+      <div class="zoom-slider" v-if="lightboxKind === 'image'">
         <span class="z-sign">−</span>
         <input type="range" min="0.05" max="8" step="0.01" :value="lib.viewer.scale" @input="lib.viewer.scale = Number($event.target.value)" />
         <span class="z-sign">＋</span>
         <span class="zpct">{{ Math.round(lib.viewer.scale * 100) }}%</span>
       </div>
+      <span v-else-if="lightboxKind === 'text'" class="zoom-label">文本编辑</span>
+      <span v-else class="zoom-label">视频</span>
       <div class="spacer" />
     </template>
 
@@ -239,6 +246,7 @@ function onKey(e) {
 .crumb.current { color: var(--text); font-weight: 600; }
 .count { display: inline-block; min-width: 126px; margin-left: 8px; font-size: 11px; color: var(--text-2); font-variant-numeric: tabular-nums; /* 实测到 10,000 需 125px：位数进位不推挤右侧按钮 */ }
 .pos { font-size: 12.5px; color: var(--text-2); font-variant-numeric: tabular-nums; padding: 0 6px; }
+.zoom-label { font-size: 11px; letter-spacing: 2px; color: var(--text-2); padding: 0 8px; }
 /* 灯箱返回钮（此前无任何样式，裸按钮） */
 .ctl.back {
   height: 28px; min-width: 30px; margin-left: 16px; padding: 0 8px;

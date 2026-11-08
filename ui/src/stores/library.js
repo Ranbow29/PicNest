@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { deltaE76, deltaE2000, isGrayPalettes } from '../lib/eagleColor'
 import { collectiveShake } from '../lib/iconMotion'
+import { isTextPath } from '../lib/fileKinds'
 import { api } from '../api'
 
 // 图巢核心状态：根文件夹（物理目录）→ 派生目录树 → 子目录图片
@@ -901,7 +902,8 @@ export const useLibrary = defineStore('library', {
       this.paletteBuild.running = true
       try {
         for (let i = 0; i < 400; i++) {
-          const missing = this.images.filter((x) => !this.palettes[x.file_path]).map((x) => x.file_path)
+          /* 文本没有色板：直接跳过（否则每轮都算一次、白耗 400 轮 IPC） */
+          const missing = this.images.filter((x) => !this.palettes[x.file_path] && !isTextPath(x.file_path)).map((x) => x.file_path)
           if (!missing.length) { this.paletteBuild.done = this.paletteBuild.total = this.images.length; break }
           /* DB 真缺（NULL）的才现算；DB 里已有（含 SKIP）的直接回填内存。
              终止不依赖 processed——DB 全量时 build-step 返回 0 会误断循环（曾只剩 40/6673） */
@@ -923,7 +925,8 @@ export const useLibrary = defineStore('library', {
       this.dimsFilling = true
       try {
         for (let pass = 0; pass < 40; pass++) {
-          const need = this.images.filter((i) => !i.width || !i.height).slice(0, 500).map((i) => i.file_path)
+          /* 文本没有宽高（用缩略图 400×520 排版），别让尺寸回填空转 */
+          const need = this.images.filter((i) => (!i.width || !i.height) && !isTextPath(i.file_path)).slice(0, 500).map((i) => i.file_path)
           if (!need.length) break
           const got = await api.fillImageDims(need)
           for (const img of this.images) {
@@ -966,7 +969,10 @@ export const useLibrary = defineStore('library', {
           const one = this.images.find((i) => !i.thumbnail_path)
           if (!one) break
           try {
-            const res = await Promise.race([api.generateThumbnailsBatch([one.file_path]), timeout(20000)])
+            const gen = isTextPath(one.file_path)
+              ? api.generateTextThumbnails([one.file_path])
+              : api.generateThumbnailsBatch([one.file_path])
+            const res = await Promise.race([gen, timeout(20000)])
             const r = (res?.results || [])[0]
             if (r?.thumbnail_path) {
               one.thumbnail_path = r.thumbnail_path

@@ -178,3 +178,19 @@ PicNest/
     （合并视图退出时回原浏览文件夹）。TitleBar 的 Esc 关布局/筛选弹板时要 `preventDefault()`，App 顶层以 `defaultPrevented` 让行。
     批量软删入口只放右键菜单（Feb 定：删除不给独立按钮防误触）：多选时文案「丢到回收站（N 张）」，先弹确认卡
     （数量 + 前 5 个文件名）再走 `trashImages`；`trashImages` 的选中收缩改为整批 filter（逐项 prune 在 Ctrl+A 后是 O(n·m)）。
+37. **文本类 / 视频（2026-11-09，Feb 定：文本收、代码不收）**：文本白名单
+    `.txt .md .markdown .log .json .jsonc .csv .tsv .ini .cfg .conf .yaml .yml`；渲染层 `ui/src/lib/fileKinds.js`
+    与主进程 `PICNEST_TEXT_EXTS` 必须同步。**index.js 里有三份同形扫描模板（oversize / scan / stats）**，
+    `String.replace` 只替第一份——P9a 曾只打到 oversize，真正入库的 scan 没变（表现为文本怎么都扫不进来）；
+    P9d/P9e 分别补 scan 与 stats。watcher 模板另在 P9b（单份）。扫描 worker 每次启动由模板重写，改模板后才重启才生效。
+    文本缩略图：主进程读前 64KB → 前 23 行 → 400×520 纸面 SVG（sharp/librsvg 可渲染中文）→ `cache/md5(path).webp`；
+    DB 同步 `thumbnail_path + width/height=400/520`（仅供排版）。保存后主进程删缓存并清 DB 缩略图，渲染层立刻重画；
+    网格文本缩略图 URL 追加 `?v=modify_time` 突破 file:// 图片缓存（实测带 query 可加载）。
+    `picnest-read-text` 编码检测：UTF-8 BOM → UTF-16LE BOM → 严格 UTF-8 试解（只探前 64KB，避免截断末尾误判）→
+    GB18030 兜底；返回 `{content, encoding, eol, size, mtimeMs, truncated}`。>2MB 截断只读（禁止保存，防截断写回毁文件）。
+    `picnest-save-text` 原子写（`.picnest-tmp` + rename）**始终 UTF-8**（Node 无 GBK 编码器，GBK 原文保存即转码，
+    工具栏提示「保存将转为 UTF-8」）；保留原换行 CRLF/LF；`expectedMtimeMs` 差 >1.5s 判 conflict，UI 提示再按 Ctrl+S 覆盖。
+    编辑器：1.5s 防抖自动保存 + Ctrl+S；关闭/翻页/卸载前 `flushTextSave(true)` 强写；Esc 在输入框内只失焦。
+    视频：`<video>` 关闭原生 controls，自绘玻璃 dock（播放/进度拖拽/时间/静音/音量/循环/全屏/前后翻页），进入自动播放，
+    空格播放暂停；`loadedmetadata` 取 videoWidth/Height 回填 store 并 fit；裁切/旋转/翻转/1:1 对视频隐藏；
+    `url` 来自 `lib.images`（用不在当前列表的路径 openLightbox 会拿不到 src，探针踩过）。

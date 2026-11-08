@@ -4,6 +4,7 @@ import { useLibrary, extractDropUrls } from '../stores/library'
 import { api, fileUrl } from '../api'
 import { startWindowDrag } from '../lib/winDrag'
 import { waveSeq, waveDelay, replayWave } from '../lib/wave'
+import { isVideoPath, isTextPath, extOf } from '../lib/fileKinds'
 import FolderIcon from './FolderIcon.vue'
 
 const lib = useLibrary()
@@ -150,9 +151,11 @@ watch(
     const out = {}
     await Promise.all(list.map(async (f) => {
       try {
-        const rows = await api.imagesByDir(lib.activeRootId, f.rel, 0, 1, 'added', false)
-        const im = rows?.[0]
-        if (im) out[f.rel] = fileUrl(im.thumbnail_path && im.thumbnail_path !== 'SKIP' ? im.thumbnail_path : im.file_path)
+        /* 取前几张挑封面：文本/视频没有缩略图时会退化成裂图，宁可回落到文件夹图标 */
+        const rows = await api.imagesByDir(lib.activeRootId, f.rel, 0, 6, 'added', false)
+        const pick = (rows || []).find((im) => im.thumbnail_path && im.thumbnail_path !== 'SKIP')
+          || (rows || []).find((im) => !isTextPath(im.file_path) && !isVideoPath(im.file_path))
+        if (pick) out[f.rel] = fileUrl(pick.thumbnail_path && pick.thumbnail_path !== 'SKIP' ? pick.thumbnail_path : pick.file_path)
       } catch { /* 单目录失败忽略 */ }
     }))
     if (token === coverToken) covers.value = out
@@ -374,8 +377,14 @@ watch(visible, (vis) => {
   if (!need.length) return
   for (const p of need) inFlight.set(p, now)
   const timeout = new Promise((resolve) => setTimeout(() => resolve(null), 20000))
-  Promise.race([api.generateThumbnailsBatch(need.slice(0, 80)), timeout]).then((res) => {
-    const results = res?.results || []
+  /* 文本走 SVG 文字缩略图管线；图片/视频走原生 sharp/poster 管线 */
+  const textNeed = need.filter((p) => isTextPath(p)).slice(0, 80)
+  const imgNeed = need.filter((p) => !isTextPath(p)).slice(0, 80)
+  const jobs = []
+  if (imgNeed.length) jobs.push(Promise.race([api.generateThumbnailsBatch(imgNeed), timeout]))
+  if (textNeed.length) jobs.push(Promise.race([api.generateTextThumbnails(textNeed), timeout]))
+  Promise.all(jobs).then((list) => {
+    const results = list.flatMap((r) => r?.results || [])
     for (const r of results) {
       if (r?.thumbnail_path) {
         const img = lib.images.find((i) => i.file_path === r.file_path)
@@ -383,6 +392,9 @@ watch(visible, (vis) => {
           img.thumbnail_path = r.thumbnail_path
           if (r.width && (!img.width || !img.height)) { img.width = r.width; img.height = r.height }
         }
+      } else if (r?.file_path && isTextPath(r.file_path)) {
+        const img = lib.images.find((i) => i.file_path === r.file_path)
+        if (img) img.thumbnail_path = 'SKIP' // 文本缩略图失败：停止重试，格子里显示文档占位
       }
       inFlight.delete(r?.file_path)
     }
@@ -393,17 +405,27 @@ watch(visible, (vis) => {
 
 const cells = computed(() =>
   visible.value.map((img) => {
-    // 取源策略：大格子/无缩略图 → 原图直链（gif 含动画；视频无图则占位），杜绝 ∘ 和糊图
-    const isVideo = /\.(mp4|webm|mov|mkv|avi|flv|f4v)$/i.test(img.file_path)
+    // 取源策略：大格子/无缩略图 → 原图直链（gif 含动画；视频/文本永不直链，没缩略图就占位）
+    const isVideo = isVideoPath(img.file_path)
+    const isText = isTextPath(img.file_path)
     const isGif = /\.gif$/i.test(img.file_path)
     const hasThumb = img.thumbnail_path && img.thumbnail_path !== 'SKIP'
-    const wantOriginal = (img.w > 500 || !hasThumb) && !isVideo
-    const src = (hasThumb && !wantOriginal) ? fileUrl(img.thumbnail_path) : (isVideo ? '' : fileUrl(img.file_path))
+    const wantOriginal = (img.w > 500 || !hasThumb) && !isVideo && !isText
+    const src = isText
+      ? (hasThumb ? fileUrl(img.thumbnail_path) + '?v=' + (img.modify_time || 0) : '')
+      : ((hasThumb && !wantOriginal) ? fileUrl(img.thumbnail_path) : (isVideo ? '' : fileUrl(img.file_path)))
+    const sizeText = (n) => !n ? '' : n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : n >= 1024 ? Math.round(n / 1024) + ' KB' : n + ' B'
+    const res = isText
+      ? ['文本', extOf(img.file_path).slice(1).toUpperCase(), sizeText(img.file_size)].filter(Boolean).join(' · ')
+      : (isVideo ? '视频' : (img.width && img.height ? `${img.width} × ${img.height}` : ''))
     return {
       ...img,
       src,
-      res: img.width && img.height ? `${img.width} × ${img.height}` : '',
-      info: img.res ? `${img.file_name}  ${img.res}` : img.file_name,
+      isText,
+      isVideo,
+      extLabel: isText ? extOf(img.file_path).slice(1).toUpperCase() : '',
+      res,
+      info: res ? `${img.file_name}  ${res}` : img.file_name,
     }
   })
 )
@@ -698,7 +720,11 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
       >
         <div class="thumb wi" :class="{ nowi: img.gi >= 48 }">
           <img v-if="img.src" :src="img.src" loading="lazy" draggable="false" />
-          <div v-else class="noimg">∘</div>
+          <div v-else-if="img.isText" class="docph">
+            <b>{{ img.extLabel }}</b>
+            <span>{{ img.file_name }}</span>
+          </div>
+          <div v-else class="noimg">{{ img.isVideo ? '▶' : '∘' }}</div>
           <!-- PicRand 式悬停信息条：叠在图片内部底部，不占布局 -->
           <div v-if="showLabels" class="hover-overlay" :data-info="img.info" />
         </div>
@@ -752,6 +778,19 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
 }
 .thumb img { width: 100%; height: 100%; object-fit: cover; }
 .noimg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--text-2); font-size: 22px; }
+/* 文本文件占位卡（文字缩略图还没生成时）：牛皮纸底 + 后缀徽标，避免裂图 */
+.docph {
+  position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
+  padding: 12px; background: linear-gradient(160deg, #f7f3ea 0%, #eee7d9 100%); color: #6b604f;
+}
+.docph b {
+  font-family: var(--font-mono, Consolas, monospace); font-size: 12px; letter-spacing: 1px;
+  padding: 2px 8px; border: 1px solid #cfc4ae; border-radius: 6px; background: rgba(255, 255, 255, 0.5);
+}
+.docph span {
+  max-width: 100%; font-size: 11px; color: #8a7c68; text-align: center;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 
 /* PicRand 式悬停信息条：图片内部底部渐变，hover 淡入，不占布局 */
 .hover-overlay {

@@ -71,6 +71,33 @@ const patches = [
     from: 'for (const dp of dbPathSet) {\n      if (!currentPaths.has(dp)) {\n        removed.push(dp);\n      }\n    }',
     to: 'for (const dr of dbRows) {\n      if (dr.deleted_at == null && !currentPaths.has(dr.file_path)) {\n        removed.push(dr.file_path);\n      }\n    } /* PicNest:P8d */',
   },
+  {
+    id: 'P9a', desc: 'scan-worker 收录文本类（txt/md/log/json/csv/ini/yaml…）',
+    from: "const exts = new Set(['.jpg','.jpeg','.png','.gif','.bmp','.webp','.tiff','.tif','.avif','.svg','.psd','.heic','.heif','.mp4','.webm','.mov','.mkv','.avi','.flv','.f4v'])",
+    to: "const exts = new Set(['.jpg','.jpeg','.png','.gif','.bmp','.webp','.tiff','.tif','.avif','.svg','.psd','.heic','.heif','.mp4','.webm','.mov','.mkv','.avi','.flv','.f4v','.txt','.md','.markdown','.log','.json','.jsonc','.csv','.tsv','.ini','.cfg','.conf','.yaml','.yml']); /* PicNest:P9a */",
+  },
+  {
+    id: 'P9b', desc: 'watcher-worker 监听文本类变动',
+    from: "const IMAGE_EXTS = new Set(['.jpg','.jpeg','.png','.gif','.bmp','.webp','.tiff','.tif','.avif','.svg','.psd','.heic','.heif','.mp4','.webm','.mov','.mkv','.avi','.flv','.f4v']);",
+    to: "const IMAGE_EXTS = new Set(['.jpg','.jpeg','.png','.gif','.bmp','.webp','.tiff','.tif','.avif','.svg','.psd','.heic','.heif','.mp4','.webm','.mov','.mkv','.avi','.flv','.f4v','.txt','.md','.markdown','.log','.json','.jsonc','.csv','.tsv','.ini','.cfg','.conf','.yaml','.yml']); /* PicNest:P9b */",
+  },
+  {
+    id: 'P9c', desc: 'SUPPORTED_EXTS 收录文本类（格式筛选不被主进程过滤掉）',
+    from: 'const SUPPORTED_EXTS = [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tiff", ".tif", ".avif", ".svg", ".psd", ".heic", ".heif", ".mp4", ".webm", ".mov", ".mkv", ".avi", ".flv", ".f4v"];',
+    to: 'const SUPPORTED_EXTS = [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tiff", ".tif", ".avif", ".svg", ".psd", ".heic", ".heif", ".mp4", ".webm", ".mov", ".mkv", ".avi", ".flv", ".f4v", ".txt", ".md", ".markdown", ".log", ".json", ".jsonc", ".csv", ".tsv", ".ini", ".cfg", ".conf", ".yaml", ".yml"]; /* PicNest:P9c */',
+  },
+  {
+    /* 注意：index.js 里有三份同形模板（oversize / scan / stats）。P9a 只替换到第一份（oversize），
+       真正决定入库的是 scan 模板这份（第二个匹配）——用独立标记再打一次。 */
+    id: 'P9d', desc: 'scan-worker（真正入库那份）收录文本类',
+    from: "const exts = new Set(['.jpg','.jpeg','.png','.gif','.bmp','.webp','.tiff','.tif','.avif','.svg','.psd','.heic','.heif','.mp4','.webm','.mov','.mkv','.avi','.flv','.f4v'])",
+    to: "const exts = new Set(['.jpg','.jpeg','.png','.gif','.bmp','.webp','.tiff','.tif','.avif','.svg','.psd','.heic','.heif','.mp4','.webm','.mov','.mkv','.avi','.flv','.f4v','.txt','.md','.markdown','.log','.json','.jsonc','.csv','.tsv','.ini','.cfg','.conf','.yaml','.yml']); /* PicNest:P9d */",
+  },
+  {
+    id: 'P9e', desc: 'stats-worker 统计文本文件（文件夹文件数/占用空间）',
+    from: "const exts = new Set(['.jpg','.jpeg','.png','.gif','.bmp','.webp','.tiff','.tif','.avif','.svg','.psd','.heic','.heif','.mp4','.webm','.mov','.mkv','.avi','.flv','.f4v'])",
+    to: "const exts = new Set(['.jpg','.jpeg','.png','.gif','.bmp','.webp','.tiff','.tif','.avif','.svg','.psd','.heic','.heif','.mp4','.webm','.mov','.mkv','.avi','.flv','.f4v','.txt','.md','.markdown','.log','.json','.jsonc','.csv','.tsv','.ini','.cfg','.conf','.yaml','.yml']); /* PicNest:P9e */",
+  },
 ]
 
 let ok = 0, skip = 0, fail = 0
@@ -127,6 +154,9 @@ const bridge = [
   '  picnestGetImageMeta: (filePath) => electron.ipcRenderer.invoke("picnest-get-image-meta", filePath),',
   '  picnestRenameImage: (filePath, newName) => electron.ipcRenderer.invoke("picnest-rename-image", filePath, newName),',
   '  picnestThumbLookup: (paths) => electron.ipcRenderer.invoke("picnest-thumb-lookup", paths),',
+  '  picnestReadText: (filePath) => electron.ipcRenderer.invoke("picnest-read-text", filePath),',
+  '  picnestSaveText: (filePath, content, expectedMtimeMs) => electron.ipcRenderer.invoke("picnest-save-text", filePath, content, expectedMtimeMs),',
+  '  picnestTextThumbnails: (paths) => electron.ipcRenderer.invoke("picnest-text-thumbnails", paths),',
   '  picnestMoveImage: (filePath, targetDir) => electron.ipcRenderer.invoke("picnest-move-image", filePath, targetDir),',
   '  picnestMoveDir: (dirPath, targetDir) => electron.ipcRenderer.invoke("picnest-move-dir", dirPath, targetDir),',
   '  picnestDirOrderSet: (parentKey, names) => electron.ipcRenderer.invoke("picnest-dir-order-set", parentKey, names),',
