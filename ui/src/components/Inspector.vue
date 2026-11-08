@@ -3,12 +3,25 @@ import { computed, ref, watch, nextTick } from 'vue'
 import { useLibrary } from '../stores/library'
 import { fileUrl } from '../api'
 
-// 右侧详情浮窗（Eagle 式：可编辑名/注释/URL/文件夹；删除只在右键菜单，防单点误触）
+// 右侧详情浮窗（Eagle 式）：图片单选 / 图片多选 / 文件夹单选 / 文件夹多选 四态
 const lib = useLibrary()
 const img = computed(() => lib.selected)
 
+/* ---------- 选择模式 ---------- */
+const dirNodes = computed(() => (lib.selectedDirs || [])
+  .map((rel) => ({ rel, node: rel ? lib.findNode(lib.tree?.tree, rel) : lib.tree?.tree }))
+  .filter((d) => d.node))
+const mode = computed(() => {
+  if (dirNodes.value.length) return dirNodes.value.length > 1 ? 'dirs' : 'dir'
+  if (lib.selectedPaths.length > 1) return 'multi'
+  if (img.value) return 'img'
+  return 'empty'
+})
+const singleDir = computed(() => (dirNodes.value.length === 1 ? dirNodes.value[0] : null))
+
 const fmtSize = (n) => {
   if (!n) return '—'
+  if (n >= 1073741824) return (n / 1073741824).toFixed(2) + ' GB'
   if (n > 1048576) return (n / 1048576).toFixed(2) + ' MB'
   if (n > 1024) return (n / 1024).toFixed(1) + ' KB'
   return n + ' B'
@@ -19,9 +32,11 @@ const fmtDate = (ms) => {
   const p = (x) => String(x).padStart(2, '0')
   return `${d.getFullYear()}/${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
+const fmtFolderDate = (ms) => fmtDate(ms)
 const extOf = (p) => (p ? (p.split('.').pop() || '').toUpperCase() : '')
+const thumbSrc = (im) => fileUrl(im.thumbnail_path && im.thumbnail_path !== 'SKIP' ? im.thumbnail_path : im.file_path)
 
-/* 名称编辑（Eagle F2 式：点击变输入框，Enter/失焦提交） */
+/* ---------- 单选图片 ---------- */
 const editingName = ref(false)
 const nameDraft = ref('')
 const nameInput = ref(null)
@@ -68,8 +83,6 @@ const paletteLoading = ref(false)
 watch(() => lib.selectedPath, async (p) => {
   palette.value = []
   if (!p) return
-  // 优先读颜色筛选的索引缓存（零延迟），没有才现算；两路统一映射成 {color, ratio}
-  // （此前缓存路径是 {r,g,b,percent} 裸形状，模板读 .color 直接炸 → 点色板筛选全灭）
   if (lib.palettes[p]) {
     palette.value = lib.palettes[p].slice(0, 9).map((c) => c.color
       ? { color: c.color, ratio: c.ratio }
@@ -88,19 +101,19 @@ watch(() => lib.selectedPath, async (p) => {
 const sections = ref({ info: true, palette: true, rating: true, folder: true, locate: true })
 const toggle = (k) => { sections.value[k] = !sections.value[k] }
 
-/* 点色板 = 以此色筛选（来自图自身色板 → 精确匹配分支必命中本图，吸色场景正解） */
+/* 点色板 = 以此色筛选 */
 function filterByPaletteColor(color) {
   const c = lib.filters.color
   const rgb = [...color]
   if (c.value && c.value.join() === rgb.join()) {
-    c.value = null; c.on = false // 再点一次取消
+    c.value = null; c.on = false
   } else {
     c.value = rgb; c.on = true; c.gray = false
   }
   lib.layoutTick++
 }
 
-/* 文件夹移动（真物理移动） */
+/* 文件夹移动（单选） */
 const moveOpen = ref(false)
 const moveNote = ref('')
 const moveNoteErr = ref(false)
@@ -126,16 +139,163 @@ async function copyFile() {
   if (!img.value) return
   try { await window.picrand.copyFilesToClipboard?.([img.value.file_path]) } catch { /* 静默 */ }
 }
+
+/* ---------- 多选图片 ---------- */
+const multiImages = computed(() => {
+  const map = new Map(lib.images.map((i) => [i.file_path, i]))
+  return lib.selectedPaths.map((p) => map.get(p)).filter(Boolean)
+})
+const stackImgs = computed(() => multiImages.value.slice(0, 4))
+function stackStyle(i) {
+  const n = stackImgs.value.length
+  const off = i - (n - 1) / 2
+  return {
+    transform: `translate(-50%, -50%) translateX(${off * 24}px) rotate(${off * 6}deg)`,
+    zIndex: i + 1,
+  }
+}
+const multiSize = computed(() => multiImages.value.reduce((s, i) => s + (i.file_size || 0), 0))
+const multiFormats = computed(() => {
+  const set = new Set(multiImages.value.map((i) => extOf(i.file_path)))
+  return set.size === 1 ? [...set][0] : '混合'
+})
+const multiRating = computed(() => {
+  const rs = multiImages.value.map((i) => i.rating || 0)
+  return rs.length && rs.every((r) => r === rs[0]) ? rs[0] : -1
+})
+/* 所选图片所在文件夹（去重） */
+const multiFolders = computed(() => {
+  const root = String(lib.tree?.rootPath || '').replace(/[\\/]+$/, '')
+  const map = new Map()
+  for (const im of multiImages.value) {
+    let rel = ''
+    if (root && im.file_path.toLowerCase().startsWith((root + '\\').toLowerCase())) {
+      const rest = im.file_path.slice(root.length).replace(/^[\\/]+/, '')
+      const idx = Math.max(rest.lastIndexOf('\\'), rest.lastIndexOf('/'))
+      rel = idx > 0 ? rest.slice(0, idx).split(/[\\/]/).join('/') : ''
+    }
+    map.set(rel, rel ? rel.split('/').pop() : (lib.tree?.tree?.name || '库根'))
+  }
+  return [...map.entries()].map(([rel, name]) => ({ rel, name }))
+})
+const multiMeta = ref({ annotation: '', url: '' })
+const multiNote = ref('')
+watch(() => lib.selectedPaths.join('|'), () => {
+  multiMeta.value = { annotation: '', url: '' }
+  multiNote.value = ''
+  moveOpen.value = false
+  moveNote.value = ''
+})
+async function applyMultiMeta(field) {
+  const val = String(multiMeta.value[field] || '').trim()
+  if (!val || !multiImages.value.length) return
+  const n = multiImages.value.length
+  for (const im of multiImages.value) await lib.saveMeta(im.file_path, { [field]: val })
+  multiMeta.value[field] = ''
+  multiNote.value = `已应用到 ${n} 个文件`
+  setTimeout(() => { if (multiNote.value === `已应用到 ${n} 个文件`) multiNote.value = '' }, 2400)
+}
+async function rateMulti(s) {
+  const target = multiRating.value === s ? 0 : s
+  await Promise.all(multiImages.value.map((im) => lib.rate(im.file_path, target)))
+  multiNote.value = target ? `已设为 ${target} 星` : '已清除评分'
+  setTimeout(() => { multiNote.value = '' }, 2000)
+}
+async function doMultiMove(e) {
+  const rel = e.target.value
+  const paths = multiImages.value.map((i) => i.file_path)
+  let ok = 0, fail = 0
+  for (const p of paths) {
+    const r = await lib.moveImage(p, rel)
+    if (r?.ok) ok++; else fail++
+  }
+  multiNote.value = `已移动 ${ok}${fail ? ` · 失败 ${fail}` : ''}`
+  setTimeout(() => { multiNote.value = '' }, 2600)
+}
+async function copyMultiFiles() {
+  if (!multiImages.value.length) return
+  try { await window.picrand.copyFilesToClipboard?.(multiImages.value.map((i) => i.file_path)) } catch { /* 静默 */ }
+}
+async function copyMultiPaths() {
+  if (!multiImages.value.length) return
+  try { await navigator.clipboard.writeText(multiImages.value.map((i) => i.file_path).join('\n')) } catch { /* 静默 */ }
+}
+
+/* ---------- 文件夹单选/多选 ---------- */
+const folderStats = ref({ loading: false, count: 0, size: 0, createdAt: 0, error: '' })
+watch(
+  () => (dirNodes.value.length ? `${mode.value}|${dirNodes.value.map((d) => d.rel).join('|')}|${lib.activeRootId}` : ''),
+  async () => {
+    if (!dirNodes.value.length) return
+    folderStats.value = { ...folderStats.value, loading: true, error: '' }
+    const rels = dirNodes.value.map((d) => d.rel)
+    const r = await lib.dirStats(rels)
+    if (r?.ok) folderStats.value = { loading: false, count: r.count, size: r.size, createdAt: r.createdAt || 0, error: '' }
+    else folderStats.value = { loading: false, count: 0, size: 0, createdAt: 0, error: r?.error || '统计失败' }
+  },
+  { immediate: true }
+)
+
+const folderNameDraft = ref('')
+const nameDirRel = ref('')
+watch(singleDir, (d) => {
+  nameDirRel.value = d?.rel || ''
+  folderNameDraft.value = d?.node?.name || ''
+}, { immediate: true })
+async function commitFolderName() {
+  const rel = nameDirRel.value
+  if (!rel) return
+  const node = lib.findNode(lib.tree?.tree, rel)
+  const oldName = node?.name || ''
+  const name = folderNameDraft.value.trim()
+  if (!name || name === oldName) { folderNameDraft.value = oldName; return }
+  const r = await lib.renameDir(rel, name)
+  if (r?.ok) {
+    nameDirRel.value = r.rel
+    folderNameDraft.value = r.name
+  } else {
+    folderNameDraft.value = oldName
+    lib.error = r?.error || '重命名失败'
+  }
+}
+function resetFolderName() { folderNameDraft.value = singleDir.value?.node?.name || '' }
+
+const dirDesc = ref('')
+let descTimer = null
+watch(() => (singleDir.value ? singleDir.value.rel : null), (rel) => {
+  clearTimeout(descTimer)
+  dirDesc.value = rel == null ? '' : (lib.dirMemory[rel]?.desc || '')
+}, { immediate: true })
+function queueDirDesc() {
+  clearTimeout(descTimer)
+  const rel = singleDir.value?.rel
+  if (rel == null) return
+  descTimer = setTimeout(() => {
+    if (singleDir.value?.rel === rel) lib.patchDirMemory(rel, { desc: dirDesc.value })
+  }, 600)
+}
+
+const exportNote = ref('')
+async function exportFolder() {
+  if (!singleDir.value) return
+  const r = await lib.exportDir(singleDir.value.rel)
+  if (r?.ok) {
+    exportNote.value = `已导出 ${r.count} 个文件`
+    setTimeout(() => { exportNote.value = '' }, 2600)
+  } else if (!r?.canceled) {
+    exportNote.value = r?.error || '导出失败'
+  }
+}
 </script>
 
 <template>
   <aside class="inspector">
-    <template v-if="img">
+    <!-- ========== 单选图片 ========== -->
+    <template v-if="mode === 'img' && img">
       <div class="preview">
         <img :src="fileUrl(img.file_path)" loading="lazy" draggable="false" />
       </div>
 
-      <!-- 可编辑名称：单击进入输入框（等价 Eagle F2/重命名） -->
       <input
         v-if="editingName" ref="nameInput" v-model="nameDraft"
         class="name-input" @keyup.enter="commitName" @blur="commitName" @keyup.esc="editingName = false"
@@ -208,7 +368,103 @@ async function copyFile() {
       </div>
     </template>
 
-    <div v-else class="empty-tip">点选一张图查看详情</div>
+    <!-- ========== 多选图片 ========== -->
+    <template v-else-if="mode === 'multi'">
+      <div class="stack">
+        <div v-for="(im, i) in stackImgs" :key="im.file_path" class="stack-card" :style="stackStyle(i)">
+          <img :src="thumbSrc(im)" draggable="false" />
+        </div>
+      </div>
+      <div class="multi-count">已选 {{ multiImages.length }} 个文件</div>
+
+      <input class="line-input" placeholder="添加注释（应用到全部）" v-model="multiMeta.annotation"
+             @keyup.enter="applyMultiMeta('annotation')" @blur="applyMultiMeta('annotation')" />
+      <input class="line-input" placeholder="多个链接（应用到全部）" v-model="multiMeta.url"
+             @keyup.enter="applyMultiMeta('url')" @blur="applyMultiMeta('url')" />
+      <div v-if="multiNote" class="move-note">{{ multiNote }}</div>
+
+      <div class="sec">
+        <div class="sec-head" @click="toggle('info')"><span>基本信息</span><i>{{ sections.info ? '▾' : '▸' }}</i></div>
+        <div v-show="sections.info" class="sec-body">
+          <div class="kv"><span>文件数</span><b>{{ multiImages.length }}</b></div>
+          <div class="kv"><span>文件大小</span><b>{{ fmtSize(multiSize) }}</b></div>
+          <div class="kv"><span>格式</span><b>{{ multiFormats }}</b></div>
+        </div>
+      </div>
+
+      <div class="sec">
+        <div class="sec-head" @click="toggle('rating')"><span>评分</span><i>{{ sections.rating ? '▾' : '▸' }}</i></div>
+        <div v-show="sections.rating" class="sec-body">
+          <div class="stars">
+            <i v-for="s in 5" :key="s" class="star" :class="{ on: multiRating >= s }" @click="rateMulti(s)">★</i>
+          </div>
+          <div v-if="multiRating < 0" class="muted">多个评分</div>
+        </div>
+      </div>
+
+      <div class="sec">
+        <div class="sec-head" @click="toggle('folder')"><span>文件夹</span><i>{{ sections.folder ? '▾' : '▸' }}</i></div>
+        <div v-show="sections.folder" class="sec-body">
+          <div class="folder-row wrap">
+            <span v-for="f in multiFolders" :key="f.rel" class="folder-chip" :title="f.rel || '库根'">{{ f.name }}</span>
+            <button class="move-btn" @click="moveOpen = !moveOpen">{{ moveOpen ? '收起' : '移动到…' }}</button>
+          </div>
+          <select v-if="moveOpen" class="move-select" @change="doMultiMove($event)">
+            <option value="" disabled selected>全部移到目标文件夹…</option>
+            <option value="">（库根目录）</option>
+            <option v-for="d in lib.flatDirs()" :key="d.rel" :value="d.rel">{{ '　'.repeat(d.depth) + d.name }}（{{ d.total }}）</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="sec">
+        <div class="sec-head" @click="toggle('locate')"><span>操作</span><i>{{ sections.locate ? '▾' : '▸' }}</i></div>
+        <div v-show="sections.locate" class="sec-body">
+          <div class="actions">
+            <button @click="copyMultiFiles">复制 {{ multiImages.length }} 个文件</button>
+            <button @click="copyMultiPaths">复制全部路径</button>
+          </div>
+          <div class="del-note">删除请右键图片 → 删除（防误触）</div>
+        </div>
+      </div>
+    </template>
+
+    <!-- ========== 文件夹（单选 / 多选） ========== -->
+    <template v-else-if="mode === 'dir' || mode === 'dirs'">
+      <template v-if="mode === 'dir' && singleDir">
+        <input v-if="singleDir.rel" class="line-input folder-name" v-model="folderNameDraft"
+               @keyup.enter="commitFolderName" @blur="commitFolderName" @keyup.esc="resetFolderName" />
+        <div v-else class="folder-title">{{ singleDir.node.name }}</div>
+        <div v-if="!singleDir.rel" class="folder-note">资料库根目录</div>
+        <textarea class="line-input desc" placeholder="描述" v-model="dirDesc" @input="queueDirDesc"></textarea>
+      </template>
+      <template v-else>
+        <div class="folder-title">多个标题</div>
+        <div class="multi-count">已选 {{ dirNodes.length }} 个文件夹</div>
+      </template>
+
+      <div class="sec">
+        <div class="sec-head" @click="toggle('info')"><span>基本信息</span><i>{{ sections.info ? '▾' : '▸' }}</i></div>
+        <div v-show="sections.info" class="sec-body">
+          <div class="kv"><span>文件数</span><b>{{ folderStats.loading ? '…' : folderStats.count }}</b></div>
+          <div class="kv"><span>占用空间</span><b>{{ folderStats.loading ? '…' : fmtSize(folderStats.size) }}</b></div>
+          <div v-if="mode === 'dir'" class="kv"><span>添加日期</span><b>{{ folderStats.loading ? '…' : fmtFolderDate(folderStats.createdAt) }}</b></div>
+          <div v-if="folderStats.error" class="muted">{{ folderStats.error }}</div>
+        </div>
+      </div>
+
+      <div v-if="mode === 'dir'" class="sec">
+        <div class="sec-head" @click="toggle('locate')"><span>操作</span><i>{{ sections.locate ? '▾' : '▸' }}</i></div>
+        <div v-show="sections.locate" class="sec-body">
+          <div class="actions">
+            <button @click="exportFolder">导出文件夹（含子文件夹）</button>
+          </div>
+          <div v-if="exportNote" class="move-note">{{ exportNote }}</div>
+        </div>
+      </div>
+    </template>
+
+    <div v-else class="empty-tip">点选图片或文件夹查看详情</div>
   </aside>
 </template>
 
@@ -221,7 +477,6 @@ async function copyFile() {
   animation: slide-in 0.22s ease;
 }
 @keyframes slide-in { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
-/* 隐藏右侧长滚动条（保留滚动能力） */
 .inspector { scrollbar-width: none; }
 .inspector::-webkit-scrollbar { display: none; }
 
@@ -261,8 +516,10 @@ async function copyFile() {
 .folder-chip {
   display: inline-block; padding: 4px 10px; border-radius: 8px;
   background: var(--accent-weak); color: var(--accent); font-size: 12px;
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .folder-row { display: flex; align-items: center; gap: 8px; }
+.folder-row.wrap { flex-wrap: wrap; }
 .move-btn {
   border: 1px solid var(--border); background: transparent; color: var(--text-2);
   padding: 4px 8px; border-radius: 8px; font-size: 11px; cursor: pointer;
@@ -274,7 +531,7 @@ async function copyFile() {
   border: 1px solid var(--border); border-radius: 8px;
   background: var(--bg-2); color: var(--text); font-size: 12px; padding: 6px; outline: none;
 }
-.move-note { margin-top: 6px; font-size: 11px; color: var(--accent); }
+.move-note { margin: 6px 10px; font-size: 11px; color: var(--accent); }
 .move-note.err { color: #d24b4b; }
 
 .swatches { display: flex; gap: 4px; }
@@ -297,4 +554,22 @@ async function copyFile() {
 .del-note { margin-top: 8px; font-size: 11px; color: var(--text-2); opacity: .8; }
 .muted { color: var(--text-2); font-size: 12px; }
 .empty-tip { padding: 40px 16px; text-align: center; color: var(--text-2); font-size: 12px; }
+
+/* ---- 多选图片：扇形堆叠预览 ---- */
+.stack { position: relative; height: 148px; margin: 14px 10px 0; }
+.stack-card {
+  position: absolute; left: 50%; top: 50%;
+  width: 52%; height: 100%;
+  border-radius: 10px; overflow: hidden;
+  border: 1px solid var(--border); background: var(--bg-2);
+  box-shadow: var(--shadow);
+}
+.stack-card img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.multi-count { padding: 11px 12px 12px; text-align: center; font-size: 13px; font-weight: 600; }
+
+/* ---- 文件夹详情 ---- */
+.folder-title { padding: 14px 12px 10px; font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.folder-name { margin: 12px 10px 8px; font-weight: 600; }
+.folder-note { padding: 0 12px 8px; font-size: 11px; color: var(--text-2); }
+.desc { min-height: 64px; resize: vertical; font-family: inherit; line-height: 1.5; margin-bottom: 10px; }
 </style>

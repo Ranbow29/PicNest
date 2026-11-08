@@ -92,6 +92,7 @@ if (!psrc.includes(anchor)) { console.error('[FAIL] P4b 找不到 preload 暴露
 const bridge = [
   'Object.assign(api, { /* PicNest:P4b */',
   '  picnestDirTree: (folderId) => electron.ipcRenderer.invoke("picnest-dir-tree", folderId),',
+  '  picnestDirStats: (folderId, rels) => electron.ipcRenderer.invoke("picnest-dir-stats", folderId, rels),',
   '  picnestImagesByDir: (folderId, dirRel, offset, limit, sortMode, sortAsc) => electron.ipcRenderer.invoke("picnest-images-by-dir", folderId, dirRel, offset, limit, sortMode, sortAsc),',
   '  picnestCountAll: (folderId) => electron.ipcRenderer.invoke("picnest-count-all", folderId),',
   '  picnestRecent: (folderId, limit) => electron.ipcRenderer.invoke("picnest-recent", folderId, limit),',

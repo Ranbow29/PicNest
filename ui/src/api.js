@@ -25,6 +25,7 @@ export const api = {
   windowDragEnd: () => p().windowDragEnd?.(),
   // PicNest 新增
   dirTree: (folderId) => invoke('picnestDirTree', folderId),
+  dirStats: (folderId, rels) => invoke('picnestDirStats', folderId, rels),
   imagesByDir: (folderId, dirRel, offset, limit, sortMode = 'id', sortAsc) =>
     invoke('picnestImagesByDir', folderId, dirRel, offset, limit, sortMode, sortAsc),
   countAll: (folderId) => invoke('picnestCountAll', folderId),

@@ -116,3 +116,5 @@ PicNest/
 24. **文件系统目录移动必须同步 DB 路径前缀**：`picnest-move-dir` 曾只 `fs.renameSync` 不更新 `images.file_path`，
     而目录树是从 DB 派生的 → 旧位置仍显示 N 张、新位置 0 张（磁盘实际已搬完）。现在 rename 后按
     `LIKE 转义前缀` 批量 UPDATE 整棵子树的 file_path/file_name；重命名走全量 sync 兜底。凡是物理移动目录都要查这条。
+25. **images 表没有 added_at 列**（只有 folders 有）：文件夹详情的「添加日期」取物理目录 `fs.statSync().birthtimeMs`；
+    文件夹统计（`picnest-dir-stats`）用 rel 前缀 `LIKE ... OR ...` 一次查询取并集——父子文件夹同时选中不会重复计数。

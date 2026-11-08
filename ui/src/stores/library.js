@@ -260,6 +260,12 @@ export const useLibrary = defineStore('library', {
       return r
     },
 
+    /* 文件夹统计（详情面板）：当前库 + 若干 rel，union 去重 */
+    async dirStats(rels) {
+      try { return await api.dirStats(this.activeRootId, rels) }
+      catch (e) { return { ok: false, error: String(e?.message || e) } }
+    },
+
     /* 文件夹记忆（颜色/展开态）：乐观更新本地 + 落 config.json */
     async patchDirMemory(rel, patch) {
       this.dirMemory = { ...this.dirMemory, [rel]: { ...(this.dirMemory[rel] || {}), ...patch } }

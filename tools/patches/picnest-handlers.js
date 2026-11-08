@@ -94,6 +94,40 @@ electron.ipcMain.handle("picnest-dir-tree", (_event, folderId) => {
   return { rootPath: root.path, tree: toNode(rootDir, ""), orphanFiles: rows.length - Object.values(dirAt).reduce((s, d) => s + d.direct, 0) };
 });
 
+/* 文件夹统计（详情面板：单选/多选文件夹 → 文件数/占用空间/添加日期；union 去重，rel "" = 库根） */
+electron.ipcMain.handle("picnest-dir-stats", (_event, folderId, rels) => {
+  try {
+    const root = getDb().prepare("SELECT path FROM folders WHERE id = ?").get(folderId);
+    if (!root) return { ok: false, error: "资料库不存在" };
+    const sep = root.path.includes("\\") ? "\\" : "/";
+    const list = Array.isArray(rels) && rels.length ? rels : [""];
+    const pats = list.map((rel) => {
+      const r = String(rel || "").replace(/^\/+|\/+$/g, "");
+      return r
+        ? picnestLikeEscape(root.path + sep + r.split("/").join(sep) + sep) + "%"
+        : picnestLikeEscape(root.path + sep) + "%";
+    });
+    const where = pats.map(() => "file_path LIKE ? ESCAPE '\\'").join(" OR ");
+    const row = getDb().prepare(
+      `SELECT COUNT(*) AS count, COALESCE(SUM(file_size), 0) AS size
+       FROM images WHERE folder_id = ? AND deleted_at IS NULL AND (${where})`
+    ).get(folderId, ...pats);
+    /* 添加日期 = 物理目录创建时间（图片行没有 added_at 列） */
+    let createdAt = 0;
+    if (list.length === 1) {
+      try {
+        const r0 = String(list[0] || "").replace(/^\/+|\/+$/g, "");
+        const abs = r0 ? path.join(root.path, r0.split("/").join(sep)) : root.path;
+        const st = fs.statSync(abs);
+        createdAt = st.birthtimeMs || st.mtimeMs || 0;
+      } catch (e) { /* 目录不存在时忽略 */ }
+    }
+    return { ok: true, count: row?.count || 0, size: row?.size || 0, createdAt };
+  } catch (e) {
+    return { ok: false, error: String(e?.message || e) };
+  }
+});
+
 /* 某子目录下的图片分页（dirRel 用 "/" 分隔，"" = 根层直属文件） */
 electron.ipcMain.handle("picnest-images-by-dir", (_event, folderId, dirRel, offset, limit, sortMode, sortAsc) => {
   picnestMigrate();
