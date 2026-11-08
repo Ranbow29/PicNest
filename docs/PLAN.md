@@ -111,5 +111,5 @@ PicNest/
     同批修复：`import-check` 把目录从 clean 分流到 `dirs`（文件夹走整包复制，不再误登记成新资料库）。
 22. **外部拖入文件夹 = 复制为子文件夹**（不是登记新库）：保留内部结构、同名合并、同名同大小跳过、空目录不落盘；
     拖到资料库行/空白才进对应库根。落点语义（树行/缝隙/主展示区）见 HANDOFF 第三节。
-23. **Vue Transition 在最小化窗口会卡死**：transitionend 不触发 → 元素永久留在 DOM（opacity 0 仍可命中点击）。
-    给 `<Transition>` 显式 `:duration="{enter,leave}"`；验证任何动效前先还原窗口（#19）。
+23. **Vue Transition 在隐藏/最小化窗口会卡死**：transitionend 不触发 → 元素永久留在 DOM（opacity 0 仍可命中点击）。
+    结果卡已改为 **CSS 入场动画 + `v-if` 立即卸载**；验证任何动效前先还原并前置窗口（最后台被遮挡也可能 `visibilityState=hidden`，#19）。

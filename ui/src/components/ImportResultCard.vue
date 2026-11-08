@@ -30,29 +30,25 @@ onBeforeUnmount(clear)
 
 <template>
   <Teleport to="body">
-    <Transition name="imp" :duration="{ enter: 260, leave: 200 }">
-      <div
-        v-if="r.open"
-        class="imp-card" :class="r.tone"
-        @mouseenter="hover = true; clear()"
-        @mouseleave="hover = false; arm()"
-      >
-        <Transition name="det" :duration="{ enter: 200, leave: 160 }">
-          <div v-if="open && r.details.length" class="imp-details">
-            <div v-for="(d, i) in r.details" :key="i" class="line">
-              <span class="k" :title="d.label">{{ d.label }}</span>
-              <span class="v">{{ d.text }}</span>
-            </div>
-          </div>
-        </Transition>
-        <div class="imp-bar">
-          <i class="dot" />
-          <button class="summary" :title="open ? '收起明细' : '查看明细'" @click="toggle">{{ r.summary }}</button>
-          <button v-if="r.details.length" class="caret" :class="{ open }" @click="toggle">▾</button>
-          <button class="close" title="关闭" @click="dismiss">✕</button>
+    <div
+      v-if="r.open"
+      class="imp-card" :class="r.tone"
+      @mouseenter="hover = true; clear()"
+      @mouseleave="hover = false; arm()"
+    >
+      <div v-if="open && r.details.length" class="imp-details">
+        <div v-for="(d, i) in r.details" :key="i" class="line">
+          <span class="k" :title="d.label">{{ d.label }}</span>
+          <span class="v">{{ d.text }}</span>
         </div>
       </div>
-    </Transition>
+      <div class="imp-bar">
+        <i class="dot" />
+        <button class="summary" :title="open ? '收起明细' : '查看明细'" @click="toggle">{{ r.summary }}</button>
+        <button v-if="r.details.length" class="caret" :class="{ open }" @click="toggle">▾</button>
+        <button class="close" title="关闭" @click="dismiss">✕</button>
+      </div>
+    </div>
   </Teleport>
 </template>
 
@@ -63,6 +59,11 @@ onBeforeUnmount(clear)
   background: var(--panel-strong); backdrop-filter: blur(var(--blur));
   border: 1px solid var(--border); border-radius: 12px;
   box-shadow: var(--shadow); overflow: hidden;
+  animation: imp-in 0.26s var(--ease-overshoot) both;
+}
+@keyframes imp-in {
+  from { opacity: 0; transform: translate(-50%, 12px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
 }
 .imp-card.ok { border-color: var(--accent); }
 .imp-card.error { border-color: #cf6b5c; }
@@ -94,7 +95,9 @@ onBeforeUnmount(clear)
   max-height: 172px; overflow-y: auto; padding: 11px 14px 9px;
   border-bottom: 1px solid var(--border);
   display: flex; flex-direction: column; gap: 6px;
+  animation: det-in 0.18s ease both;
 }
+@keyframes det-in { from { opacity: 0; } to { opacity: 1; } }
 .imp-details::-webkit-scrollbar { width: 6px; }
 .imp-details::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 .line { display: flex; gap: 10px; font-size: 11.5px; line-height: 1.5; }
@@ -103,8 +106,4 @@ onBeforeUnmount(clear)
   color: var(--accent); font-weight: 600;
 }
 .line .v { color: var(--text-2); word-break: break-all; }
-.imp-enter-active, .imp-leave-active { transition: opacity 0.2s ease, transform 0.24s var(--ease-overshoot); }
-.imp-enter-from, .imp-leave-to { opacity: 0; transform: translate(-50%, 12px); }
-.det-enter-active, .det-leave-active { transition: opacity 0.16s ease; }
-.det-enter-from, .det-leave-to { opacity: 0; }
 </style>

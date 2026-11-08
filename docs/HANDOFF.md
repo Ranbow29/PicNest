@@ -123,5 +123,5 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，替代 Eagle 日常使用
 7. SQLite LIKE + Windows 路径必须整体转义含分隔符（PLAN #16）；Vue 模板禁用 window/innerWidth（#17）；setup 内新代码块放全部依赖声明之后（#18）
 8. **查重 SQL 必须带 `folder_id = ?`**（曾全局查重：往 A 库导入会弹 B 库的重复）；目录与文件在 `picnest-import-check` 里分流返回（`dirs` / `clean` / `conflicts` / `missing`）
 9. **改主进程/preload 后必须重放 `apply.mjs` 并重启应用**（HMR 只覆盖渲染层）；改 store 后若行为没变先整页 reload（无 acceptHMRUpdate）
-10. **最小化窗口会冻结过渡**：Vue `<Transition>` 的 transitionend 不触发 → 元素卡在 DOM（隐形但可挡点击）。给 Transition 显式 `:duration` 兜底；验证动效前先 `ShowWindow(9)` 还原
+10. **窗口隐藏/最小化会冻结 CSS 动画与 Vue 过渡**：transitionend 不触发 → `<Transition>` 元素会永久留在 DOM（隐形但可挡点击）。结果卡已改为 **CSS 入场动画 + `v-if` 立即卸载**（不依赖 transitionend）；验证动效前先还原并前置窗口（遮挡也可能报 hidden）
 11. 每完成一役 `git commit`；数量对账 `python tools/verify_counts.py`
