@@ -30,9 +30,11 @@ function onKeydown(e) {
   /* 简报模式：全屏演示优先接管键盘 */
   if (lib.brief.open) {
     const k = e.key
+    const plain = !e.ctrlKey && !e.metaKey && !e.altKey
+    const lk = String(k || '').toLowerCase()
     if (k === 'Escape') { e.preventDefault(); lib.closeBrief(); return }
-    if (k === 'ArrowLeft') { e.preventDefault(); lib.briefNav(-1); return }
-    if (k === 'ArrowRight' || k === ' ') { e.preventDefault(); lib.briefNav(1); return }
+    if (k === 'ArrowLeft' || (plain && lk === 'a')) { e.preventDefault(); lib.briefNav(-1); return }
+    if (k === 'ArrowRight' || k === ' ' || (plain && lk === 'd')) { e.preventDefault(); lib.briefNav(1); return }
     return
   }
   const key = String(e.key || '').toLowerCase()

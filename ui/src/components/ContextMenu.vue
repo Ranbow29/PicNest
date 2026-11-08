@@ -11,6 +11,21 @@ const pos = computed(() => ({
   top: Math.max(4, Math.min(menu.value.y ?? 0, window.innerHeight - 280)) + 'px',
 }))
 
+/* 图片右键查重：扫图片所在文件夹（库根散图=全库），入口不再只藏在文件夹菜单里 */
+function dupForImage() {
+  const p = menu.value.image?.file_path || ''
+  const root = lib.activeRoot || lib.roots.find((r) => p.toLowerCase().startsWith(String(r.path || '').toLowerCase()))
+  let rel = ''
+  if (root?.path) {
+    const rp = String(root.path).replace(/\//g, '\\').replace(/\\+$/, '')
+    const pp = String(p).replace(/\//g, '\\')
+    if (pp.toLowerCase().startsWith(rp.toLowerCase() + '\\')) {
+      rel = pp.slice(rp.length + 1).split('\\').slice(0, -1).join('/')
+    }
+  }
+  lib.openDupFinder(root?.id ?? lib.activeRootId, rel)
+}
+
 const items = computed(() => {
   if (!menu.value.image) return []
   const nSel = lib.selectedPaths.length
@@ -38,6 +53,7 @@ const items = computed(() => {
       run: () => lib.paste({ rootId: lib.activeRootId, rel: lib.currentDirRel }),
     }] : []),
     { key: 'copypath', label: '复制文件路径', run: async () => { try { await navigator.clipboard.writeText(menu.value.image.file_path) } catch {} } },
+    { key: 'dupes', label: '查找重复…', run: dupForImage },
     { key: 'uncat', label: nSel > 1 ? `移入未分类（${nSel} 张）` : '移入未分类', run: () => {
       const path = menu.value.image.file_path
       const paths = (lib.selectedPaths.length > 1 && lib.selectedPaths.includes(path))

@@ -544,14 +544,16 @@ function onKey(e) {
     if (kind.value === 'video') { e.preventDefault(); togglePlay() }
     return
   }
+  const plain = !e.ctrlKey && !e.metaKey && !e.altKey
+  const k = String(e.key || '').toLowerCase()
   if (e.key === 'Escape') {
     if (cropAsk.value) { cropAsk.value = false }
     else if (lib.viewer.cropMode) { exitCrop() }
     else lib.closeLightbox()
   }
   else if (e.key === 'Enter' && lib.viewer.cropMode && crop.value) applyCrop()
-  else if (e.key === 'ArrowLeft' && !lib.viewer.cropMode) lib.lightboxNav(-1)
-  else if (e.key === 'ArrowRight' && !lib.viewer.cropMode) lib.lightboxNav(1)
+  else if ((e.key === 'ArrowLeft' || (plain && k === 'a')) && !lib.viewer.cropMode) lib.lightboxNav(-1)
+  else if ((e.key === 'ArrowRight' || (plain && k === 'd')) && !lib.viewer.cropMode) lib.lightboxNav(1)
   else if (e.key === '0' && kind.value === 'image') fitToWindow()
 }
 </script>
@@ -574,8 +576,8 @@ function onKey(e) {
     <!-- 文本：内置编辑器（自动保存 + Ctrl+S；超 2MB 只读预览） -->
     <div v-else-if="kind === 'text'" class="text-stage">
       <div class="text-bar">
-        <button class="tb-btn nav" title="上一张（←）" @click="lib.lightboxNav(-1)">‹</button>
-        <button class="tb-btn nav" title="下一张（→）" @click="lib.lightboxNav(1)">›</button>
+        <button class="tb-btn nav" title="上一张（←/A）" @click="lib.lightboxNav(-1)">‹</button>
+        <button class="tb-btn nav" title="下一张（→/D）" @click="lib.lightboxNav(1)">›</button>
         <span class="tb-name" :title="fileName">{{ fileName }}</span>
         <span v-if="textState.encoding" class="tb-badge">{{ textState.encoding }}</span>
         <span v-if="textState.truncated" class="tb-warn">超过 2MB · 只读预览</span>
@@ -634,8 +636,8 @@ function onKey(e) {
 
     <!-- 底部悬浮工具条（ZCode 输入口风格） -->
     <div v-if="kind === 'image'" class="dock glass-pill dock-clear">
-      <button class="dock-btn" title="上一张（←）" @click="lib.lightboxNav(-1)">‹</button>
-      <button class="dock-btn" title="下一张（→）" @click="lib.lightboxNav(1)">›</button>
+      <button class="dock-btn" title="上一张（←/A）" @click="lib.lightboxNav(-1)">‹</button>
+      <button class="dock-btn" title="下一张（→/D）" @click="lib.lightboxNav(1)">›</button>
       <i class="vsep" />
       <button class="dock-btn" :class="{ on: lib.viewer.flopX }" title="水平翻转" @click="lib.viewer.flopX = !lib.viewer.flopX">⇋</button>
       <button class="dock-btn" :class="{ on: lib.viewer.rot % 360 !== 0 }" title="旋转 90°" @click="lib.viewer.rot = (lib.viewer.rot + 90) % 360; lib.viewer.fitNonce++">↻</button>
@@ -661,8 +663,8 @@ function onKey(e) {
       <button class="dock-btn" :class="{ on: vid.loop }" title="循环播放" @click="toggleLoop">↻</button>
       <button class="dock-btn" title="全屏" @click="toggleFullscreen">⛶</button>
       <i class="vsep" />
-      <button class="dock-btn" title="上一张（←）" @click="lib.lightboxNav(-1)">‹</button>
-      <button class="dock-btn" title="下一张（→）" @click="lib.lightboxNav(1)">›</button>
+      <button class="dock-btn" title="上一张（←/A）" @click="lib.lightboxNav(-1)">‹</button>
+      <button class="dock-btn" title="下一张（→/D）" @click="lib.lightboxNav(1)">›</button>
     </div>
     <div v-if="!url" class="empty">图片不存在</div>
     <!-- 裁剪结果 toast：不随 cropMode 消失（挂在舞台根层） -->

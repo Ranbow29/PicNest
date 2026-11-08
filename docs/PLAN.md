@@ -257,6 +257,8 @@ PicNest/
     监听 `fullscreenchange` 兜底关闭。视频静音循环，文本占位。导航用 `lib.images` 顺序（不是网格的 sortedImages，可能与大图顺序有差）。
     **简报缩放/平移/右键**：`brief` 状态带 `scale/tx/ty`（切图/重开都重置）；滚轮以光标为锚点缩放（0.2–8×，
     `t' = p - (s'/s)(p - t)`），拖拽 4px 阈值后才算平移，未拖动 pointerup 才算单击切图；右键呼出图片菜单。
+    **灯箱/简报 A/D = 上一张/下一张**（与 ←→ 同义；输入框/裁剪态不拦截，Ctrl+A/Ctrl+D 不误触）。
+    **图片右键也有「查找重复…」**（扫该图所在文件夹；库根散图=全库），入口不再只藏在文件夹/资料库菜单。
     Brief z-index 必须 **890 < ContextMenu 900**，否则菜单被全屏层盖住；删除/移入未分类等会改变路径的操作要顺手 `closeBrief()`。
     **灯箱右键**：`.viewer` 上 `@contextmenu`，输入框/dock/裁剪层保留原生；菜单操作移动/删除时关掉灯箱。
     ⑤黑白预览（Eagle 语义：asar 里 `isGrayscaleMode` checkbox，全局显示开关）：`lib.grayscaleMode` 存 localStorage；

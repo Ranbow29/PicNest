@@ -86,7 +86,7 @@ onBeforeUnmount(() => {
         <span>← → 仍可切到下一张</span>
       </div>
       <div class="brief-count">{{ idx + 1 }} / {{ lib.images.length }}</div>
-      <div class="brief-hint">滚轮缩放 · 拖拽平移 · 单击下一张 · 右键菜单 · Esc 退出</div>
+      <div class="brief-hint">←/A D→ 切换 · 滚轮缩放 · 拖拽平移 · 单击下一张 · 右键菜单 · Esc 退出</div>
       <button class="brief-x" title="退出（Esc）" @click.stop="lib.closeBrief()">✕</button>
     </div>
   </Teleport>
