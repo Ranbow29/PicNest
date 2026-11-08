@@ -186,11 +186,14 @@ electron.ipcMain.handle("picnest-thumb-lookup", (_event, paths) => {
   return out;
 });
 
-/* 外部拖入：目录→返回待登记；图片/视频→复制进目标目录（撞名加序号），watcher 自动入库 */
+/* 外部拖入：目录→返回待处理；图片/视频→复制进目标目录（撞名加序号），watcher 自动入库 */
+const PICNEST_DROP_EXTS = new Set([".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tiff", ".tif", ".avif", ".svg", ".psd", ".heic", ".heif", ".mp4", ".webm", ".mov", ".mkv", ".avi", ".flv", ".f4v"]);
+const PICNEST_DROP_JUNK = new Set(["thumbs.db", "desktop.ini"]);
 electron.ipcMain.handle("picnest-import-files", async (_event, paths, targetDir) => {
-  const IMG_EXTS = new Set([".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tiff", ".tif", ".avif", ".svg", ".psd", ".heic", ".heif", ".mp4", ".webm", ".mov", ".mkv", ".avi", ".flv", ".f4v"]);
+  const IMG_EXTS = PICNEST_DROP_EXTS;
   const dirs = [];
-  let copied = 0, failed = 0, skipped = 0;
+  const unsupportedNames = [];
+  let copied = 0, failed = 0, skipped = 0, unsupported = 0;
   try {
     if (!fs.existsSync(targetDir)) return { ok: false, error: "目标目录不存在", dirs: [] };
     for (const p of paths || []) {
@@ -199,7 +202,11 @@ electron.ipcMain.handle("picnest-import-files", async (_event, paths, targetDir)
         const st = fs.statSync(p);
         if (st.isDirectory()) { dirs.push(p); continue; }
         const ext = path.extname(p).toLowerCase();
-        if (!IMG_EXTS.has(ext)) { failed++; continue; }
+        if (!IMG_EXTS.has(ext) || PICNEST_DROP_JUNK.has(path.basename(p).toLowerCase())) {
+          unsupported++;
+          if (unsupportedNames.length < 12) unsupportedNames.push(path.basename(p));
+          continue;
+        }
         const sameName = path.join(targetDir, path.basename(p));
         if (fs.existsSync(sameName) && fs.statSync(sameName).size === st.size) { skipped++; continue; } // Eagle 式：同名同大小 = 重复，跳过
         let target = path.join(targetDir, path.basename(p));
@@ -210,9 +217,75 @@ electron.ipcMain.handle("picnest-import-files", async (_event, paths, targetDir)
         copied++;
       } catch (e) { failed++; }
     }
-    return { ok: true, dirs, copied, failed, skipped };
+    return { ok: true, dirs, copied, failed, skipped, unsupported, unsupportedNames };
   } catch (e) {
     return { ok: false, error: String(e?.message || e), dirs: [] };
+  }
+});
+
+/* 外部拖入文件夹（PicNest P7）：复制为目标目录下的同名子文件夹（保留内部结构，仅收录图片/视频）
+   目标同名文件夹 → 合并；同名同大小 → 跳过；同名不同内容 → 加序号。空目录不落盘。 */
+electron.ipcMain.handle("picnest-import-dir-copy", async (_event, srcDir, targetDir) => {
+  const detail = { ok: false, name: "", dest: "", copied: 0, skipped: 0, failed: 0, unsupported: 0, unsupportedNames: [], dirsCreated: 0 };
+  try {
+    if (!srcDir || !fs.existsSync(srcDir)) return { ...detail, error: "源文件夹不存在" };
+    if (!fs.existsSync(targetDir)) return { ...detail, error: "目标目录不存在" };
+    if (!fs.statSync(srcDir).isDirectory()) return { ...detail, error: "不是文件夹" };
+    const base = path.basename(srcDir).replace(/[\\/:*?"<>|]/g, "_") || "导入文件夹";
+    let dest = path.join(targetDir, base);
+    for (let n = 1; fs.existsSync(dest) && !fs.statSync(dest).isDirectory(); n++) {
+      dest = path.join(targetDir, base + " (" + n + ")");
+    }
+    const madeDirs = new Set();
+    const ensureDir = (abs) => {
+      if (fs.existsSync(abs)) return;
+      fs.mkdirSync(abs, { recursive: true });
+      madeDirs.add(abs);
+    };
+    const unsupportedAt = (relName) => {
+      detail.unsupported++;
+      if (detail.unsupportedNames.length < 12) detail.unsupportedNames.push(relName);
+    };
+    const walk = (from, to, relPrefix) => {
+      let entries = [];
+      try { entries = fs.readdirSync(from, { withFileTypes: true }); }
+      catch (e) { detail.failed++; return; }
+      for (const ent of entries) {
+        if (ent.name.startsWith(".")) continue; // 隐藏文件/目录
+        const srcPath = path.join(from, ent.name);
+        const relName = relPrefix ? relPrefix + "/" + ent.name : ent.name;
+        if (ent.isDirectory()) { walk(srcPath, path.join(to, ent.name), relName); continue; }
+        const lower = ent.name.toLowerCase();
+        const ext = path.extname(lower);
+        if (PICNEST_DROP_JUNK.has(lower)) continue; // 系统缩略图库等垃圾文件
+        if (!PICNEST_DROP_EXTS.has(ext)) { unsupportedAt(relName); continue; }
+        try {
+          const st = fs.statSync(srcPath);
+          let finalDst = path.join(to, ent.name);
+          if (fs.existsSync(finalDst)) {
+            let sameSize = false;
+            try { sameSize = fs.statSync(finalDst).size === st.size; } catch (e) { /* 不可读按冲突处理 */ }
+            if (sameSize) { detail.skipped++; continue; }
+            const stem = path.basename(ent.name, path.extname(ent.name));
+            for (let n = 1; fs.existsSync(finalDst); n++) {
+              finalDst = path.join(to, stem + " (" + n + ")" + path.extname(ent.name));
+            }
+          }
+          ensureDir(to);
+          fs.copyFileSync(srcPath, finalDst);
+          detail.copied++;
+        } catch (e) { detail.failed++; }
+      }
+    };
+    walk(srcDir, dest, "");
+    detail.ok = true;
+    detail.name = path.basename(dest);
+    detail.dest = dest;
+    detail.dirsCreated = madeDirs.size;
+    if (!detail.copied && !detail.skipped && !detail.failed && !detail.unsupported) detail.empty = true;
+    return detail;
+  } catch (e) {
+    return { ...detail, error: String(e?.message || e) };
   }
 });
 
@@ -255,15 +328,17 @@ function picnestMd5(fp) {
 electron.ipcMain.handle("picnest-import-check", async (_event, paths, folderId) => {
   const clean = [];
   const conflicts = [];
+  const dirs = [];
+  const missing = [];
   for (const p of paths || []) {
     try {
-      if (!p || !fs.existsSync(p)) continue;
+      if (!p || !fs.existsSync(p)) { missing.push(p); continue; }
       const st = fs.statSync(p);
-      if (st.isDirectory()) { clean.push(p); continue; } // 目录走登记流程
+      if (st.isDirectory()) { dirs.push(p); continue; } // 目录走子文件夹复制流程
       const size = st.size;
       const cands = getDb().prepare(
-        "SELECT i.file_path, i.file_name, i.width, i.height, f.path AS folder_path, f.display_name FROM images i JOIN folders f ON f.id = i.folder_id WHERE i.file_size = ? AND i.deleted_at IS NULL LIMIT 6"
-      ).all(size);
+        "SELECT i.file_path, i.file_name, i.width, i.height, f.path AS folder_path, f.display_name FROM images i JOIN folders f ON f.id = i.folder_id WHERE i.file_size = ? AND i.folder_id = ? AND i.deleted_at IS NULL LIMIT 6"
+      ).all(size, folderId);
       let existing = null;
       const md5New = picnestMd5(p);
       for (const c of cands) {
@@ -282,9 +357,9 @@ electron.ipcMain.handle("picnest-import-check", async (_event, paths, folderId) 
       } else {
         clean.push(p);
       }
-    } catch (e) { /* 单个失败不阻塞 */ }
+    } catch (e) { missing.push(p); /* 单个失败不阻塞 */ }
   }
-  return { clean, conflicts };
+  return { clean, conflicts, dirs, missing };
 });
 
 /* 裁切（Eagle 语义）：原地替换 + 原件自动备份进缓存（可找回） + 缩略图/色板失效重建 */

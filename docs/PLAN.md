@@ -105,3 +105,11 @@ PicNest/
 20. **生产模式 dist 陈旧 = 改完看不到效果**：双击模式加载 `app/resources/app/dist`，每次改完必须 `cd ui && npm run build` 再 reload；
     改代码后只 reload 不 build，跑的还是旧 JS（本轮 random motion "复活" 假象的真因之一：源码已修但 dist 未重建）。
     验收流程固定为：改源码 → build → reload → 采样验证。
+
+21. **查重必须按资料库（folder_id）**：`picnest-import-check` 曾只按 size 全表查 MD5，`folderId` 参数是装饰品 →
+    往 B 库拖图会弹 A 库的重复卡。多资料库语义下各库互相独立，查询必须带 `AND i.folder_id = ?`。
+    同批修复：`import-check` 把目录从 clean 分流到 `dirs`（文件夹走整包复制，不再误登记成新资料库）。
+22. **外部拖入文件夹 = 复制为子文件夹**（不是登记新库）：保留内部结构、同名合并、同名同大小跳过、空目录不落盘；
+    拖到资料库行/空白才进对应库根。落点语义（树行/缝隙/主展示区）见 HANDOFF 第三节。
+23. **Vue Transition 在最小化窗口会卡死**：transitionend 不触发 → 元素永久留在 DOM（opacity 0 仍可命中点击）。
+    给 `<Transition>` 显式 `:duration="{enter,leave}"`；验证任何动效前先还原窗口（#19）。

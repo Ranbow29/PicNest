@@ -8,6 +8,7 @@ import Inspector from './components/Inspector.vue'
 import Lightbox from './components/Lightbox.vue'
 import ContextMenu from './components/ContextMenu.vue'
 import DuplicateDialog from './components/DuplicateDialog.vue'
+import ImportResultCard from './components/ImportResultCard.vue'
 import ResizeHandle from './components/ResizeHandle.vue'
 
 // ZCode 式嵌套结构：左栏底层(可拖宽) → 主面板工作区（浏览 ⇄ 大图双模式）→ 详情计划式浮岛(可收起可拖宽)
@@ -16,7 +17,6 @@ const lib = useLibrary()
 onMounted(() => lib.init())
 
 const importOver = ref(false)
-const importNote = ref('')
 function isExternal(e) {
   const types = [...(e.dataTransfer?.types || [])]
   return types.includes('Files') || types.includes('text/uri-list')
@@ -34,24 +34,10 @@ async function onDrop(e) {
   const paths = [...(e.dataTransfer.files || [])].map((f) => window.picrand.getFilePath?.(f)).filter(Boolean)
   const urls = extractDropUrls(e.dataTransfer)
   if (!paths.length && !urls.length) return
-  let r = null
-  if (paths.length) r = await lib.importDrop(paths)
-  else if (urls.length) r = await lib.importUrls(urls)
-  if (r?.ok && ((r.copied || 0) + (r.downloaded || 0) + (r.dirs?.length || 0) > 0)) {
-    const parts = []
-    if (r.copied) parts.push(`录入 ${r.copied} 张`)
-    if (r.downloaded) parts.push(`下载 ${r.downloaded} 张`)
-    if (r.skipped) parts.push(`跳过重复 ${r.skipped}`)
-    if (r.dirs?.length) parts.push(`新文件夹 ${r.dirs.length} 个`)
-    importNote.value = parts.join(' · ')
-  } else if (r?.error) {
-    importNote.value = r.error
-  } else if (r?.ok) {
-    importNote.value = '没有可录入的内容'
-  } else if (r) {
-    importNote.value = r.error || '录入失败'
-  }
-  if (importNote.value) setTimeout(() => { importNote.value = '' }, 2600)
+  /* 主展示区落点 = 当前浏览文件夹（非文件夹视图 → 库根 = 全部/未分类） */
+  const target = lib.dropTarget()
+  if (paths.length) await lib.importDrop(paths, target)
+  else if (urls.length) await lib.importUrls(urls, target)
 }
 </script>
 
@@ -61,7 +47,6 @@ async function onDrop(e) {
     @dragenter="onDragEnter" @dragover="onDragOver" @dragleave="onDragLeave" @drop.prevent="onDrop"
   >
     <div v-if="importOver" class="import-veil"><span>松开录入</span></div>
-    <div v-if="importNote" class="import-note">{{ importNote }}</div>
 
     <SideBar />
     <ResizeHandle store="sidebar" />
@@ -91,6 +76,7 @@ async function onDrop(e) {
   </div>
   <ContextMenu />
   <DuplicateDialog />
+  <ImportResultCard />
 </template>
 
 <style scoped>
@@ -103,12 +89,6 @@ async function onDrop(e) {
   pointer-events: none;
 }
 .import-veil span { font-size: 15px; color: var(--accent); font-weight: 700; letter-spacing: 3px; }
-.import-note {
-  position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
-  z-index: 61; padding: 9px 18px; border-radius: 10px;
-  background: var(--panel-strong); border: 1px solid var(--accent); color: var(--accent);
-  font-size: 12.5px; box-shadow: var(--shadow); pointer-events: none;
-}
 .main-panel {
   flex: 1; min-width: 0; display: flex; flex-direction: column;
   position: relative;

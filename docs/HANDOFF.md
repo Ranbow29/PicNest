@@ -1,8 +1,8 @@
 # PicNest 图巢 — 交接文档（写给下一个窗口）
 
-> **2026-11-09 第五版·终**（当日新增：大图进出晃动 + 挂载兜底 / 浏览位置记忆 / 持久化全清单 / 宽度缩放全记忆）。收官 commit 见 `git log`。
-> 前一日的四版覆盖：拖窗战役 → 颜色对齐 Eagle 真源 → 资料库重构 → 动效系统 → 滑尺 → 生产模式验收。
-> 本版为隔日续接版：状态全量核对 + 今日议题清单 + 开窗三步走。
+> **2026-11-09 第六版·录入定稿**（当日新增：位置即意图录入语义 / 文件夹整包复制 / 缝隙插入排序 / 汇总结果卡 / 按库查重修正）。
+> 前一日第五版：大图进出晃动 + 挂载兜底 / 浏览位置记忆 / 持久化全清单 / 宽度缩放全记忆。
+> 更早：拖窗战役 → 颜色对齐 Eagle 真源 → 资料库重构 → 动效系统 → 滑尺 → 生产模式验收。
 
 ## 〇、开窗三步走（照做即可）
 
@@ -59,6 +59,15 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，替代 Eagle 日常使用
 - 48 槽内容轮廓 + 视口邻近 cos² 波峰行进 + 单条金色指示 dash（12px 右对齐）
 - 原生滚动条已隐藏；点击/拖拽跳转
 
+**录入（位置即意图，Feb 2026-11-09 定稿）**
+- **主展示区/窗口空白** → 当前浏览文件夹；非文件夹视图（全部/最近/未分类/随机/回收站）→ 库根（= 全部/未分类）
+- **树行** → 该文件夹；**树行上/下 30% 缝隙** → 该层父级，文件夹按缝隙序号插入排序（图片落进该层父级）
+- **资料库栏** → 对应资料库的库根；侧栏空白 → 当前库根
+- **文件夹整包复制**：拖入文件夹 → 复制为目标下的同名子文件夹，保留内部结构（仅图片/视频）；同名目标合并、同名同大小跳过、同名不同内容加序号；空目录不落盘；`Thumbs.db`/`desktop.ini`/隐藏项静默忽略
+- **汇总结果卡**：录入 N 张 · 文件夹 N 个 · 跳过 · 不支持 · 失败；点开看明细（各文件夹/不支持文件名/错误）；悬停停留、6.5s 自动收起；跨库录入标 `→ 资料库名`
+- **查重按目标资料库**（folder_id 过滤）——不同库互不干扰；冲突仍走 Eagle 式对比弹窗
+- 未闭环：真实鼠标拖拽手感/落点需 Feb 物理验收（CDP 注入对 drag 是假阳性）
+
 **视图与设置**
 - 全部 = 最新入库置顶（锁死，忽略升降序开关）；文件夹 = 排序面板（name/added/mtime/size × 升降序）
 - 未分类 = 库根散图（侧栏在最近使用之下，当前 3 张）
@@ -74,17 +83,18 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，替代 Eagle 日常使用
 - 裁剪三选一：另存为副本（写原目录自动入库）/ 覆盖原图（自动备份）/ 取消
 - 回收站：丢回收站=软删可还原；从库移除=只摘索引
 
-## 四、今日议题（Feb 指定，按此顺序）
+## 四、议题状态
 
-1. **录入的细分与归类规则** ← 首要议题
-   - 待商讨：拖入落点规则细化（当前：拖到树行=进该文件夹，拖到侧栏空白=库根→未分类）、导入归类策略、批量导入的分流
-   - 可挂在「未分类」视图上做收口（未分类 = 库根散图，天然是"待归类"入口）
-2. 标签系统（筛选栏预留了标签位）
-3. 主题切换按钮（明暗 tokens 已齐备）
-4. 目录删除（含图确认流）、尺寸/评分排序补全
-5. 滑尺 Monaco 细节（hover 预览）
+- [x] **录入的细分与归类规则**（2026-11-09 完成：位置即意图 / 文件夹整包复制 / 缝隙排序 / 结果卡 / 按库查重）
+- [ ] 标签系统（筛选栏预留了标签位）
+- [ ] 主题切换按钮（明暗 tokens 已齐备）
+- [ ] 目录删除（含图确认流）、尺寸/评分排序补全
+- [ ] 滑尺 Monaco 细节（hover 预览）
 
-**技术债**：`tools/verify_counts.py` 是单库时代脚本，多资料库下账目显示混乱，需升级。
+**技术债**
+- `tools/verify_counts.py` 是单库时代脚本，多资料库下账目显示混乱，需升级。
+- `picnestDirOrder` 以 `rel` 为键、**跨资料库共享**（历史结构）：多库根层同名顺序会互相影响；目前无实际冲突，后续可改成 `rootId::rel`。
+- 文件夹整包导入只做同名同大小去重，不做全库 MD5（大批量性能取舍）；整包重复内容可能跨文件夹重复收录。
 
 ## 五、关键文件地图
 
@@ -97,7 +107,8 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，替代 Eagle 日常使用
 | `ui/src/components/ImageGrid.vue` | 布局引擎+虚拟滚动+概览滑尺+入场波 |
 | `ui/src/components/DirContextMenu.vue` · `NamePromptDialog.vue` | 文件夹菜单 · 名称对话框 |
 | `ui/src/components/FilterBar.vue` · `ColorPicker.vue` · `Inspector.vue` | 筛选 · HSV 取色 · 详情（色板可点） |
-| `tools/patches/apply.mjs` · `picnest-handlers.js` | 补丁 P1-P6 + 文件夹管理 5 原语 + 未分类 + 拖窗 |
+| `ui/src/components/ImportResultCard.vue` | 录入汇总结果卡（明细展开/悬停停留/自动收起） |
+| `tools/patches/apply.mjs` · `picnest-handlers.js` | 补丁 P1-P6 + 文件夹管理 5 原语 + 未分类 + 拖窗 + 录入（import-check/import-dir-copy） |
 | `tools/cdp-eval.mjs` · `cdp-active-eval.mjs` · `cdp-shot.mjs` · `cdp-reload-probe.mjs` · `shot-prod.ps1` | 探针家族 |
 | `docs/MOTION.md` | 动效规格/调参速查（改手感先看它） |
 
@@ -110,4 +121,7 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，替代 Eagle 日常使用
 5. **生产构建无 `__vueParentComponent`**（dev 专属），生产只能采样 DOM 属性
 6. **物理交互只有用户的鼠标是真相**（PLAN #11：app-region 四连败，CDP 注入全是假阳性）
 7. SQLite LIKE + Windows 路径必须整体转义含分隔符（PLAN #16）；Vue 模板禁用 window/innerWidth（#17）；setup 内新代码块放全部依赖声明之后（#18）
-8. 每完成一役 `git commit`；数量对账 `python tools/verify_counts.py`
+8. **查重 SQL 必须带 `folder_id = ?`**（曾全局查重：往 A 库导入会弹 B 库的重复）；目录与文件在 `picnest-import-check` 里分流返回（`dirs` / `clean` / `conflicts` / `missing`）
+9. **改主进程/preload 后必须重放 `apply.mjs` 并重启应用**（HMR 只覆盖渲染层）；改 store 后若行为没变先整页 reload（无 acceptHMRUpdate）
+10. **最小化窗口会冻结过渡**：Vue `<Transition>` 的 transitionend 不触发 → 元素卡在 DOM（隐形但可挡点击）。给 Transition 显式 `:duration` 兜底；验证动效前先 `ShowWindow(9)` 还原
+11. 每完成一役 `git commit`；数量对账 `python tools/verify_counts.py`

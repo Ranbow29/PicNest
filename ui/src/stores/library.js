@@ -58,6 +58,7 @@ export const useLibrary = defineStore('library', {
     contextMenu: { open: false, x: 0, y: 0, image: null },
     renaming: false,
     dupDialog: { open: false, items: [], targetRel: undefined, resolve: null },
+    importResult: { open: false, nonce: 0, summary: '', details: [], tone: 'ok' }, // 录入汇总结果卡
     viewer: { scale: 1, tx: 0, ty: 0, rot: 0, flopX: false, showInspector: false, /* 初始收起：让用户先看图，详情随点随开 */ cropMode: false, fitNonce: 0 },
     filterBarOpen: false,
     filters: {
@@ -609,18 +610,110 @@ export const useLibrary = defineStore('library', {
       this._zoomSaveT = setTimeout(() => localStorage.setItem('picnest.zoom', String(this.zoom)), 300)
     },
 
-    async importUrls(urls, targetRel) {
-      await this.ensureReady()
-      const rel = targetRel !== undefined ? targetRel : (this.view === 'all' ? this.currentDirRel : null)
-      const targetDir = this.tree.rootPath + (rel ? '\\' + rel.split('/').join('\\') : '')
-      try {
-        const r = await window.picrand.picnestImportUrls(urls, targetDir)
-        if (r?.ok && r.downloaded) setTimeout(() => { this.refreshTree(); this.loadImages() }, 600)
-        return r
-      } catch (e) { return { ok: false, error: String(e?.message || e) } }
+    /* ---- 录入：位置即意图（Feb 2026-11-09 定）
+       目标描述 { rootId, rel, index? }：
+       - 主展示区/窗口空白 → 当前浏览文件夹（非文件夹视图 → 库根 = 全部/未分类）
+       - 树行 → 该文件夹；树行缝隙 → 该层父级（文件夹按 index 插入排序）
+       - 资料库栏 → 该库根 ---- */
+    normTarget(target) {
+      if (target && typeof target === 'object') {
+        return {
+          rootId: target.rootId ?? this.activeRootId,
+          rel: String(target.rel || '').replace(/^\/+|\/+$/g, ''),
+          index: Number.isInteger(target.index) ? target.index : null,
+        }
+      }
+      const rel = typeof target === 'string' ? target : (this.view === 'all' ? (this.currentDirRel || '') : '')
+      return { rootId: this.activeRootId, rel: String(rel || '').replace(/^\/+|\/+$/g, ''), index: null }
+    },
+    dropTarget() {
+      return { rootId: this.activeRootId, rel: this.view === 'all' ? (this.currentDirRel || '') : '' }
+    },
+    absOfTarget(t) {
+      const root = this.roots.find((r) => r.id === t.rootId)
+      const rootPath = root?.path || (t.rootId === this.activeRootId ? this.tree?.rootPath : '')
+      if (!rootPath) return ''
+      return rootPath + (t.rel ? '\\' + t.rel.split('/').join('\\') : '')
+    },
+    /* 录入结果 → 汇总卡（成功/跳过/不支持/失败 + 明细） */
+    reportImport(r, t) {
+      const parts = []
+      if (r.copied) parts.push(`录入 ${r.copied} 张`)
+      if (r.downloaded) parts.push(`下载 ${r.downloaded} 张`)
+      if (r.dirs?.length) parts.push(`文件夹 ${r.dirs.length} 个`)
+      if (r.skipped) parts.push(`跳过 ${r.skipped}`)
+      if (r.unsupported) parts.push(`不支持 ${r.unsupported}`)
+      if (r.failed) parts.push(`失败 ${r.failed}`)
+      const details = []
+      for (const d of r.dirs || []) {
+        const bits = []
+        if (d.copied) bits.push(`录入 ${d.copied}`)
+        if (d.skipped) bits.push(`跳过 ${d.skipped}`)
+        if (d.unsupported) bits.push(`不支持 ${d.unsupported}`)
+        if (d.failed) bits.push(`失败 ${d.failed}`)
+        details.push({ label: d.name || '文件夹', text: bits.join(' · ') || '没有可录入的图片' })
+      }
+      if (r.unsupportedNames?.length) {
+        const more = r.unsupported > r.unsupportedNames.length ? ' …' : ''
+        details.push({ label: '不支持', text: r.unsupportedNames.join('、') + more })
+      }
+      if (r.missing?.length) details.push({ label: '找不到', text: r.missing.length + ' 个路径已失效' })
+      if (r.errors?.length) details.push({ label: '错误', text: r.errors.join('；') })
+      /* 跨库录入时标明去向（当前库不标，位置本身可见） */
+      let crossNote = ''
+      if (t && t.rootId !== this.activeRootId) {
+        const rec = this.roots.find((x) => x.id === t.rootId)
+        if (rec) {
+          const name = rec.display_name || String(rec.path || '').split(/[\\/]/).pop()
+          crossNote = name ? ` → ${name}` : ''
+        }
+      }
+      this.importResult = {
+        open: true,
+        nonce: Date.now(),
+        summary: (parts.length ? parts.join(' · ') : (r.error || (r.ok ? '没有可录入的内容' : '录入失败'))) + crossNote,
+        details,
+        tone: r.ok ? (parts.length ? 'ok' : 'muted') : 'error',
+      }
+    },
+    /* 缝隙落点：把新文件夹名插到指定序号（仅当前资料库可排序——dirOrder 以 rel 为键） */
+    async insertOrderAt(parentRel, name, index) {
+      await this.refreshTree()
+      const node = parentRel ? this.findNode(this.tree?.tree, parentRel) : this.tree?.tree
+      const names = (node?.children || []).map((c) => c.name).filter((n) => n !== name)
+      const at = index == null ? names.length : Math.max(0, Math.min(index, names.length))
+      names.splice(at, 0, name)
+      await window.picrand.picnestDirOrderSet(parentRel || '__root__', names)
+      await this.refreshTree()
     },
 
-    // 外部拖入：文件复制进目标目录（watcher 自动入库），目录返回待登记
+    async importUrls(urls, target) {
+      await this.ensureReady()
+      const t = this.normTarget(target)
+      const targetDir = this.absOfTarget(t)
+      try {
+        if (!targetDir) {
+          const fail = { ok: false, error: '目标资料库不可用' }
+          this.reportImport(fail, t)
+          return fail
+        }
+        const r = await window.picrand.picnestImportUrls(urls, targetDir)
+        const agg = { ok: !!r?.ok, copied: 0, downloaded: r?.downloaded || 0, skipped: 0, failed: r?.failed || 0, unsupported: 0, dirs: [], errors: [], error: r?.error || '' }
+        if (agg.downloaded) {
+          const rootRec = this.roots.find((x) => x.id === t.rootId)
+          if (rootRec) await api.syncFolderSnapshot(rootRec.path).catch(() => {})
+          if (t.rootId === this.activeRootId) { await this.refreshTree(); await this.loadImages() }
+        }
+        this.reportImport(agg, t)
+        return agg
+      } catch (e) {
+        const r = { ok: false, error: String(e?.message || e) }
+        this.reportImport(r, t)
+        return r
+      }
+    },
+
+    // 外部拖入：文件→复制进目标目录；文件夹→复制为目标下的同名子文件夹（保留结构）
     // 就绪守卫：init 是异步轮询，启动头两秒 tree 可能为空
     async ensureReady() {
       for (let i = 0; i < 40 && (!this.tree || !this.roots.length); i++) {
@@ -630,44 +723,79 @@ export const useLibrary = defineStore('library', {
     },
 
     // 外部拖入：先全库查重（Eagle 式冲突弹窗），再复制进目标目录
-    async importDrop(paths, targetRel) {
+    async importDrop(paths, target) {
       await this.ensureReady()
-      const rel = targetRel !== undefined ? targetRel : (this.view === 'all' ? this.currentDirRel : null)
-      const targetDir = this.tree.rootPath + (rel ? '\\' + rel.split('/').join('\\') : '')
+      const t = this.normTarget(target)
+      const targetDir = this.absOfTarget(t)
       try {
+        if (!targetDir) {
+          const fail = { ok: false, error: '目标资料库不可用' }
+          this.reportImport(fail, t)
+          return fail
+        }
         // Eagle 式：先查重，有冲突先弹对比卡
-        const check = await window.picrand.picnestImportCheck(paths, this.activeRootId)
-        let finalPaths = check?.clean || paths
+        const check = await window.picrand.picnestImportCheck(paths, t.rootId)
+        let finalPaths = check?.clean || []
         const conflicts = check?.conflicts || []
+        const dirs = check?.dirs || []
         let choice = null
         if (conflicts.length) {
           choice = await new Promise((resolve) => {
-            this.dupDialog = { open: true, items: conflicts, targetRel: rel, resolve }
+            this.dupDialog = { open: true, items: conflicts, targetRel: t.rel || null, resolve }
           })
-          if (choice === 'use-existing') {
-            finalPaths = finalPaths // 冲突文件不复制，库里已有
-          } else if (choice === 'keep-both') {
-            finalPaths = finalPaths.concat(conflicts.map((c) => c.path))
+          if (choice === 'keep-both') finalPaths = finalPaths.concat(conflicts.map((c) => c.path))
+        }
+        const agg = {
+          ok: true, copied: 0, downloaded: 0, skipped: 0, failed: 0, unsupported: 0,
+          unsupportedNames: [], dirs: [], errors: [], missing: check?.missing || [],
+        }
+        if (finalPaths.length) {
+          const r = await window.picrand.picnestImportFiles(finalPaths, targetDir)
+          if (r?.ok) {
+            agg.copied += r.copied || 0
+            agg.skipped += r.skipped || 0
+            agg.failed += r.failed || 0
+            agg.unsupported += r.unsupported || 0
+            if (r.unsupportedNames?.length) agg.unsupportedNames.push(...r.unsupportedNames)
+          } else {
+            agg.ok = false
+            agg.error = r?.error || '复制失败'
           }
         }
-        if (!finalPaths.length) {
-          await this.refreshTree()
-          return { ok: true, copied: 0, skipped: conflicts.length, dirs: [] }
-        }
-        const r = await window.picrand.picnestImportFiles(finalPaths, targetDir)
-        if (r?.ok) {
-          if (conflicts.length && choice === 'use-existing') r.skipped = (r.skipped || 0) + conflicts.length
-          for (const d of r.dirs || []) await this.addRootByPath(d) // 拖进来的是文件夹 → 登记为新根
-          // 一律增量扫描入库（跳过重复时盘上可能仍有未索引文件；watcher 只管后续外部变动）
-          {
-            const rootPath = this.tree.rootPath
-            await api.syncFolderSnapshot(rootPath).catch(() => {})
-            await this.refreshTree()
-            await this.loadImages()
+        if (choice === 'use-existing') agg.skipped += conflicts.length
+        /* 文件夹：复制为子文件夹（合并/跳过/序号由主进程处理）；缝隙落点按 index 插入排序 */
+        let idx = t.index
+        for (const d of dirs) {
+          const r = await window.picrand.picnestImportDirCopy(d, targetDir)
+          if (r?.ok) {
+            agg.dirs.push(r)
+            agg.copied += r.copied || 0
+            agg.skipped += r.skipped || 0
+            agg.failed += r.failed || 0
+            agg.unsupported += r.unsupported || 0
+            if (r.unsupportedNames?.length) agg.unsupportedNames.push(...r.unsupportedNames)
+            if (t.rootId === this.activeRootId) {
+              await this.insertOrderAt(t.rel, r.name, idx)
+              if (idx != null) idx += 1
+            }
+          } else {
+            agg.failed += 1
+            agg.errors.push(`${(d.split(/[\\/]/).pop() || d)}：${r?.error || '复制失败'}`)
           }
         }
+        const touched = agg.copied > 0
+        if (touched) {
+          const rootRec = this.roots.find((x) => x.id === t.rootId)
+          if (rootRec) await api.syncFolderSnapshot(rootRec.path).catch(() => {})
+          if (t.rootId === this.activeRootId) { await this.refreshTree(); await this.loadImages() }
+        }
+        this.reportImport(agg, t)
+        return agg
+      } catch (e) {
+        const r = { ok: false, error: String(e?.message || e) }
+        this.reportImport(r, t)
         return r
-      } catch (e) { return { ok: false, error: String(e?.message || e) } }
+      }
     },
 
     // 拖拽排序/移动三段式落点：before / after / into

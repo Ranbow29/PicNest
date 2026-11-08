@@ -37,26 +37,39 @@ function onDragStart(e) {
 }
 function onDragOver(e) {
   e.preventDefault()
-  e.dataTransfer.dropEffect = 'move'
+  const types = [...(e.dataTransfer?.types || [])]
+  e.dataTransfer.dropEffect = (types.includes('Files') || types.includes('text/uri-list')) ? 'copy' : 'move'
   const r = e.currentTarget.getBoundingClientRect()
   const y = e.clientY - r.top
-  const types = [...(e.dataTransfer?.types || [])]
-  dropMark.value = types.includes('Files') || types.includes('text/uri-list')
-    ? 'into' // 外部拖入：整行都是目标
-    : y < r.height * 0.3 ? 'before' : y > r.height * 0.7 ? 'after' : 'into'
+  /* 外部拖入与内部拖动同规则：上/下 30% = 缝隙插入，中间 = 放进该文件夹 */
+  dropMark.value = y < r.height * 0.3 ? 'before' : y > r.height * 0.7 ? 'after' : 'into'
 }
 function onDragLeave() { dropMark.value = '' }
+
+/* 缝隙落点：父级文件夹 + 插入序号（文件夹按此排序；图片落进该层父级） */
+function parentRelOf(r) { return r.includes('/') ? r.slice(0, r.lastIndexOf('/')) : '' }
+function gapTarget(mark) {
+  const parentRel = parentRelOf(props.node.rel)
+  const parent = parentRel ? lib.findNode(lib.tree?.tree, parentRel) : lib.tree?.tree
+  const siblings = parent?.children || []
+  const i = siblings.findIndex((c) => c.name === props.node.name)
+  const index = mark === 'before' ? Math.max(0, i) : (i < 0 ? siblings.length : i + 1)
+  return { rootId: lib.activeRootId, rel: parentRel, index }
+}
 async function onDrop(e) {
   e.stopPropagation()
   const mark = dropMark.value
   dropMark.value = ''
   const types = [...(e.dataTransfer?.types || [])]
-  // 外部拖入（Eagle 式）：文件/浏览器图片 → 录进这个文件夹
+  // 外部拖入（Eagle 式）：文件/文件夹 → 按落点录入
   if (types.includes('Files') || types.includes('text/uri-list')) {
     const paths = [...(e.dataTransfer.files || [])].map((f) => window.picrand.getFilePath?.(f)).filter(Boolean)
     const urls = extractDropUrls(e.dataTransfer)
-    if (paths.length) await lib.importDrop(paths, props.node.rel)
-    else if (urls.length) await lib.importUrls(urls, props.node.rel)
+    const target = (mark === 'before' || mark === 'after')
+      ? gapTarget(mark)
+      : { rootId: lib.activeRootId, rel: props.node.rel }
+    if (paths.length) await lib.importDrop(paths, target)
+    else if (urls.length) await lib.importUrls(urls, target)
     return
   }
   const srcDir = e.dataTransfer.getData('application/x-picnest-dir')
@@ -65,7 +78,8 @@ async function onDrop(e) {
     if ((props.node.rel + '/').startsWith(srcDir + '/')) return // 不能丢进自己的后代
     await lib.dropOnDir(srcDir, props.node.rel, mark || 'into')
   } else if (srcFile) {
-    await lib.moveImage(srcFile, props.node.rel)
+    const destRel = (mark === 'before' || mark === 'after') ? parentRelOf(props.node.rel) : props.node.rel
+    await lib.moveImage(srcFile, destRel)
   }
 }
 </script>

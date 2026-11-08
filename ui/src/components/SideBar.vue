@@ -43,21 +43,48 @@ function openNode(node) {
   lib.openDir(node.rel || null) // 树根 → null(全部)；子目录 → rel
 }
 
-/* 拖到侧栏空白 = 外部文件录进库根 / 内部目录移回根 */
+/* 拖到侧栏空白 = 外部文件录进当前库根 / 内部目录移回根 */
 async function dropToRoot(e) {
   e.stopPropagation()
   const types = [...(e.dataTransfer?.types || [])]
   if (types.includes('Files') || types.includes('text/uri-list')) {
     const paths = [...(e.dataTransfer.files || [])].map((f) => window.picrand.getFilePath?.(f)).filter(Boolean)
     const urls = extractDropUrls(e.dataTransfer)
-    if (paths.length) await lib.importDrop(paths, '')
-    else if (urls.length) await lib.importUrls(urls, '')
+    const target = { rootId: lib.activeRootId, rel: '' }
+    if (paths.length) await lib.importDrop(paths, target)
+    else if (urls.length) await lib.importUrls(urls, target)
     return
   }
   const srcDir = e.dataTransfer.getData('application/x-picnest-dir')
   const srcFile = e.dataTransfer.getData('application/x-picnest-file')
   if (srcDir) await lib.moveDir(srcDir, '')
   else if (srcFile) await lib.moveImage(srcFile, '')
+}
+
+/* 拖到资料库行 = 录进对应资料库的库根（全部/未分类） */
+const libDropId = ref(null)
+function isExternalDT(e) {
+  const types = [...(e.dataTransfer?.types || [])]
+  return types.includes('Files') || types.includes('text/uri-list')
+}
+function onLibDragOver(e, l) {
+  if (!isExternalDT(e)) return
+  e.preventDefault()
+  e.dataTransfer.dropEffect = 'copy'
+  libDropId.value = l.id
+}
+function onLibDragLeave(l) {
+  if (libDropId.value === l.id) libDropId.value = null
+}
+async function dropOnLib(e, l) {
+  e.stopPropagation()
+  libDropId.value = null
+  if (!isExternalDT(e)) return
+  const paths = [...(e.dataTransfer.files || [])].map((f) => window.picrand.getFilePath?.(f)).filter(Boolean)
+  const urls = extractDropUrls(e.dataTransfer)
+  const target = { rootId: l.id, rel: '' }
+  if (paths.length) await lib.importDrop(paths, target)
+  else if (urls.length) await lib.importUrls(urls, target)
 }
 </script>
 
@@ -88,8 +115,9 @@ async function dropToRoot(e) {
       <button class="add-btn lib-add" title="添加资料库（选择目录）" @click="pickFolder">⌂</button>
     </div>
     <div class="libs">
-      <div v-for="l in libs" :key="l.id" class="lib-item" :class="{ active: l.active }"
+      <div v-for="l in libs" :key="l.id" class="lib-item" :class="{ active: l.active, 'drop-into': libDropId === l.id }"
            @click="lib.switchRoot(l.id)"
+           @dragover="onLibDragOver($event, l)" @dragleave="onLibDragLeave(l)" @drop.prevent="dropOnLib($event, l)"
            @contextmenu.prevent.stop="lib.openDirMenu($event, { rel: '', node: l, isLibrary: true, absPath: l.path })">
         <FolderIcon :color="lib.dirMemory['']?.color || ''" :size="17" />
         <span class="label">{{ l.name }}</span>
@@ -162,6 +190,7 @@ async function dropToRoot(e) {
 .lib-item.active { background: var(--accent-weak); color: var(--accent); font-weight: 600; }
 .lib-item .label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lib-item .count { font-size: 11px; font-variant-numeric: tabular-nums; }
+.lib-item.drop-into { background: var(--accent-weak); outline: 1.5px dashed var(--accent); outline-offset: -2px; }
 
 .tree { flex: 1; overflow-y: auto; padding-bottom: 6px; }
 .tree::-webkit-scrollbar { width: 6px; }
