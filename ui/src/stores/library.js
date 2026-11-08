@@ -59,6 +59,7 @@ export const useLibrary = defineStore('library', {
     renaming: false,
     dupDialog: { open: false, items: [], targetRel: undefined, resolve: null },
     importResult: { open: false, nonce: 0, summary: '', details: [], tone: 'ok' }, // 录入汇总结果卡
+    dropHint: { active: false, zone: '', label: '', x: 0, y: 0, key: null }, // 外部拖入落点提示（分区高亮 + 跟随光标）
     viewer: { scale: 1, tx: 0, ty: 0, rot: 0, flopX: false, showInspector: false, /* 初始收起：让用户先看图，详情随点随开 */ cropMode: false, fitNonce: 0 },
     filterBarOpen: false,
     filters: {
@@ -628,6 +629,19 @@ export const useLibrary = defineStore('library', {
     },
     dropTarget() {
       return { rootId: this.activeRootId, rel: this.view === 'all' ? (this.currentDirRel || '') : '' }
+    },
+    /* 主展示区落点文案：文件夹名 或 库名·未分类 */
+    mainDropLabel() {
+      if (this.view === 'all' && this.currentDirRel) return `录入到「${this.currentDirRel.split('/').pop()}」`
+      const root = this.roots.find((r) => r.id === this.activeRootId)
+      const name = root?.display_name || String(root?.path || '').split(/[\\/]/).pop() || '当前库'
+      return `录入到「${name}」· 未分类`
+    },
+    setDropHint(zone, label, x, y, key) {
+      this.dropHint = { active: true, zone, label: label || '', x: x || 0, y: y || 0, key: key ?? null }
+    },
+    clearDropHint() {
+      if (this.dropHint.active) this.dropHint = { active: false, zone: '', label: '', x: 0, y: 0, key: null }
     },
     absOfTarget(t) {
       const root = this.roots.find((r) => r.id === t.rootId)

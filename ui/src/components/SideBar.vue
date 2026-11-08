@@ -46,6 +46,7 @@ function openNode(node) {
 /* 拖到侧栏空白 = 外部文件录进当前库根 / 内部目录移回根 */
 async function dropToRoot(e) {
   e.stopPropagation()
+  lib.clearDropHint()
   const types = [...(e.dataTransfer?.types || [])]
   if (types.includes('Files') || types.includes('text/uri-list')) {
     const paths = [...(e.dataTransfer.files || [])].map((f) => window.picrand.getFilePath?.(f)).filter(Boolean)
@@ -62,23 +63,31 @@ async function dropToRoot(e) {
 }
 
 /* 拖到资料库行 = 录进对应资料库的库根（全部/未分类） */
-const libDropId = ref(null)
 function isExternalDT(e) {
   const types = [...(e.dataTransfer?.types || [])]
   return types.includes('Files') || types.includes('text/uri-list')
 }
-function onLibDragOver(e, l) {
-  if (!isExternalDT(e)) return
+/* 侧栏空白：落当前库根（高亮当前资料库行） */
+function onSidebarDragOver(e) {
   e.preventDefault()
-  e.dataTransfer.dropEffect = 'copy'
-  libDropId.value = l.id
+  if (!isExternalDT(e)) return
+  e.stopPropagation()
+  const active = libs.value.find((x) => x.active)
+  lib.setDropHint('lib', active ? `录入到「${active.name}」` : lib.mainDropLabel(), e.clientX, e.clientY, active ? active.id : null)
 }
-function onLibDragLeave(l) {
-  if (libDropId.value === l.id) libDropId.value = null
+function onSidebarDragLeave(e) {
+  if (e.clientX <= 0 || e.clientY <= 0 || e.clientX >= innerWidth || e.clientY >= innerHeight) lib.clearDropHint()
+}
+function onLibDragOver(e, l) {
+  e.preventDefault()
+  if (!isExternalDT(e)) return
+  e.stopPropagation()
+  e.dataTransfer.dropEffect = 'copy'
+  lib.setDropHint('lib', `录入到「${l.name}」`, e.clientX, e.clientY, l.id)
 }
 async function dropOnLib(e, l) {
   e.stopPropagation()
-  libDropId.value = null
+  lib.clearDropHint()
   if (!isExternalDT(e)) return
   const paths = [...(e.dataTransfer.files || [])].map((f) => window.picrand.getFilePath?.(f)).filter(Boolean)
   const urls = extractDropUrls(e.dataTransfer)
@@ -91,7 +100,7 @@ async function dropOnLib(e, l) {
 <template>
   <aside
     class="sidebar" :style="{ width: lib.sidebarWidth + 'px' }"
-    @dragover.prevent @drop.prevent="dropToRoot"
+    @dragover="onSidebarDragOver" @dragleave="onSidebarDragLeave" @drop.prevent="dropToRoot"
   >
     <div class="brand">
       <h1>图巢</h1>
@@ -115,9 +124,9 @@ async function dropOnLib(e, l) {
       <button class="add-btn lib-add" title="添加资料库（选择目录）" @click="pickFolder">⌂</button>
     </div>
     <div class="libs">
-      <div v-for="l in libs" :key="l.id" class="lib-item" :class="{ active: l.active, 'drop-into': libDropId === l.id }"
+      <div v-for="l in libs" :key="l.id" class="lib-item" :class="{ active: l.active, 'drop-into': lib.dropHint.active && lib.dropHint.zone === 'lib' && lib.dropHint.key === l.id }"
            @click="lib.switchRoot(l.id)"
-           @dragover="onLibDragOver($event, l)" @dragleave="onLibDragLeave(l)" @drop.prevent="dropOnLib($event, l)"
+           @dragover="onLibDragOver($event, l)" @drop.prevent="dropOnLib($event, l)"
            @contextmenu.prevent.stop="lib.openDirMenu($event, { rel: '', node: l, isLibrary: true, absPath: l.path })">
         <FolderIcon :color="lib.dirMemory['']?.color || ''" :size="17" />
         <span class="label">{{ l.name }}</span>

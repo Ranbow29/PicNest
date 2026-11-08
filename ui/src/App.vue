@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, ref } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useLibrary, extractDropUrls } from './stores/library'
 import TitleBar from './components/TitleBar.vue'
 import SideBar from './components/SideBar.vue'
@@ -12,25 +12,31 @@ import ImportResultCard from './components/ImportResultCard.vue'
 import ResizeHandle from './components/ResizeHandle.vue'
 
 // ZCode 式嵌套结构：左栏底层(可拖宽) → 主面板工作区（浏览 ⇄ 大图双模式）→ 详情计划式浮岛(可收起可拖宽)
-// 全窗口兜底拖入：外部文件 → 当前浏览目录（树行/侧栏各自的 drop 会 stopPropagation 优先接管）
+// 外部拖入 = 位置即意图：主展示区/树行/缝隙/资料库栏各自高亮 + 跟随光标的落点提示
 const lib = useLibrary()
 onMounted(() => lib.init())
 
-const importOver = ref(false)
 function isExternal(e) {
   const types = [...(e.dataTransfer?.types || [])]
   return types.includes('Files') || types.includes('text/uri-list')
 }
-function onDragEnter(e) { if (isExternal(e)) importOver.value = true }
-function onDragOver(e) { if (isExternal(e)) e.preventDefault() }
+/* 主展示区兜底：子区（树行/资料库行）会 stopPropagation 抢占各自落点 */
+function onDragEnter(e) {
+  if (!isExternal(e)) return
+  lib.setDropHint('main', lib.mainDropLabel(), e.clientX, e.clientY)
+}
+function onDragOver(e) {
+  if (!isExternal(e)) return
+  e.preventDefault()
+  lib.setDropHint('main', lib.mainDropLabel(), e.clientX, e.clientY)
+}
 function onDragLeave(e) {
-  if (!importOver.value) return
-  if (e.clientX <= 0 || e.clientY <= 0 || e.clientX >= innerWidth || e.clientY >= innerHeight) importOver.value = false
+  if (!lib.dropHint.active) return
+  if (e.clientX <= 0 || e.clientY <= 0 || e.clientX >= innerWidth || e.clientY >= innerHeight) lib.clearDropHint()
 }
 async function onDrop(e) {
-  if (!importOver.value && !isExternal(e)) return
-  importOver.value = false
   if (!isExternal(e)) return
+  lib.clearDropHint()
   const paths = [...(e.dataTransfer.files || [])].map((f) => window.picrand.getFilePath?.(f)).filter(Boolean)
   const urls = extractDropUrls(e.dataTransfer)
   if (!paths.length && !urls.length) return
@@ -39,6 +45,11 @@ async function onDrop(e) {
   if (paths.length) await lib.importDrop(paths, target)
   else if (urls.length) await lib.importUrls(urls, target)
 }
+const chipStyle = computed(() => {
+  const x = Math.max(8, Math.min(lib.dropHint.x + 18, innerWidth - 260))
+  const y = Math.max(8, Math.min(lib.dropHint.y + 20, innerHeight - 46))
+  return { left: x + 'px', top: y + 'px' }
+})
 </script>
 
 <template>
@@ -46,11 +57,9 @@ async function onDrop(e) {
     class="shell"
     @dragenter="onDragEnter" @dragover="onDragOver" @dragleave="onDragLeave" @drop.prevent="onDrop"
   >
-    <div v-if="importOver" class="import-veil"><span>松开录入</span></div>
-
     <SideBar />
     <ResizeHandle store="sidebar" />
-    <section class="main-panel">
+    <section class="main-panel" :class="{ 'drop-main': lib.dropHint.active && lib.dropHint.zone === 'main' }">
       <TitleBar />
       <div class="main-inner">
         <!-- 浏览模式：网格 + 详情浮岛（v-show 保滚动位置） -->
@@ -74,6 +83,9 @@ async function onDrop(e) {
       </div>
     </section>
   </div>
+  <div v-if="lib.dropHint.active" class="drop-chip" :style="chipStyle">
+    <b>松开</b><span>{{ lib.dropHint.label }}</span>
+  </div>
   <ContextMenu />
   <DuplicateDialog />
   <ImportResultCard />
@@ -81,14 +93,19 @@ async function onDrop(e) {
 
 <style scoped>
 .shell { display: flex; height: 100%; position: relative; }
-.import-veil {
-  position: absolute; inset: 0; z-index: 60;
-  background: var(--accent-weak); backdrop-filter: blur(2px);
-  border: 2px dashed var(--accent); border-radius: 14px; margin: 10px;
-  display: flex; align-items: center; justify-content: center;
-  pointer-events: none;
+/* 主展示区落点：整块主面板虚线内框（不再全窗遮罩） */
+.main-panel.drop-main { outline: 2px dashed var(--accent); outline-offset: -4px; }
+.drop-chip {
+  position: fixed; z-index: 760; pointer-events: none;
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 11px; border-radius: 8px;
+  background: var(--panel-strong); border: 1px solid var(--accent);
+  color: var(--accent); font-size: 12px; font-weight: 600;
+  box-shadow: var(--shadow); white-space: nowrap;
+  animation: chip-in 0.16s var(--ease-overshoot);
 }
-.import-veil span { font-size: 15px; color: var(--accent); font-weight: 700; letter-spacing: 3px; }
+.drop-chip b { font-size: 10px; letter-spacing: 1px; opacity: 0.7; }
+@keyframes chip-in { from { opacity: 0; transform: translateY(4px) scale(0.96); } to { opacity: 1; transform: none; } }
 .main-panel {
   flex: 1; min-width: 0; display: flex; flex-direction: column;
   position: relative;

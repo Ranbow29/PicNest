@@ -38,11 +38,16 @@ function onDragStart(e) {
 function onDragOver(e) {
   e.preventDefault()
   const types = [...(e.dataTransfer?.types || [])]
-  e.dataTransfer.dropEffect = (types.includes('Files') || types.includes('text/uri-list')) ? 'copy' : 'move'
+  const external = types.includes('Files') || types.includes('text/uri-list')
+  e.dataTransfer.dropEffect = external ? 'copy' : 'move'
   const r = e.currentTarget.getBoundingClientRect()
   const y = e.clientY - r.top
   /* 外部拖入与内部拖动同规则：上/下 30% = 缝隙插入，中间 = 放进该文件夹 */
   dropMark.value = y < r.height * 0.3 ? 'before' : y > r.height * 0.7 ? 'after' : 'into'
+  if (external) {
+    e.stopPropagation() // 抢占落点：主展示区/侧栏空白不再覆盖
+    lib.setDropHint('dir', dragHintLabel(dropMark.value), e.clientX, e.clientY)
+  }
 }
 function onDragLeave() { dropMark.value = '' }
 
@@ -56,8 +61,16 @@ function gapTarget(mark) {
   const index = mark === 'before' ? Math.max(0, i) : (i < 0 ? siblings.length : i + 1)
   return { rootId: lib.activeRootId, rel: parentRel, index }
 }
+function dragHintLabel(mark) {
+  if (mark === 'into') return `录入到「${props.node.name}」`
+  const t = gapTarget(mark)
+  const root = lib.roots.find((r) => r.id === lib.activeRootId)
+  const base = t.rel ? t.rel.split('/').pop() : (root?.display_name || '库根')
+  return `插入到「${base}」第 ${t.index + 1} 位`
+}
 async function onDrop(e) {
   e.stopPropagation()
+  lib.clearDropHint()
   const mark = dropMark.value
   dropMark.value = ''
   const types = [...(e.dataTransfer?.types || [])]
