@@ -204,19 +204,21 @@ PicNest/
 38. **视觉分层（2026-11-09，Feb 要求"白窗体悬浮于左栏、详情悬浮于正文"）**：新增 token `--shadow-float`
     （近影 + 主影 + 大范围柔光）与 `--panel-edge`（顶缘 1px 高光）；**底座必须比白窗深一档**（`--bg:#eee7da`、
     `--panel-strong:0.95`），否则缝隙和投影都看不见，浮岛感立不住（Feb 反馈"不明显"后加强）。
-    主面板 `margin:22px 22px 22px 20px` + `inset 0 1px 0 --panel-edge`，靠留白和投影压在左栏之上（2026-11-09 孤岛感加码：缝 12→22、`--shadow-float` 加深；滑尺 right/top/height 同步 20/84/calc(100vh-114px)）；
-    详情浮岛 right/bottom 10（与主面板内缘对齐）、底色为竖向玻璃渐变（top .97 → mid .93@46% → low .86@74% → bot .60）
+    主面板 `margin: 上/右 8px、下 22px、左 20px` + `inset 0 1px 0 --panel-edge`，靠留白和投影压在左栏之上（2026-11-09 先加码到 22、再按 Feb 要求收紧上/右让窗控按钮贴角；滑尺 right/top/height 同步 6/70/calc(100vh-100px)）；
+    详情浮岛 right/bottom 10（与主面板内缘对齐）、top 40（压进顶栏 2px、窗控按钮下缘 39 之下），
+    层级 `玻璃 20 < 详情 24 < 栏内容/窗控 26`（`.titlebar` 去掉 z-index 上下文，`.glass`/`::after` z20、`.bar-content` z26）；
+    底色为竖向玻璃渐变（top .97 → mid .93@46% → low .86@74% → bot .60）
     并加 `backdrop-filter: blur(22px)`——**0.85 半透明在文字密集页面会透底**，看起来像浮不起来；纯色实白又会失去玻璃感。
     渐变必须「上实下透」（Feb 指定仿顶栏玻璃，方向相反），底部 0.60 是阅读性下限，再透按钮文字会掉对比。圆角维持主面板 6 / 浮岛 14（既有定稿，勿顺手改）。
     改定位时注意 `.insp-overlay` / `.browse` 两处 Inspector 与 resize-handle 的 bottom 要一起改（8→10）。
     **详情拖拽柄移位（Feb 指定）**：原先手柄在窗口右缘、方向反直觉；现在绝对定位骑在浮岛**左缘**
-    （`right: calc(var(--insp-w) + 6px)`、top 64 / bottom 10、宽 8、z-index 13），`invert` 保留（向左拖=加宽）。
+    （`right: calc(var(--insp-w) + 6px)`、top 40 / bottom 10、宽 8、z-index 25），`invert` 保留（向左拖=加宽）。
     `--insp-w` 必须同时设在 `.browse` / `.insp-overlay` 容器上，否则手柄算不出左缘位置。
     **高度/自由变换（Feb 指定，支点=详情右下角）**：`InspResize.vue` 渲染三个透明柄——左缘（宽）、顶边（高）、
     左上角（宽高同时变）；右下角由 `right:10 / bottom:10` 固定不动，所以高度增加表现为顶边上移。
     `lib.inspectorHeight` 0=自适应满高（默认），>0 固定高度并存 localStorage；固定时 `.insp-h-fixed .inspector`
     改为 `top:auto; height:var(--insp-h)`，顶边柄 `bottom:calc(10px + var(--insp-h) - 4px)`、角柄 `-8px`。
-    判断尺寸上限要用拖拽起点时容器的 `rect.height - 74`（64 顶 + 10 底），拖到满高就回写 0 保持窗口自适应；
+    判断尺寸上限要用拖拽起点时容器的 `rect.height - 50`（40 顶 + 10 底），拖到满高就回写 0 保持窗口自适应；
     双击顶边/角柄恢复满高。三个柄的 `pointer-events:auto` 必须显式写（`.insp-overlay` 整层是 none）。
 39. **大图适配安全区（2026-11-09，Feb 报「顶部进入玻璃顶栏」）**：`fitToWindow` 的 `availH` 从 `rect.height - 110`
     改为上下各 70 → `rect.height - 140`。原因：flex 居中会把总留白对半分，旧值只给上下各 55px，而玻璃顶栏 42+拖尾 20=62、

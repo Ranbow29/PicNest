@@ -198,12 +198,13 @@ function onKey(e) {
 
 <style scoped>
 .titlebar {
-  position: absolute; top: 0; left: 0; right: 0; z-index: 20;
+  position: absolute; top: 0; left: 0; right: 0;
   height: 42px;
+  /* 不建 z 上下文：玻璃 20 < 详情浮岛 24 < 栏内容/窗控 26（Feb 指定详情压在顶栏之上、按钮之下） */
 }
 /* 纯视觉玻璃层：不背 app-region（不进拖拽位图），backdrop-filter 决不能与 drag 同体 */
 .glass {
-  position: absolute; inset: 0; pointer-events: none;
+  position: absolute; inset: 0; pointer-events: none; z-index: 20;
   background: linear-gradient(180deg, var(--glass-strong) 0%, var(--glass-weak) 100%);
   backdrop-filter: blur(26px) saturate(1.25);
   -webkit-backdrop-filter: blur(26px) saturate(1.25);
@@ -215,7 +216,7 @@ function onKey(e) {
 /* 玻璃拖尾：栏体下方 20px 继续模糊渐隐——内容“溶”进顶栏（Wenku8 式） */
 .titlebar::after {
   content: '';
-  position: absolute; top: 42px; left: 0; right: 0; height: 20px;
+  position: absolute; top: 42px; left: 0; right: 0; height: 20px; z-index: 20;
   backdrop-filter: blur(26px) saturate(1.25);
   -webkit-backdrop-filter: blur(26px) saturate(1.25);
   background: linear-gradient(180deg, var(--glass-weak), transparent);
@@ -229,7 +230,7 @@ function onKey(e) {
 }
 .titlebar.lb-clear::after { display: none; }
 .bar-content {
-  position: relative; height: 42px; display: flex; align-items: center;
+  position: relative; z-index: 26; height: 42px; display: flex; align-items: center;
 }
 .left { display: flex; align-items: center; gap: 6px; padding-left: 16px; min-width: 0; overflow: hidden; }
 .nav-arrow {

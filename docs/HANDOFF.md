@@ -101,10 +101,10 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 ### 详情 / 视觉分层
 - 单选图片：预览/名称/注释/色板/评分/文件夹/操作（**URL 输入栏已删，DB url 字段保留**）。
 - 多选图片：前 4 张扇形堆叠 + 已选 N + 批量注释/评分/文件夹 chips/移动/复制；单选/多选文件夹三态。
-- 详情浮岛 right/bottom 10，竖向玻璃渐变（0.97 → 0.93@46% → 0.86@74% → 0.60）+ blur(22px)。
+- 详情浮岛 right/bottom 10，竖向玻璃渐变（0.97 → 0.93@46% → 0.86@74% → 0.60）+ blur(22px)。**顶缘 top 40**（面板相对）：压进玻璃顶栏 2px、停在右上角窗控按钮下缘（39）之下；分层 `玻璃 20 < 详情 24 < 栏内容/窗控 26`——`.titlebar` 不再建 z 上下文，`.glass`/`::after` z20、`.bar-content` z26（Feb 指定「详情高于顶栏、低于右上角按钮」）。
 - **三向尺寸拖拽**（InspResize）：左缘宽、顶边高、左上角自由变换；支点固定右下；高度 0=自适应满高，双击顶边/角柄恢复满高。
 - **详情打开时正文真让位**：`.browse.insp-open` 提供 `--insp-reserve`，`.grid-viewport` padding-right 消费；**不要再给 ImageGrid 传 class（fragment 根会丢），也不要让卡片条二次扣详情宽**。
-- 主面板 `margin:22/22/22/20` + `--shadow-float`（2026-11-09 按 Feb「增强正文孤岛感」加深一档）+ 顶部高光；底座 `#eee7da`；圆角主面板 6 / 浮岛 14（既有定稿，勿改）。改 margin 要同步概览滑尺的 `right/top/height`（窗口 fixed，现 20/84/calc(100vh-114px)）。
+- 主面板 `margin: 上/右 8px、下 22px、左 20px`（上/右收紧让窗控按钮贴角；下/左保留孤岛水带）+ `--shadow-float`（2026-11-09 按 Feb「增强正文孤岛感」加深一档）+ 顶部高光；底座 `#eee7da`；圆角主面板 6 / 浮岛 14（既有定稿，勿改）。改 margin 要同步概览滑尺的 `right/top/height`（窗口 fixed，现 6/70/calc(100vh-100px)）。
 - **左栏底子白光**：`.sidebar` 顶部 `--sidebar-glow` 白色渐变，150px 渐隐回 `--bg`（范围≈品牌区+「全部」行，图二口径）；暗色主题 `rgba(255,255,255,.07)`。
 - **网格卡片浮岛**：每张图常驻 `--shadow-tile`（近影+中影+柔光）、`--tile-edge` 顶缘高光、圆角 12；hover 抬升 3px + `--shadow-tile-hover`（`--ease-overshoot`）；选中环叠在浮岛影上，子文件夹封面同款。`.wi` 入场波用 `animation-fill-mode: backwards`（`both` 会永久压住 hover transform）。
 - 顶栏**不要**改成浮岛：试过（c7b0844），Feb 当场要求回调（f90daf8），保留全宽玻璃+20px 拖尾。

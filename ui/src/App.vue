@@ -185,8 +185,9 @@ const chipStyle = computed(() => {
 .main-panel {
   flex: 1; min-width: 0; display: flex; flex-direction: column;
   position: relative;
-  /* 四边留白 + 悬浮阴影：白窗体压在左栏之上（左缝 20px，其余 22px；孤岛感靠缝+影） */
-  margin: 22px 22px 22px 20px; background: var(--panel-strong);
+  /* 四边留白 + 悬浮阴影：白窗体压在左栏之上
+     上/右 8px（让右上角窗控按钮贴角、行为正常），下 22 / 左 20 保留孤岛水带 */
+  margin: 8px 8px 22px 20px; background: var(--panel-strong);
   border: 1px solid var(--border); border-radius: var(--radius-panel);
   box-shadow: var(--shadow-float), inset 0 1px 0 var(--panel-edge);
   overflow: hidden;
@@ -195,9 +196,10 @@ const chipStyle = computed(() => {
 .browse { flex: 1; display: flex; min-height: 0; position: relative; --insp-reserve: 0px; }
 .browse.insp-open { --insp-reserve: calc(var(--insp-w, 296px) + 16px); }
 /* 详情统一 overlay：悬浮于内容之上（滚动条自然到最右），两模式同位同尺寸
-   top 64 = 让过 42px 玻璃顶栏 + 20px 拖尾渐隐（顶栏下缘 61，留 3px 呼吸） */
+   top 40 = 顶缘压进玻璃顶栏 2px（高于顶栏），但停在右上角窗控按钮下缘 39 之下 1px；
+   z-index 24：玻璃层 20 < 详情 24 < 栏内容/按钮 26，拖尾不会盖住岛顶 */
 .browse :deep(.inspector), .insp-overlay :deep(.inspector) {
-  position: absolute; top: 64px; right: 10px; bottom: 10px; z-index: 12;
+  position: absolute; top: 40px; right: 10px; bottom: 10px; z-index: 24;
   width: var(--insp-w, 296px); margin: 0; height: auto;
   max-height: none;
   pointer-events: auto;
@@ -211,7 +213,7 @@ const chipStyle = computed(() => {
 /* 大图模式详情容器：必须 inset:0（缺 left 会收缩成手柄宽，overflow:hidden 裁掉整个面板）；
    pointer-events:none 让舞台拖拽/缩放照常，面板与拖宽手柄各自恢复 auto */
 .insp-overlay {
-  position: absolute; top: 0; left: 0; right: 0; bottom: 0; z-index: 15;
+  position: absolute; top: 0; left: 0; right: 0; bottom: 0; z-index: 22;
   display: flex; flex-direction: column;
   overflow: hidden;
   pointer-events: none;

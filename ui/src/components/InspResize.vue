@@ -17,7 +17,7 @@ function start(kind, e) {
     y0: e.clientY,
     w0: lib.inspectorWidth,
     h0: lib.inspectorHeight || Math.round(insp.height),
-    maxH: Math.max(240, Math.round(hr.height - 74)), // 顶边不越过玻璃顶栏（64 + 10）
+    maxH: Math.max(240, Math.round(hr.height - 50)), // 顶边不越过 40px（窗控按钮下缘 39 之下）
   }
   document.addEventListener('mousemove', onMove)
   document.addEventListener('mouseup', onUp)
@@ -54,24 +54,24 @@ function resetHeight() { lib.setInspectorHeight(0) }
 </template>
 
 <style scoped>
-.insp-grip { position: absolute; z-index: 14; pointer-events: auto; }
+.insp-grip { position: absolute; z-index: 25; pointer-events: auto; }
 /* 左缘：宽度 */
 .insp-grip.l {
-  top: 64px; bottom: 10px; right: calc(var(--insp-w, 296px) + 6px);
+  top: 40px; bottom: 10px; right: calc(var(--insp-w, 296px) + 6px);
   width: 8px; cursor: col-resize;
 }
 .insp-grip.l.fixed { top: auto; bottom: 10px; height: var(--insp-h, 0px); }
 /* 顶边：高度（避开左上角，交给自由变换柄） */
 .insp-grip.t {
-  top: 64px; height: 8px;
+  top: 40px; height: 8px;
   left: calc(100% - var(--insp-w, 296px) - 10px + 16px);
   right: 10px; cursor: ns-resize;
 }
 .insp-grip.t.fixed { top: auto; bottom: calc(10px + var(--insp-h, 0px) - 4px); }
 /* 左上角：自由变换（宽+高同时变，右下角不动） */
 .insp-grip.c {
-  top: 64px; right: calc(var(--insp-w, 296px) + 4px);
-  width: 16px; height: 16px; cursor: nwse-resize; z-index: 15;
+  top: 40px; right: calc(var(--insp-w, 296px) + 4px);
+  width: 16px; height: 16px; cursor: nwse-resize; z-index: 26;
 }
 .insp-grip.c.fixed { top: auto; bottom: calc(10px + var(--insp-h, 0px) - 8px); }
 .insp-grip:hover, .insp-grip:active { background: var(--accent-weak); }

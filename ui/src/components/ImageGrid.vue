@@ -750,7 +750,7 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
 <style scoped>
 /* ZCode 式概览滑尺：正文右缘、详情左侧 */
 .ov-ruler {
-  position: fixed; right: 20px; top: 84px; width: 28px; height: calc(100vh - 114px); /* 跟随主面板 22px 外缝：右缘 10px 内缩、顶栏下 20px */
+  position: fixed; right: 6px; top: 70px; width: 28px; height: calc(100vh - 100px); /* 主面板 上/右 8px、下 22px：右缘 10px 内缩、底部 8px 内缩、顶栏下 20px */
   z-index: 10; /* 钉死窗口右缘不随详情缩放；详情浮岛(12/15)打开时覆盖滑尺 */
   cursor: pointer; touch-action: none;
 }
