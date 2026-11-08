@@ -1,72 +1,57 @@
 # PicNest 图巢 — 交接文档（写给下一个窗口）
 
-> 本文档由 2026-11-08 深夜会话刷新（同日第二版，覆盖拖窗/颜色两大战役）。
-> 配套记忆已在 ZCode auto-memory（feb-image-reference-workflow.md），本文是工程视角的完整版。
+> 2026-11-08 第三版。前两版覆盖拖窗/颜色战役；本版覆盖资料库重构+动效系统+滑尺+未分类。
 
 ## 一、这是什么项目
 
 PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0** 的看图软件，目标是替代 Eagle 的日常使用。
-核心设计：**直链索引**（不复制文件，SQLite 只存 file_path，物理文件夹 = 真源，层级从路径派生）。
+核心设计：**直链索引**（不复制文件，SQLite 只存 file_path，物理文件夹 = 真源）。
 
-- 仓库：`D:\zcode工作区\PicNest`（git 已初始化，回滚用 `git log`/`checkout`）
-- 布局：`app\`（fork 运行时，PicNest.exe）· `ui\`（Vite+Vue3 渲染层）· `tools\`（补丁/脚本/探针）· `docs\PLAN.md`（规格+踩坑 15 条，必读）
-- 用户数据：开发模式 `app\_internal_data\`（便携，**CWD 相对，重启必须 -WorkingDirectory app\**）；正式模式 `AppData\Roaming\PicNest`
-- 当前库：`C:\Users\feb\Desktop\好图`，6,673 张
-- Eagle 参照本体：`D:\zcode工作区\eagle\Eagle`（可拆 app.asar 挖真源，tools/asar_probe.py / asar_extract.py）
+- 仓库：`D:\zcode工作区\PicNest`（git ✓）
+- 布局：`app\`（运行时）· `ui\`（Vite+Vue3）· `tools\`（补丁/探针）· `docs\PLAN.md`（踩坑 18 条必读）
+- 数据：dev=`app\_internal_data\`（**CWD 相对，启动必须 -WorkingDirectory app\**，踩坑 #13）
+- 库：好图（6672+）与素材（38）两个资料库；Eagle 参照本体在 `D:\zcode工作区\eagle\Eagle`
 
-## 二、环境启动（每次会话必做）
+## 二、环境启动
 
 ```bash
-# 1) Vite 开发服务器（渲染层热更）
-cd D:\zcode工作区\PicNest\ui && npm run dev   # 127.0.0.1:5173
-
-# 2) 应用（另开；WorkingDirectory 必须是 app\，见踩坑 #13）
+cd D:\zcode工作区\PicNest\ui && npm run dev     # 127.0.0.1:5173
 powershell "$env:PICNEST_DEV='1'; Start-Process 'D:\zcode工作区\PicNest\app\PicNest.exe' -ArgumentList '--remote-debugging-port=9222' -WorkingDirectory 'D:\zcode工作区\PicNest\app'"
-
-# 3) 运行时探针
-node tools/cdp-eval.mjs "表达式"     # CDP 求值（store 经 #app.__vue_app__ 取，window.$pinia 未挂）
-node tools/cdp-shot.mjs out.png      # CDP 截图（比 PrintWindow 稳）
+node tools/cdp-eval.mjs "表达式"    # store 经 #app.__vue_app__ 取（window.$pinia 未挂）
+node tools/cdp-shot.mjs out.png    # CDP 截图
+node tools/cdp-reload-probe.mjs    # reload+抓页面异常（页内 reload 会断 WS，用它）
 ```
 
-⚠️ 主进程/preload（tools/patches/*）改后必须重启应用；渲染层改后 touch + reload。用户双击 exe 会加载过期 dist。
+## 三、当前状态（cf8f796 之后）
 
-## 三、当前状态（截至本次提交）
+### 已完成
+- **资料库（Eagle 式）**：侧栏资料库区（多根切换+记忆）· ＋=库内新建 / ⌂=加库 · 文件夹右键菜单（新建子/同级、重命名、排序 6 式、移动到…、递归导出、8 色图标）· dirMemory 全表缓存（颜色/展开态）· 空文件夹可见（dir-tree 合并 fs）
+- **动效系统**（Wenku8_Flutter GPL-2.0-or-later 移植，合规声明在 PLAN）：入场波 520ms · AnimIcon 原版几何动效图标（滑轨/ Reflow/方格/自适应三横条/pin twinkle/contents 滑线）· 集体晃动总线（切视图/文件夹/库、关大图、面板开关、详情开合全触发）· FolderIcon 后纸抽拉（环境自弹仅当前高亮文件夹 6-14s）
+- **概览滑尺**（ZCode/Monaco 语义）：固定窗口右缘，详情浮岛覆盖之；48 槽内容轮廓 + cos² 波峰随滚动行进 + 金色指示 dash（12px 右对齐）；原生滚动条已隐藏
+- **视图分离**：全部=最新入库置顶（锁死）· 文件夹=排序面板（name/added/mtime/size×升降序，已接线到 SQL）· **未分类**视图（库根散图，入口在最近使用之下）
+- 前情：拖入手动拖窗（winDrag.js+P6，见踩坑 #11/#12）、颜色筛选对齐 Eagle 真源、HSV 取色面板、裁剪三选一（另存为副本 picnest-crop-as）
 
-### 已完成并验证
-- M0-M4 全量 + 拖入录入/查重、Eagle 五件套筛选、色板系统、专业裁切、大图工作区、顶栏玻璃
-- **拖窗战役收官**：app-region 四种结构全灭（踩坑 #11）→ 弃用，winDrag.js 手动拖窗 + P6 补丁（规范尺寸/物理网格/resizable 冻结），抖动与膨胀全灭（踩坑 #12），用户物理验收通过
-- **颜色筛选对齐 Eagle 真源**（拆 app.asar）：色板 12 真值 + none/gray 点、HSV 取色面板（150² SV 方块 + 色相条 + ⌖屏幕吸色 EyeDropper）、hex 输入、准确度 5-40 默认 20；colorMatch 对齐搜索窗实时版（25% 门槛/白底特例/d2000+d76 双阈值）；**任意色板精确命中不受占比门槛**（点图自身色板必保原图，Inspector 色板已可点击）
-- 色板索引三连修：ensurePalettes 挂上 init（曾零调用）、循环终止修复（曾只回填 40/6673）、Inspector 双形状归一（踩坑 #14）
-- 顶栏计数器预留 126px（到 10,000），位数进位不再推挤按钮
-- 筛选面板砍掉文件夹区（左侧栏已有）；▤ 布局弹板重排为分组标题+网格（布局 3 列图标格/排列 4 列）
-- 大图 dock 加 ‹ › 上一张/下一张（键盘 ←→ 本就有）；灯箱返回钮补样式（曾裸奔）
-
-### 已知边界（非 bug）
-- 原生吸管吸的是像素色，像素≠主色时仍可能 miss（与 Eagle 一致）；正道是详情面板点色板
-- 拖窗手感与原生有差（IPC 移动）；Aero Snap 无
+### 已知边界
+- 尺寸/评分排序暂回退默认序；目录删除未做；导出/移动为系统对话框（CDP 测不了，物理验收）
+- 原生吸管吸像素色可能与主色不匹配（与 Eagle 一致），正道=详情面板点色板
 
 ## 四、关键文件地图
 
 | 文件 | 职责 |
 |---|---|
-| `ui/src/stores/library.js` | 全部状态与动作（视图/筛选/排序/灯箱/导入/移动/色板索引） |
-| `ui/src/lib/winDrag.js` | 手动拖窗（mousedown→增量 IPC→mouseup drag-end） |
-| `ui/src/lib/eagleColor.js` | rgb2lab/DeltaE76/2000/isGrayPalettes（Eagle 同款） |
-| `ui/src/components/TitleBar.vue` | 顶栏（双模式/玻璃分层 glass+drag-surface/布局弹板网格） |
-| `ui/src/components/ColorPicker.vue` | Eagle 式 HSV 取色面板 + 屏幕吸色 |
-| `ui/src/components/FilterBar.vue` | 筛选面板（颜色/形状/评分/格式 四区） |
-| `ui/src/components/ImageGrid.vue` | 布局引擎 + 虚拟滚动 + 缩略图泵（page-head 手动拖窗） |
-| `ui/src/components/Lightbox.vue` | 大图舞台（dock 工具条含 ‹ › 导航） |
-| `ui/src/components/Inspector.vue` | 详情浮岛（色板可点筛选） |
-| `tools/patches/apply.mjs` | 主进程+preload 补丁（幂等；P6 拖窗 IPC 在此桥接） |
-| `tools/patches/picnest-handlers.js` | 追加型主进程 handler（picnest-* 全部 + P6 拖窗） |
-| `tools/cdp-eval.mjs` / `cdp-shot.mjs` | CDP 求值 / 截图探针 |
-| `tools/asar_probe.py` / `asar_extract.py` | Eagle app.asar 目录树 / 抽文件 |
-| `docs/PLAN.md` | 规格 + 踩坑 15 条（必读） |
+| `ui/src/stores/library.js` | 全部状态与动作（switchRoot/文件夹管理 7 式/筛选/灯箱/色板索引） |
+| `ui/src/lib/winDrag.js` · `iconMotion.js` · `wave.js` | 手动拖窗 · 图标弹簧手势+集体晃动总线 · 入场波编排 |
+| `ui/src/components/TitleBar.vue` | 顶栏（玻璃三层/动效图标/布局弹板分段钮） |
+| `ui/src/components/AnimIcon.vue` · `FolderIcon.vue` | Wenku8 动效图标 · 彩色文件夹动效图标 |
+| `ui/src/components/DirContextMenu.vue` · `NamePromptDialog.vue` | 文件夹右键菜单 · 名称对话框 |
+| `ui/src/components/SideBar.vue` · `DirTreeItem.vue` | 资料库区+视图入口+树 · 树行（拖拽/右键/展开持久化） |
+| `ui/src/components/ImageGrid.vue` | 布局引擎+虚拟滚动+**概览滑尺**+入场波 |
+| `ui/src/components/FilterBar.vue` · `ColorPicker.vue` · `Inspector.vue` | 筛选四区 · HSV 取色 · 详情浮岛（色板可点筛选） |
+| `tools/patches/apply.mjs` · `picnest-handlers.js` | 补丁（P1-P6 + 文件夹管理 5 原语 + 未分类） |
+| `tools/cdp-eval.mjs` · `cdp-shot.mjs` · `cdp-reload-probe.mjs` · `asar_*.py` | 探针家族 |
 
 ## 五、验收习惯（保持）
 
-- CDP 实证 store/几何层（elementFromPoint、getBoundingClientRect、clientWidth 稳定性）
-- **物理交互只有用户的物理鼠标是真相**（app-region 血泪：CDP 注入全是假阳性）
-- 数量对账 `python tools/verify_counts.py`；每完成一役 `git add -A && git commit`
-- 写 JS 一律 Write 工具直写；改完必 touch；主进程改动必重启（-WorkingDirectory app\）
+- CDP 实证 store/几何；**物理交互只有用户物理鼠标是真相**（app-region 血泪 #11）
+- SQLite LIKE+Windows 路径必须整体转义含分隔符（#16）；模板禁用 window/innerWidth（#17）；setup 内新块放全部依赖声明之后（#18）
+- 每完成一役 git commit；JS 一律 Write 直写；改完必 touch；主进程改动必重启（-WorkingDirectory app\）
