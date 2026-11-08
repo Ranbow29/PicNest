@@ -211,3 +211,9 @@ PicNest/
     **详情拖拽柄移位（Feb 指定）**：原先手柄在窗口右缘、方向反直觉；现在绝对定位骑在浮岛**左缘**
     （`right: calc(var(--insp-w) + 6px)`、top 64 / bottom 10、宽 8、z-index 13），`invert` 保留（向左拖=加宽）。
     `--insp-w` 必须同时设在 `.browse` / `.insp-overlay` 容器上，否则手柄算不出左缘位置。
+    **高度/自由变换（Feb 指定，支点=详情右下角）**：`InspResize.vue` 渲染三个透明柄——左缘（宽）、顶边（高）、
+    左上角（宽高同时变）；右下角由 `right:10 / bottom:10` 固定不动，所以高度增加表现为顶边上移。
+    `lib.inspectorHeight` 0=自适应满高（默认），>0 固定高度并存 localStorage；固定时 `.insp-h-fixed .inspector`
+    改为 `top:auto; height:var(--insp-h)`，顶边柄 `bottom:calc(10px + var(--insp-h) - 4px)`、角柄 `-8px`。
+    判断尺寸上限要用拖拽起点时容器的 `rect.height - 74`（64 顶 + 10 底），拖到满高就回写 0 保持窗口自适应；
+    双击顶边/角柄恢复满高。三个柄的 `pointer-events:auto` 必须显式写（`.insp-overlay` 整层是 none）。

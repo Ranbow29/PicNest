@@ -12,6 +12,7 @@ import ConfirmDialog from './components/ConfirmDialog.vue'
 import TrashMenu from './components/TrashMenu.vue'
 import ImportResultCard from './components/ImportResultCard.vue'
 import ResizeHandle from './components/ResizeHandle.vue'
+import InspResize from './components/InspResize.vue'
 
 // ZCode 式嵌套结构：左栏底层(可拖宽) → 主面板工作区（浏览 ⇄ 大图双模式）→ 详情计划式浮岛(可收起可拖宽)
 // 外部拖入 = 位置即意图：主展示区/树行/缝隙/资料库栏各自高亮 + 跟随光标的落点提示
@@ -120,21 +121,23 @@ const chipStyle = computed(() => {
       <TitleBar />
       <div class="main-inner">
         <!-- 浏览模式：网格 + 详情浮岛（v-show 保滚动位置） -->
-        <div v-show="!lib.lightbox.open" class="browse" :style="{ '--insp-w': lib.inspectorWidth + 'px' }">
+        <div v-show="!lib.lightbox.open" class="browse" :class="{ 'insp-h-fixed': lib.inspectorHeight > 0 }"
+             :style="{ '--insp-w': lib.inspectorWidth + 'px', '--insp-h': lib.inspectorHeight + 'px' }">
           <ImageGrid :class="{ 'insp-open': lib.viewer.showInspector }" />
           <Transition name="insp">
             <Inspector v-if="lib.viewer.showInspector" :style="{ '--insp-w': lib.inspectorWidth + 'px' }" />
           </Transition>
-          <ResizeHandle v-if="lib.viewer.showInspector" store="inspector" invert />
+          <InspResize v-if="lib.viewer.showInspector" />
         </div>
         <!-- 大图工作区：舞台 + 详情计划式浮岛（可收起，滑出动画） -->
         <template v-if="lib.lightbox.open">
           <Lightbox />
-          <div class="insp-overlay" :style="{ '--insp-w': lib.inspectorWidth + 'px' }">
+          <div class="insp-overlay" :class="{ 'insp-h-fixed': lib.inspectorHeight > 0 }"
+               :style="{ '--insp-w': lib.inspectorWidth + 'px', '--insp-h': lib.inspectorHeight + 'px' }">
             <Transition name="insp">
               <Inspector v-if="lib.viewer.showInspector" :style="{ '--insp-w': lib.inspectorWidth + 'px' }" />
             </Transition>
-            <ResizeHandle v-if="lib.viewer.showInspector" store="inspector" invert />
+            <InspResize v-if="lib.viewer.showInspector" />
           </div>
         </template>
       </div>
@@ -182,14 +185,9 @@ const chipStyle = computed(() => {
   max-height: none;
   pointer-events: auto;
 }
-/* 详情宽度拖拽柄：骑在浮岛左缘（原先贴着窗口右缘，方向反直觉） */
-.browse > .resize-handle, .insp-overlay .resize-handle {
-  position: absolute; top: 64px; bottom: 10px; right: calc(var(--insp-w, 296px) + 6px);
-  width: 8px; height: auto; margin: 0; z-index: 13; pointer-events: auto;
-}
-.browse > .resize-handle:hover, .browse > .resize-handle:active,
-.insp-overlay .resize-handle:hover, .insp-overlay .resize-handle:active {
-  box-shadow: inset -1px 0 0 var(--accent); /* 高光线贴浮岛左缘 */
+/* 详情高度可调：右下角固定为支点，顶边上移（0 = 自适应满高） */
+.browse.insp-h-fixed :deep(.inspector), .insp-overlay.insp-h-fixed :deep(.inspector) {
+  top: auto; height: var(--insp-h, auto);
 }
 .insp-enter-active, .insp-leave-active { transition: transform 0.24s ease, opacity 0.24s ease; }
 .insp-enter-from, .insp-leave-to { transform: translateX(40px); opacity: 0; }

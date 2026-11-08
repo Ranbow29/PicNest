@@ -137,6 +137,9 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。
   （文字密集的正文上也不会透底）。圆角保持主面板 6 / 浮岛 14
 - **详情宽度拖拽柄在浮岛左缘**（不再贴窗口右缘）：绝对定位 `right: calc(var(--insp-w) + 6px)`、top 64 / bottom 10、宽 8px、z-index 13，
   4px 骑在浮岛左缘上；`--insp-w` 同时设在 `.browse` / `.insp-overlay` 容器上供手柄计算；`invert` 保留 = 向左拖加宽
+- **详情高度/自由变换**：`InspResize.vue` 三个柄——左缘（宽）、顶边（高）、左上角（宽高同时，支点固定右下角）；
+  `lib.inspectorHeight`（0=自适应满高，localStorage 持久化），固定高度时 `top:auto; bottom:10; height:var(--insp-h)`，
+  顶边/角柄用 `bottom:calc(10px + var(--insp-h) ± n)` 跟随；双击顶边/角柄恢复满高；高度上下限 220 / 容器高-74
 - 手动拖窗、置顶按钮、颜色筛选对齐 Eagle 真源、裁剪三选一、丢回收站/从库移除
 - **大图支持图片 / 视频 / 文本三种形态**；视频与文本的专属工具栏见上节
 

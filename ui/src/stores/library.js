@@ -91,6 +91,7 @@ export const useLibrary = defineStore('library', {
     colorDist: {},           // file_path -> d76（颜色命中排序用）
     sidebarWidth: Number(localStorage.getItem('picnest.sidebarWidth')) || 236,
     inspectorWidth: Number(localStorage.getItem('picnest.inspectorWidth')) || 296,
+    inspectorHeight: Number(localStorage.getItem('picnest.inspectorHeight')) || 0, // 0 = 自适应满高
   }),
 
   getters: {
@@ -1133,6 +1134,11 @@ export const useLibrary = defineStore('library', {
     setInspectorWidth(w) {
       this.inspectorWidth = Math.min(480, Math.max(240, w))
       localStorage.setItem('picnest.inspectorWidth', String(this.inspectorWidth))
+    },
+    /* 详情高度：0 = 自适应满高；>0 = 固定高度（右下角为支点，顶边上移/下移） */
+    setInspectorHeight(h) {
+      this.inspectorHeight = h > 0 ? Math.min(2000, Math.max(220, Math.round(h))) : 0
+      localStorage.setItem('picnest.inspectorHeight', String(this.inspectorHeight))
     },
 
     setSort(mode, asc) {
