@@ -36,7 +36,22 @@ function picnestMigrate() {
       deleted_at INTEGER NOT NULL
     )`);
   } catch (e) {}
+  try { picnestMigrateTextThumbs() } catch (e) {}
   _picnestMigrated = true;
+}
+/* 一次性（幂等）清掉旧版文本缩略图：v1 是 400px 直出，大格子下糊；v2 改 800px 重画 */
+function picnestMigrateTextThumbs() {
+  try {
+    const db = getDb();
+    const rows = db.prepare("SELECT id, file_path, thumbnail_path FROM images WHERE thumbnail_path IS NOT NULL AND thumbnail_path NOT IN ('', 'SKIP')").all();
+    const upd = db.prepare("UPDATE images SET thumbnail_path = '' WHERE id = ?");
+    for (const r of rows) {
+      if (!PICNEST_TEXT_EXTS.has(path.extname(r.file_path).toLowerCase())) continue;
+      if (String(r.thumbnail_path).endsWith(PICNEST_TEXT_THUMB_VER + ".webp")) continue;
+      try { if (String(r.thumbnail_path).startsWith(cacheDir)) fs.unlinkSync(r.thumbnail_path) } catch (e) {}
+      try { upd.run(r.id) } catch (e) {}
+    }
+  } catch (e) {}
 }
 
 function picnestLikeEscape(s) {
@@ -253,6 +268,11 @@ const PICNEST_TEXT_EXTS = new Set([".txt", ".md", ".markdown", ".log", ".json", 
 
 /* ---- 文本类：读取 / 保存 / 文字缩略图 ---- */
 const PICNEST_TEXT_MAX_BYTES = 2 * 1024 * 1024;
+/* 缩略图版本：2 倍渲染（800×1040）保证大格子下文字不糊；版本号进缓存名，旧图自动失效 */
+const PICNEST_TEXT_THUMB_VER = "-v2";
+function picnestTextThumbPath(fp) {
+  return path.join(cacheDir, crypto.createHash("md5").update(fp).digest("hex") + PICNEST_TEXT_THUMB_VER + ".webp");
+}
 function picnestDecodeText(buf) {
   if (buf.length >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) return { content: buf.subarray(3).toString("utf8"), encoding: "UTF-8 BOM" };
   if (buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xfe) return { content: buf.subarray(2).toString("utf16le"), encoding: "UTF-16LE" };
@@ -262,7 +282,7 @@ function picnestDecodeText(buf) {
 }
 function picnestTextThumbSvg(title, extLabel, meta, lines) {
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" })[c]).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, "");
-  /* 按显示宽度裁剪（CJK 记 2 单位）：400px 卡面、11.5px 等宽，56 单位约 360px，不越过右缘 */
+  /* 按显示宽度裁剪（CJK 记 2 单位）：800px 画布、19px 等宽，62 单位约 707px，不越过右缘 */
   const clipW = (s, maxU) => {
     let u = 0, out = "";
     for (const ch of String(s)) {
@@ -272,14 +292,14 @@ function picnestTextThumbSvg(title, extLabel, meta, lines) {
     }
     return out;
   };
-  const rows = lines.slice(0, 23).map((l, i) => `<text x="22" y="${86 + i * 17.5}" font-family="Microsoft YaHei, Consolas, monospace" font-size="11.5" fill="#3d372f">${esc(clipW(l.replace(/\t/g, "  ").trimEnd(), 56))}</text>`).join("");
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="520">
-    <rect width="400" height="520" fill="#f7f3ea"/>
-    <rect width="400" height="40" fill="#ece4d5"/>
-    <text x="18" y="25" font-family="Microsoft YaHei, Segoe UI, sans-serif" font-size="13" font-weight="600" fill="#4a4238">${esc(clipW(title, 40))}</text>
-    <text x="382" y="25" text-anchor="end" font-family="Consolas, monospace" font-size="10" fill="#8a7c68">${esc(extLabel)}</text>
-    <line x1="18" y1="54" x2="382" y2="54" stroke="#d8cfbd"/>
-    <text x="382" y="502" text-anchor="end" font-family="Consolas, monospace" font-size="9" fill="#a2947e">${esc(meta)}</text>
+  const rows = lines.slice(0, 26).map((l, i) => `<text x="44" y="${152 + i * 32}" font-family="Microsoft YaHei, Consolas, monospace" font-size="19" fill="#3d372f">${esc(clipW(l.replace(/\t/g, "  ").trimEnd(), 62))}</text>`).join("");
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="1040">
+    <rect width="800" height="1040" fill="#f7f3ea"/>
+    <rect width="800" height="80" fill="#ece4d5"/>
+    <text x="36" y="50" font-family="Microsoft YaHei, Segoe UI, sans-serif" font-size="26" font-weight="600" fill="#4a4238">${esc(clipW(title, 42))}</text>
+    <text x="764" y="50" text-anchor="end" font-family="Consolas, monospace" font-size="18" fill="#8a7c68">${esc(extLabel)}</text>
+    <line x1="36" y1="108" x2="764" y2="108" stroke="#d8cfbd"/>
+    <text x="764" y="1004" text-anchor="end" font-family="Consolas, monospace" font-size="15" fill="#a2947e">${esc(meta)}</text>
     ${rows}
   </svg>`;
 }
@@ -313,7 +333,7 @@ electron.ipcMain.handle("picnest-save-text", (_event, filePath, content, expecte
     try { getDb().prepare("UPDATE images SET file_size = ?, modify_time = ? WHERE file_path = ?").run(st.size, Math.floor(st.mtimeMs / 1e3), filePath); } catch (e) {}
     /* 文本缩略图缓存失效：内容变了，纸面预览要重画（渲染层随后调 text-thumbnails 重建） */
     try {
-      const thumb = path.join(cacheDir, crypto.createHash("md5").update(filePath).digest("hex") + ".webp");
+      const thumb = picnestTextThumbPath(filePath);
       if (fs.existsSync(thumb)) fs.unlinkSync(thumb);
       getDb().prepare("UPDATE images SET thumbnail_path = '' WHERE file_path = ?").run(filePath);
     } catch (e) {}
@@ -328,7 +348,7 @@ electron.ipcMain.handle("picnest-text-thumbnails", async (_event, paths) => {
     try {
       const ext = path.extname(fp).toLowerCase();
       if (!PICNEST_TEXT_EXTS.has(ext)) { results.push({ file_path: fp, thumbnail_path: "" }); continue; }
-      const out = path.join(cacheDir, crypto.createHash("md5").update(fp).digest("hex") + ".webp");
+      const out = picnestTextThumbPath(fp);
       if (!fs.existsSync(out)) {
         const st = fs.statSync(fp);
         const len = Math.min(st.size, 65536);
@@ -341,8 +361,8 @@ electron.ipcMain.handle("picnest-text-thumbnails", async (_event, paths) => {
         const svg = picnestTextThumbSvg(path.basename(fp), ext.slice(1).toUpperCase(), `${sizeText} · ${dec.encoding}`, lines);
         await sharp(Buffer.from(svg)).webp({ quality: 82 }).toFile(out);
       }
-      try { getDb().prepare("UPDATE images SET thumbnail_path = ?, width = 400, height = 520 WHERE file_path = ?").run(out, fp); } catch (e) {}
-      results.push({ file_path: fp, thumbnail_path: out, width: 400, height: 520, is_text: true });
+      try { getDb().prepare("UPDATE images SET thumbnail_path = ?, width = 800, height = 1040 WHERE file_path = ?").run(out, fp); } catch (e) {}
+      results.push({ file_path: fp, thumbnail_path: out, width: 800, height: 1040, is_text: true });
     } catch (e) {
       errors.push(path.basename(fp));
       results.push({ file_path: fp, thumbnail_path: "" });

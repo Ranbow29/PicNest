@@ -183,8 +183,10 @@ PicNest/
     与主进程 `PICNEST_TEXT_EXTS` 必须同步。**index.js 里有三份同形扫描模板（oversize / scan / stats）**，
     `String.replace` 只替第一份——P9a 曾只打到 oversize，真正入库的 scan 没变（表现为文本怎么都扫不进来）；
     P9d/P9e 分别补 scan 与 stats。watcher 模板另在 P9b（单份）。扫描 worker 每次启动由模板重写，改模板后才重启才生效。
-    文本缩略图：主进程读前 64KB → 前 23 行 → 400×520 纸面 SVG（sharp/librsvg 可渲染中文）→ `cache/md5(path).webp`；
-    DB 同步 `thumbnail_path + width/height=400/520`（仅供排版）。保存后主进程删缓存并清 DB 缩略图，渲染层立刻重画；
+    文本缩略图：主进程读前 64KB → 前 26 行 → **800×1040** 纸面 SVG（sharp/librsvg 可渲染中文）→ `cache/md5(path)-v2.webp`；
+    Feb 反馈 400px 版在大格子下糊 → 改 2 倍渲染并把正文字号压到 19px（相对 400 版的 9.5px），更密更小；
+    DB 同步 `thumbnail_path + width/height=800/1040`（仅供排版）；旧版 400px 图启动时由 `picnestMigrateTextThumbs` 幂等清理。
+    保存后主进程删缓存并清 DB 缩略图，渲染层立刻重画；
     网格文本缩略图 URL 追加 `?v=modify_time` 突破 file:// 图片缓存（实测带 query 可加载）。
     `picnest-read-text` 编码检测：UTF-8 BOM → UTF-16LE BOM → 严格 UTF-8 试解（只探前 64KB，避免截断末尾误判）→
     GB18030 兜底；返回 `{content, encoding, eol, size, mtimeMs, truncated}`。>2MB 截断只读（禁止保存，防截断写回毁文件）。

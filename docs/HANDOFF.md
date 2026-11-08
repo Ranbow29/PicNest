@@ -116,8 +116,9 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。
 ### 文本文件 / 视频
 - **文本类入**（Feb 定：文本类收、代码类不收）：`.txt .md .markdown .log .json .jsonc .csv .tsv .ini .cfg .conf .yaml .yml`；
   scan-worker / watcher-worker / stats-worker / 拖入 / 文件夹复制 / 导出 全部同步收录；`.js/.ts/.py` 等代码文件仍被忽略
-- **文字缩略图**：主进程把前 23 行渲染成 400×520 纸面 SVG → webp（缓存 `md5(path).webp`），DB 写 `thumbnail_path + width/height`；
-  保存后自动失效重画；网格 URL 带 `?v=modify_time` 防浏览器旧缓存；未生成时格子显示后缀徽标占位卡
+- **文字缩略图**：主进程把前 26 行渲染成 **800×1040** 纸面 SVG → webp（缓存 `md5(path)-v2.webp`，2 倍渲染保证大格子下不糊）；
+  DB 写 `thumbnail_path + width/height=800/1040`；保存后自动失效重画；网格 URL 带 `?v=modify_time` 防浏览器旧缓存；
+  未生成时格子显示后缀徽标占位卡；启动时幂等迁移会清掉旧版 400px 缩略图（`picnestMigrateTextThumbs`）
 - **大图文本编辑器**：自动识别 UTF-8 / UTF-8 BOM / UTF-16LE / GB18030(GBK)，保留原换行风格（CRLF↔LF）；
   可编辑 + 1.5s 防抖自动保存 + `Ctrl+S`；关闭/翻页/离开前强制落盘；>2MB 只读预览；
   外部改动时保存返回冲突提示「再按 Ctrl+S 覆盖」；GBK 原文保存会转 UTF-8（工具栏明示）；字号/换行偏好进 localStorage
@@ -146,8 +147,8 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。
 - `ImageGrid` 是 fragment 根（canvas+viewport），App 的 `.insp-open` class 无法继承；需要手动处理右边距（卡片条 `right:312px` 等）
 - `loadImages` 会清选中；本地增量操作不要调它
 - **TEXT_EXTS 三处必须同步**：`ui/src/lib/fileKinds.js`、`tools/patches/picnest-handlers.js`（`PICNEST_TEXT_EXTS`）、`tools/patches/apply.mjs` 的 P9a/P9b/P9d/P9e 字面量
-- 文本缩略图走 `picnest-text-thumbnails`，缓存名 `md5(file_path).webp`，DB 同时写 `width=400/height=520`（排版用）；
-  Inspector 对文本显示「尺寸：文本」，不要暴露 400×520
+- 文本缩略图走 `picnest-text-thumbnails`，缓存名 `md5(file_path)-v2.webp`（2 倍渲染 800×1040），DB 同时写 `width=800/height=1040`（排版用）；
+  Inspector 对文本显示「尺寸：文本」，不要暴露像素值；旧版 400px 缩略图由 `picnestMigrateTextThumbs` 在启动时幂等清理
 - `picnest-read-text` 返回 `{content, encoding, eol, size, mtimeMs, truncated}`；`picnest-save-text(filePath, content, expectedMtimeMs)`
   原子写（`.picnest-tmp` + rename）且**始终写 UTF-8**（GBK 原文会转码，UI 已提示）；`expectedMtimeMs` 差值 >1.5s 判冲突；保存会失效旧缩略图
 - 视频不写 width/height 的兜底：`loadedmetadata` 时回填 store（并 `layoutTick++`）；海报缩略图生成时主进程也会 updateImageDimensions
