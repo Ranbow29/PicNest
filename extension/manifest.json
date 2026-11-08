@@ -6,6 +6,14 @@
   "permissions": ["contextMenus", "notifications", "storage", "activeTab", "tabs", "scripting"],
   "host_permissions": ["<all_urls>", "http://127.0.0.1:41600/*"],
   "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*", "file:///*"],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
   "action": {
     "default_popup": "popup.html",
     "default_title": "PicNest 图巢采集"

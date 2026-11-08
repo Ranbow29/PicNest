@@ -322,3 +322,6 @@ PicNest/
     安全：127.0.0.1 + Origin 白名单（扩展/localhost）+ PNA 预检；token 待补。Eagle for Edge 调研（只读）：
     41595 根 + `/api/library`、`/api/folder`、`/api/tag`、`/api/item/addFromURL`；41593 旧表单（image/save-url/screen capture/import-images）；
     Eagle 启动时占这两个端口，兼容层暂缓且不默认开启；协议信息记录，代码原创、不抄不绑 Eagle 资源。
+    **网页内按住采集（content.js）**：按住 380ms（120ms 起环形进度）→ Shadow DOM 双栏面板（左「未分类/库根」大片，
+    右 = 当前根全部文件夹缩进列表，原生滚动）；拖到目标松开保存，松在面板空白则停留点击；提前移动 >6px 取消，
+    不影响页面自身拖拽；Esc/点外部/页面滚动关闭；只处理主 frame 的 `<img>`，popup 可关闭手势（`holdCollect`）。

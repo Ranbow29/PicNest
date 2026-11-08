@@ -6,6 +6,7 @@ const elStatus = $('#status')
 const elRoot = $('#root')
 const elFolder = $('#folder')
 const elSave = $('#save')
+const elHold = $('#hold')
 const elMsg = $('#msg')
 
 function setStatus(state, text) {
@@ -77,8 +78,7 @@ async function init() {
   }
 }
 
-elRoot.addEventListener('change', async () => {
-  const rootId = elRoot.value
+elRoot.addEventListener('change', async () => {  const rootId = elRoot.value
   await chrome.storage.local.set({ rootId: Number(rootId), rel: '' })
   await loadFolders(rootId, '')
   msg('已切换根文件')
@@ -95,6 +95,13 @@ elSave.addEventListener('click', () => {
     if (res?.ok) msg('已保存：' + res.name)
     else msg('保存失败：' + (res?.error || '未知错误'), true)
   })
+})
+
+chrome.storage.local.get({ holdCollect: true }, (s) => {
+  elHold.checked = s.holdCollect !== false
+})
+elHold.addEventListener('change', () => {
+  chrome.storage.local.set({ holdCollect: elHold.checked })
 })
 
 init()

@@ -113,6 +113,25 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse({ ok: true, name: await savePage(tab) })
       } else if (msg?.type === 'status') {
         sendResponse({ ok: true, data: await api('/api/v1/ping') })
+      } else if (msg?.type === 'collect-folders') {
+        const ctx = await api('/api/v1/context')
+        let rootId = msg.rootId ?? ctx.rootId
+        if (!ctx.roots.some((r) => String(r.id) === String(rootId))) rootId = ctx.rootId
+        const data = await api('/api/v1/folders?rootId=' + encodeURIComponent(rootId))
+        sendResponse({ ok: true, root: data.root, folders: data.folders, context: ctx })
+      } else if (msg?.type === 'save-panel') {
+        const body = {
+          kind: 'image',
+          src: msg.src,
+          dataUrl: msg.dataUrl,
+          url: msg.url,
+          title: msg.title,
+          rootId: msg.rootId,
+          rel: msg.rel || '',
+        }
+        const r = await api('/api/v1/save', body)
+        if (msg.rootId != null) await chrome.storage.local.set({ rootId: Number(msg.rootId), rel: msg.rel || '' })
+        sendResponse({ ok: true, name: r.saved?.[0]?.name || '已保存' })
       } else {
         sendResponse({ ok: false, error: 'unknown message' })
       }
