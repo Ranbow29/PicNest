@@ -721,6 +721,67 @@ export const useLibrary = defineStore('library', {
       this.pruneImageSelection(path)
       await this.refreshTree()
     },
+    /* 回收站多选批量还原：右键入口，逐张恢复（非破坏性，不弹确认） */
+    async restoreSelectedFromTrash() {
+      this.closeContextMenu()
+      const list = [...new Set(this.selectedPaths)]
+      if (!list.length) return
+      if (list.length === 1) return this.restoreFromTrash(list[0])
+      let ok = 0, failed = 0
+      for (const p of list) {
+        try {
+          const r = await window.picrand.picnestTrashRestore(p)
+          if (r === false) failed++
+          else ok++
+        } catch (e) { failed++ }
+      }
+      if (ok) {
+        const set = new Set(list)
+        this.images = this.images.filter((i) => !set.has(i.file_path))
+        this.selectedPaths = this.selectedPaths.filter((p) => !set.has(p))
+        if (this.selectionAnchor && set.has(this.selectionAnchor)) this.selectionAnchor = this.selectedPaths[this.selectedPaths.length - 1] || null
+        if (this.selectedPath && set.has(this.selectedPath)) this.selectedPath = this.selectedPaths[this.selectedPaths.length - 1] || null
+        await this.refreshTree()
+        this.showNote(`已还原 ${ok} 张${failed ? ` · 失败 ${failed}` : ''}`)
+      }
+      return { ok: failed === 0, restored: ok, failed }
+    },
+    /* 回收站多选批量彻底删除：进 Windows 回收站 + 清图巢索引，先确认 */
+    async purgeSelectedFromTrash() {
+      this.closeContextMenu()
+      const list = [...new Set(this.selectedPaths)]
+      if (!list.length) return
+      if (list.length === 1) return this.purgeFromTrash(list[0])
+      const ok = await this.askConfirm({
+        title: `彻底删除 ${list.length} 张图片？`,
+        message: '文件会移入 Windows 回收站作为最后保险，并从图巢索引移除。',
+        details: [
+          ...list.slice(0, 5).map((p) => p.split(/[\\/]/).pop()),
+          ...(list.length > 5 ? [`…等 ${list.length} 张`] : []),
+        ],
+        confirmText: '彻底删除',
+        danger: true,
+      })
+      if (!ok) return
+      let done = 0, failed = 0
+      for (const p of list) {
+        try {
+          const r = await window.picrand.picnestTrashPurge(p)
+          if (r === false) failed++
+          else done++
+        } catch (e) { failed++ }
+      }
+      if (done) {
+        const set = new Set(list)
+        this.images = this.images.filter((i) => !set.has(i.file_path))
+        this.selectedPaths = this.selectedPaths.filter((p) => !set.has(p))
+        if (this.selectionAnchor && set.has(this.selectionAnchor)) this.selectionAnchor = this.selectedPaths[this.selectedPaths.length - 1] || null
+        if (this.selectedPath && set.has(this.selectedPath)) this.selectedPath = this.selectedPaths[this.selectedPaths.length - 1] || null
+        await this.refreshTree()
+        this.showNote(`已彻底删除 ${done} 张${failed ? ` · 失败 ${failed}` : ''}`)
+      }
+      return { ok: failed === 0, purged: done, failed }
+    },
 
     resolveDupDialog(choice) {
       if (this.dupDialog.resolve) this.dupDialog.resolve(choice)

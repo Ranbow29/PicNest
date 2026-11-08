@@ -16,10 +16,10 @@ const items = computed(() => {
   const nSel = lib.selectedPaths.length
   if (lib.view === 'trash') {
     return [
-      { key: 'restore', label: '还原到原文件夹', run: () => lib.restoreFromTrash(menu.value.image.file_path) },
+      { key: 'restore', label: nSel > 1 ? `还原到原文件夹（${nSel} 张）` : '还原到原文件夹', run: () => lib.restoreSelectedFromTrash() },
       { key: 'reveal', label: '在文件管理器打开', run: () => lib.reveal(menu.value.image.file_path) },
       { sep: true },
-      { key: 'purge', label: '彻底删除（丢回收站）', danger: true, run: () => lib.purgeFromTrash(menu.value.image.file_path) },
+      { key: 'purge', label: nSel > 1 ? `彻底删除（${nSel} 张，丢回收站）` : '彻底删除（丢回收站）', danger: true, run: () => lib.purgeSelectedFromTrash() },
     ]
   }
   return [

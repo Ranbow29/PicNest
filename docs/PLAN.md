@@ -141,6 +141,9 @@ PicNest/
     **sync/scan 的 diff 必须跳过 `deleted_at` 非空行**（P8a-P8d 已修）——回收区路径不在 root 扫描结果里，
     否则整行被当 removed 删除，还原时丢图（本轮实测踩中）。还原移回原路径（重名 `(2)`）并恢复行路径/标记；
     彻底删除才 `shell.trashItem`。回收站列表过滤 `trash_group IS NULL`；`counts.trash` = 独立软删图片 + 文件夹条目数。
+    回收站图片多选批量还原/彻底删除只在右键菜单：还原逐张 `picnest-trash-restore` 不弹确认；彻底删除先 askConfirm
+    （数量 + 前 5 文件名）再逐张 `picnest-trash-purge`；属于文件夹回收组的行 purge 返回 false，仍走文件夹卡片按钮。
+    批量后选中集整批 filter 收缩（与 trashImages 一致）。
 32. **图片手动排序**：`images.sort_order`（0 = 未排序）；manual 排序 SQL `(sort_order = 0) DESC, sort_order ASC, id DESC`，
     **新录入/移入的 0 值排最前**（id 新的在前）。拖动排序 IPC 写 1..n 并自动切 manual；移动图片时 `sort_order = 0`。
     **画布级拖动**：按光标最近图片中心算目标与 before/after（光标在目标左半=前、右半=后），画布任意缝隙都能命中；
