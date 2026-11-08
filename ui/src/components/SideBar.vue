@@ -176,10 +176,10 @@ async function dropOnLib(e, l) {
       </div>
     </nav>
 
-    <!-- 资料库：每个根一个节点，点击切换；当前库高亮；右键 = 文件夹菜单 -->
+    <!-- 根文件（资料库根）：每个根一个节点，点击回到库根；当前库高亮；右键 = 文件夹菜单 -->
     <div class="section-head">
-      <span>资料库</span>
-      <button class="add-btn lib-add" title="添加资料库（选择目录）" @click="pickFolder">⌂</button>
+      <span>根文件</span>
+      <button class="add-btn lib-add" title="添加根文件（选择目录）" @click="pickFolder">⌂</button>
     </div>
     <div class="libs">
       <div v-for="l in libs" :key="l.id" class="lib-item" :class="{ active: l.active, 'drop-into': lib.dropHint.active && lib.dropHint.zone === 'lib' && lib.dropHint.key === l.id }"
@@ -198,7 +198,7 @@ async function dropOnLib(e, l) {
     </div>
 
     <div v-if="lib.scanning" class="scanning">{{ lib.scanNote }}</div>
-    <div v-else-if="!lib.tree" class="empty">还没有资料库，点 ⌂ 导入</div>
+    <div v-else-if="!lib.tree" class="empty">还没有根文件，点 ⌂ 导入</div>
     <div v-else class="tree" @click.self="clearTreeSelection">
       <DirTreeItem :node="lib.tree.tree" :depth="0" @open="openNode" />
     </div>

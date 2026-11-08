@@ -64,6 +64,8 @@ export const useLibrary = defineStore('library', {
     dimsFilling: false,
     thumbsFilling: false,
     lightbox: { open: false, path: null },
+    brief: { open: false, path: null }, // 简报模式（全屏演示）
+    grayscaleMode: localStorage.getItem('picnest.grayscale') === '1', // 黑白预览（全局显示开关）
     contextMenu: { open: false, x: 0, y: 0, image: null },
     renaming: false,
     dupDialog: { open: false, items: [], targetRel: undefined, mode: 'files', count: 0, resolve: null },
@@ -214,7 +216,15 @@ export const useLibrary = defineStore('library', {
 
     /* 资料库切换：同 id 忽略；全链路键 = activeRootId，tree/counts/images 按 folderId 自动重建 */
     async switchRoot(id, opts = {}) {
-      if (this.activeRootId === id) return
+      if (this.activeRootId === id) {
+        /* 再点当前资料库 = 回到它的库根（全部视图 + 根目录） */
+        if (this.lightbox.open) this.closeLightbox()
+        this.selectionView = false
+        this.clearDirSelection()
+        this.clearImageSelection()
+        await this.openDir(null, opts)
+        return
+      }
       if (this.lightbox.open) this.closeLightbox()
       collectiveShake()
       this.activeRootId = id
@@ -1767,6 +1777,69 @@ export const useLibrary = defineStore('library', {
       this.lightbox = { open: false, path: null }
       this.viewer.cropMode = false
       collectiveShake()
+    },
+
+    /* ---- 简报模式（全屏演示，Eagle 语义） / 黑白预览（全局显示开关） ---- */
+    toggleGrayscale() {
+      this.grayscaleMode = !this.grayscaleMode
+      localStorage.setItem('picnest.grayscale', this.grayscaleMode ? '1' : '0')
+    },
+    openBrief(path) {
+      this.closeContextMenu()
+      if (this.lightbox.open) this.closeLightbox()
+      const p = path || this.selectedPath || this.images[0]?.file_path || null
+      if (!p) return
+      this.brief = { open: true, path: p }
+      try {
+        const pr = document.documentElement.requestFullscreen?.()
+        if (pr?.catch) pr.catch(() => {})
+      } catch (e) {}
+    },
+    closeBrief() {
+      this.brief = { open: false, path: null }
+      try {
+        if (document.fullscreenElement) {
+          const pr = document.exitFullscreen?.()
+          if (pr?.catch) pr.catch(() => {})
+        }
+      } catch (e) {}
+    },
+    briefNav(dir) {
+      const list = this.images
+      if (!list.length) return
+      const i = list.findIndex((x) => x.file_path === this.brief.path)
+      const n = ((i < 0 ? 0 : i) + dir + list.length) % list.length
+      this.brief.path = list[n].file_path
+    },
+
+    /* ---- 移入未分类：物理移到库根并保留索引（替代“从库中移除”，避免幽灵文件） ---- */
+    async moveToUncategorized(paths) {
+      const list = [...new Set((paths || []).filter(Boolean))]
+      if (!list.length) return { ok: false }
+      const rootPath = this.tree?.rootPath
+      if (!rootPath) return { ok: false, error: '无资料库' }
+      const norm = (p) => String(p).replace(/\//g, '\\').toLowerCase()
+      const root = norm(rootPath).replace(/\\+$/, '')
+      const dirOf = (p) => { const s = Math.max(p.lastIndexOf('\\'), p.lastIndexOf('/')); return s < 0 ? '' : p.slice(0, s) }
+      const todo = [], already = []
+      for (const p of list) {
+        if (norm(dirOf(p)) === root) already.push(p)
+        else todo.push(p)
+      }
+      let moved = 0, failed = 0
+      if (todo.length) {
+        const r = await this.moveImages(todo, '')
+        moved = r?.moved || 0
+        failed = r?.failed || 0
+        /* 当前就在库根/未分类/最近等非文件夹视图：移过去后仍应显示，重新加载一次 */
+        if (moved && !this.currentDirRel) await this.loadImages()
+      }
+      const parts = []
+      if (moved) parts.push(`已移入未分类 ${moved} 张`)
+      if (already.length) parts.push(`已在未分类 ${already.length} 张`)
+      if (failed) parts.push(`失败 ${failed} 张`)
+      this.showNote(parts.join(' · ') || '没有可移动的文件', [], failed ? 'error' : 'ok')
+      return { ok: failed === 0, moved, failed, already: already.length }
     },
     toggleInspector() {
       this.viewer.showInspector = !this.viewer.showInspector

@@ -246,3 +246,16 @@ PicNest/
     删除只走 `trashImages`（图巢回收站软删）；删完在本地重算 groups（<2 丢弃）与 stats，不重新扫盘。
     面板 `DupFinder.vue`：z-index 940（confirm 950 在其上），Esc 在 App 里优先关闭；每个文件卡必须显示 `rel || '库根'`。
     已知：没有取消扫描的 IPC（关窗后主进程扫完丢弃结果）；超大库首次扫描可能慢。
+43. **点库回根 / 根文件 / 菜单瘦身 / 简报 / 黑白 / 未分类（2026-11-09，Feb 指定）**：
+    ①`switchRoot(id)` 原先同 id 直接 `return`，导致“点当前库没反应”；改为同 id 时 `openDir(null, opts)` 回库根（全部视图 + dir=null）。
+    ②侧栏区块名改「根文件」（仅 SideBar 标题/添加钮/空态；`DirContextMenu` 等仍用“资料库”，避免“复制根文件文件夹”这类怪词）。
+    ③图片右键移除「重命名」（详情面板点名称才是真重命名）；「从库中移除」改「移入未分类」——
+    物理移动到**库根**（`moveImages(paths, '')` → `picnestMoveImage`，重名自动 `(n)`、`sort_order=0`）并保留索引；
+    已在根层的路径跳过；移动后若 `!currentDirRel`（库根/未分类/最近等）要 `loadImages()`，否则会把仍在视图里的图错误过滤掉。
+    ④简报模式（Eagle 语义：asar 里 `slideshowOn` + `setFullScreen(true)`）：`BriefMode.vue` 全屏黑底 overlay，
+    单击下一张、右键上一张、←→、Esc；进入调 `document.documentElement.requestFullscreen()`（页面级，不是 Electron 窗口 fullscreen）；
+    监听 `fullscreenchange` 兜底关闭。视频静音循环，文本占位。导航用 `lib.images` 顺序（不是网格的 sortedImages，可能与大图顺序有差）。
+    ⑤黑白预览（Eagle 语义：asar 里 `isGrayscaleMode` checkbox，全局显示开关）：`lib.grayscaleMode` 存 localStorage；
+    网格 `.thumb.gray img`、大图 `.stage.gray`、详情预览/堆叠、简报统一 `filter: grayscale(1)`；右键菜单文案前加 ✓。
+    ⑥**Vite dev 假象**：往 App.vue 新增组件后 Page.reload 也可能不挂载——Vite 的 App 模板缓存没失效（脚本 import 在、组件树里没有）。
+    必须重启 Vite（占 5173 的 node）+ 重启应用；排查直接 fetch `/src/App.vue` 看编译出的 render。

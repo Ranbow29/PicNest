@@ -25,7 +25,8 @@ const items = computed(() => {
   return [
     { key: 'open', label: '打开（灯箱）', run: () => lib.openLightbox(menu.value.image.file_path) },
     { key: 'reveal', label: '在文件管理器打开', run: () => lib.reveal(menu.value.image.file_path) },
-    { key: 'rename', label: '重命名', run: () => { lib.selectedPath = menu.value.image.file_path; lib.renaming = true } },
+    { key: 'brief', label: '进入简报模式', run: () => lib.openBrief(menu.value.image.file_path) },
+    { key: 'gray', label: (lib.grayscaleMode ? '✓ ' : '') + '黑白预览', run: () => lib.toggleGrayscale() },
     { key: 'copy', label: '复制', run: () => {
       const path = menu.value.image.file_path
       const paths = (lib.selectedPaths.length > 1 && lib.selectedPaths.includes(path))
@@ -38,7 +39,13 @@ const items = computed(() => {
       run: () => lib.paste({ rootId: lib.activeRootId, rel: lib.currentDirRel }),
     }] : []),
     { key: 'copypath', label: '复制文件路径', run: async () => { try { await navigator.clipboard.writeText(menu.value.image.file_path) } catch {} } },
-    { key: 'remove', label: '从库中移除（文件保留）', run: () => lib.removeFromLibrary(menu.value.image.file_path) },
+    { key: 'uncat', label: nSel > 1 ? `移入未分类（${nSel} 张）` : '移入未分类', run: () => {
+      const path = menu.value.image.file_path
+      const paths = (lib.selectedPaths.length > 1 && lib.selectedPaths.includes(path))
+        ? lib.selectedPaths.slice()
+        : [path]
+      lib.moveToUncategorized(paths)
+    } },
     { sep: true },
     { key: 'del', label: nSel > 1 ? `丢到回收站（${nSel} 张）` : '丢到回收站', danger: true, run: () => lib.delSelected() },
   ]

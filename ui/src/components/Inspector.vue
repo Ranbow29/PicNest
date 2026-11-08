@@ -301,8 +301,8 @@ async function exportFolder() {
     <!-- ========== 单选图片 ========== -->
     <template v-if="mode === 'img' && img">
       <div class="preview">
-        <img v-if="!isTextImg && !isVideoImg" :src="fileUrl(img.file_path)" loading="lazy" draggable="false" />
-        <img v-else-if="img.thumbnail_path && img.thumbnail_path !== 'SKIP'" :src="fileUrl(img.thumbnail_path)" loading="lazy" draggable="false" />
+        <img v-if="!isTextImg && !isVideoImg" :src="fileUrl(img.file_path)" :class="{ gray: lib.grayscaleMode }" loading="lazy" draggable="false" />
+        <img v-else-if="img.thumbnail_path && img.thumbnail_path !== 'SKIP'" :src="fileUrl(img.thumbnail_path)" :class="{ gray: lib.grayscaleMode }" loading="lazy" draggable="false" />
         <div v-else class="preview-doc">{{ extLabel(img.file_path) }}</div>
       </div>
 
@@ -381,7 +381,7 @@ async function exportFolder() {
     <template v-else-if="mode === 'multi'">
       <div class="stack">
         <div v-for="(im, i) in stackImgs" :key="im.file_path" class="stack-card" :style="stackStyle(i)">
-          <img v-if="thumbSrc(im)" :src="thumbSrc(im)" draggable="false" />
+          <img v-if="thumbSrc(im)" :src="thumbSrc(im)" :class="{ gray: lib.grayscaleMode }" draggable="false" />
           <div v-else class="stack-doc">{{ extLabel(im.file_path) }}</div>
         </div>
       </div>
@@ -494,6 +494,7 @@ async function exportFolder() {
 
 .preview { margin: 10px; border-radius: 10px; overflow: hidden; background: var(--bg-2); border: 1px solid var(--border); }
 .preview img { display: block; width: 100%; max-height: 240px; object-fit: contain; }
+.preview img.gray, .stack-card img.gray { filter: grayscale(1); }
 .preview-doc {
   height: 170px; display: flex; align-items: center; justify-content: center;
   background: linear-gradient(160deg, #f7f3ea 0%, #eee7d9 100%);

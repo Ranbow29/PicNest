@@ -10,6 +10,7 @@ import ContextMenu from './components/ContextMenu.vue'
 import DuplicateDialog from './components/DuplicateDialog.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import DupFinder from './components/DupFinder.vue'
+import BriefMode from './components/BriefMode.vue'
 import TrashMenu from './components/TrashMenu.vue'
 import ImportResultCard from './components/ImportResultCard.vue'
 import ResizeHandle from './components/ResizeHandle.vue'
@@ -26,6 +27,14 @@ function isTypingTarget(el) {
 }
 function onKeydown(e) {
   if (e.defaultPrevented) return // TitleBar 已处理（Esc 关布局/筛选弹板）
+  /* 简报模式：全屏演示优先接管键盘 */
+  if (lib.brief.open) {
+    const k = e.key
+    if (k === 'Escape') { e.preventDefault(); lib.closeBrief(); return }
+    if (k === 'ArrowLeft') { e.preventDefault(); lib.briefNav(-1); return }
+    if (k === 'ArrowRight' || k === ' ') { e.preventDefault(); lib.briefNav(1); return }
+    return
+  }
   const key = String(e.key || '').toLowerCase()
   if (key === 'escape') {
     /* 分层退出：输入框/灯箱/弹窗/右键菜单各有其主，都没有才清空选中 */
@@ -153,6 +162,7 @@ const chipStyle = computed(() => {
   <DuplicateDialog />
   <ConfirmDialog />
   <DupFinder />
+  <BriefMode />
   <TrashMenu />
   <ImportResultCard />
 </template>

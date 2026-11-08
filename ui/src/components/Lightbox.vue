@@ -553,7 +553,7 @@ function onKey(e) {
     <!-- 视频：自绘控制条（无原生 UI） -->
     <video
       v-if="kind === 'video'"
-      ref="videoEl" :src="url" class="stage video" playsinline
+      ref="videoEl" :src="url" class="stage video" :class="{ gray: lib.grayscaleMode }" playsinline
       :style="{ transform: `translate(${lib.viewer.tx}px, ${lib.viewer.ty}px) scale(${lib.viewer.scale})` }"
       @loadedmetadata="onVideoMeta" @timeupdate="onVideoTime"
       @play="vid.playing = true" @pause="vid.playing = false" @ended="vid.playing = false"
@@ -588,7 +588,7 @@ function onKey(e) {
     </div>
     <img
       v-else
-      ref="imgEl" :src="url" class="stage" draggable="false"
+      ref="imgEl" :src="url" class="stage" :class="{ gray: lib.grayscaleMode }" draggable="false"
       :style="{
         transform: `translate(${lib.viewer.tx}px, ${lib.viewer.ty}px) scale(${lib.viewer.scale}) rotate(${lib.viewer.rot}deg)` + (lib.viewer.flopX ? ' scaleX(-1)' : ''),
         cursor: lib.viewer.cropMode ? 'default' : dragging ? 'grabbing' : 'grab',
@@ -722,6 +722,7 @@ function onKey(e) {
 
 /* ---- 视频：自绘控制条 ---- */
 .stage.video { max-width: none; background: #000; box-shadow: 0 20px 80px rgba(0, 0, 0, 0.45); cursor: pointer; }
+.stage.gray { filter: grayscale(1); }
 .video-dock { gap: 6px; }
 .video-dock .dock-btn.play { color: var(--accent); font-size: 12px; }
 .vtime { font-family: Consolas, monospace; font-size: 11px; color: var(--text); min-width: 34px; text-align: center; }

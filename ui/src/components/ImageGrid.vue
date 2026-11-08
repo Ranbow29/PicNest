@@ -672,7 +672,7 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
               @contextmenu.prevent="lib.openDirMenu($event, { rel: f.rel, node: f })"
             >
               <div class="sf-cover">
-                <img v-if="covers[f.rel]" :src="covers[f.rel]" draggable="false" loading="lazy" />
+                <img v-if="covers[f.rel]" :src="covers[f.rel]" :class="{ gray: lib.grayscaleMode }" draggable="false" loading="lazy" />
                 <FolderIcon v-else :color="lib.dirMemory[f.rel]?.color || ''" :size="30" />
               </div>
               <div class="sf-name" :title="f.name + ' · 双击进入'">{{ f.name }}</div>
@@ -718,7 +718,7 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
         @dblclick="lib.openLightbox(img.file_path)"
         @contextmenu.prevent="lib.openContextMenu($event, img)"
       >
-        <div class="thumb wi" :class="{ nowi: img.gi >= 48 }">
+        <div class="thumb wi" :class="{ nowi: img.gi >= 48, gray: lib.grayscaleMode }">
           <img v-if="img.src" :src="img.src" loading="lazy" draggable="false" />
           <div v-else-if="img.isText" class="docph">
             <b>{{ img.extLabel }}</b>
@@ -777,6 +777,7 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06) inset;
 }
 .thumb img { width: 100%; height: 100%; object-fit: cover; }
+.thumb.gray img, .sf-cover img.gray { filter: grayscale(1); }
 .noimg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--text-2); font-size: 22px; }
 /* 文本文件占位卡（文字缩略图还没生成时）：牛皮纸底 + 后缀徽标，避免裂图 */
 .docph {

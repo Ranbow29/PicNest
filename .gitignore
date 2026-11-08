@@ -2,3 +2,4 @@ node_modules/
 app/
 _internal_data/
 tools/shot-*.png
+tools/*.log
