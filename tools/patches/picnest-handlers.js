@@ -748,6 +748,7 @@ function picnestSnapSize(force) {
 electron.ipcMain.on("picnest-window-drag-start", () => {
   try {
     if (!mainWindow || mainWindow.isDestroyed()) return;
+    picnestSnapSize(false); /* 自愈：若真实 resize 未被监听到，此处把规范尺寸追平（>4px 才采纳） */
     if (!picnestWinSize) picnestSnapSize(true);
     /* 关键：手势期关掉 resizable——Win 非 100% DPI 下位置一变系统就强制重算窗口尺寸（±2px
        非幂等），尺寸一变 Web 内容就整帧重排 = 拖动抖动。关掉后 Windows 停止尺寸管理，
@@ -776,12 +777,16 @@ electron.ipcMain.on("picnest-window-drag-end", () => {
 });
 /* 用户真实调整窗体（边缘拉伸/最大化还原）后刷新规范尺寸；拖拽自触发的 resize 也会进来，
    但 ≤4px 的被丢弃，不会污染 */
-try {
-  mainWindow.on("resize", () => {
-    clearTimeout(picnestResizeT);
-    picnestResizeT = setTimeout(() => picnestSnapSize(false), 400);
-  });
-} catch (e) {}
+/* 注册挂 whenReady 之后：模块加载期 mainWindow 尚未赋值，直接 .on 会静默炸掉
+   （被 catch 吞掉 → 规范尺寸永不更新 → 拖动永远回旧尺寸的元凶） */
+electron.app.whenReady().then(() => {
+  try {
+    mainWindow.on("resize", () => {
+      clearTimeout(picnestResizeT);
+      picnestResizeT = setTimeout(() => picnestSnapSize(false), 400);
+    });
+  } catch (e) {}
+});
 /* 诊断探针：主进程视角的窗口 bounds（查 DPI 舍入漂移用） */
 electron.ipcMain.handle("picnest-window-bounds", () => {
   try { return mainWindow && !mainWindow.isDestroyed() ? mainWindow.getBounds() : null; } catch (e) { return null; }

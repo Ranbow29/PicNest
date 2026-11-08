@@ -126,7 +126,7 @@ function onKey(e) {
           <div class="vo-cap">布局方式</div>
           <div class="seg3" :style="{ '--seg-i': Math.max(0, LAYOUTS.findIndex((l) => l.key === lib.layout)) }">
             <i class="seg-thumb" />
-            <button v-for="l in LAYOUTS" :key="l.key" class="seg-cell" :class="{ on: lib.layout === l.key }" @click="lib.layout = l.key">
+            <button v-for="l in LAYOUTS" :key="l.key" class="seg-cell" :class="{ on: lib.layout === l.key }" @click="lib.setLayout(l.key)">
               <AnimIcon :name="l.key === 'grid' ? 'grid' : l.key === 'masonry' ? 'layout' : 'justified'" :size="15" />{{ l.label }}
             </button>
           </div>
@@ -141,7 +141,7 @@ function onKey(e) {
       </div>
       <div class="zoom-slider">
         <span class="z-sign">−</span>
-        <input type="range" min="0.6" max="3.2" step="0.05" :value="lib.zoom" @input="lib.zoom = Number($event.target.value)" />
+        <input type="range" min="0.6" max="3.2" step="0.05" :value="lib.zoom" @input="lib.setZoom(Number($event.target.value))" />
         <span class="z-sign">＋</span>
       </div>
       <div v-if="lib.view !== 'trash'" class="search">

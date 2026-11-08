@@ -46,8 +46,8 @@ export const useLibrary = defineStore('library', {
     error: '',
     selectedPath: null,
     hoverLabels: true,    // 网格悬停显字（M5 视图选项可关）
-    layout: 'grid',       // grid | justified（M5 视图选项扩展瀑布流/列表）
-    zoom: 1,              // 顶栏缩放滑条：网格=格子大小，自适应=目标行高
+    layout: localStorage.getItem('picnest.layout') || 'grid',       // grid | justified | masonry（持久化）
+    zoom: Number(localStorage.getItem('picnest.zoom')) || 1,          // 顶栏缩放滑条（持久化）
     sortMode: localStorage.getItem('picnest.sortMode') || 'name',    // name|added|mtime|size|dims|rating|random
     sortAsc: localStorage.getItem('picnest.sortAsc') !== '0',
     randomNonce: 0,       // 随机排序的种子换代
@@ -580,6 +580,15 @@ export const useLibrary = defineStore('library', {
       localStorage.setItem('picnest.sortAsc', this.sortAsc ? '1' : '0')
       /* 文件夹视图排序实时生效（SQL 排序需重查）；全部视图固定最新置顶，不受排序影响 */
       if (this.currentDirRel) this.loadImages()
+    },
+    setLayout(key) {
+      this.layout = key
+      localStorage.setItem('picnest.layout', key)
+    },
+    setZoom(z) {
+      this.zoom = z
+      clearTimeout(this._zoomSaveT)
+      this._zoomSaveT = setTimeout(() => localStorage.setItem('picnest.zoom', String(this.zoom)), 300)
     },
 
     async importUrls(urls, targetRel) {
