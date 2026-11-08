@@ -38,11 +38,21 @@ function onKeydown(e) {
     lib.paste()
   }
 }
+function clearDropUi() { lib.clearDropHint() }
+function onWindowDragLeave(e) { if (!e.relatedTarget) lib.clearDropHint() }
 onMounted(() => {
   lib.init()
   window.addEventListener('keydown', onKeydown)
+  window.addEventListener('drop', clearDropUi, true)
+  window.addEventListener('dragend', clearDropUi, true)
+  window.addEventListener('dragleave', onWindowDragLeave, true)
 })
-onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onKeydown)
+  window.removeEventListener('drop', clearDropUi, true)
+  window.removeEventListener('dragend', clearDropUi, true)
+  window.removeEventListener('dragleave', onWindowDragLeave, true)
+})
 
 function isExternal(e) {
   const types = [...(e.dataTransfer?.types || [])]

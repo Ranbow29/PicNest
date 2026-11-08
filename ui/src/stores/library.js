@@ -1087,8 +1087,13 @@ export const useLibrary = defineStore('library', {
     },
     setDropHint(zone, label, x, y, key) {
       this.dropHint = { active: true, zone, label: label || '', x: x || 0, y: y || 0, key: key ?? null }
+      /* 心跳超时：拖拽过程中持续续命，松开/离开窗口后 450ms 自动消失 */
+      clearTimeout(this._dropHintTimer)
+      this._dropHintTimer = setTimeout(() => this.clearDropHint(), 450)
     },
     clearDropHint() {
+      clearTimeout(this._dropHintTimer)
+      this._dropHintTimer = null
       if (this.dropHint.active) this.dropHint = { active: false, zone: '', label: '', x: 0, y: 0, key: null }
     },
     absOfTarget(t) {
