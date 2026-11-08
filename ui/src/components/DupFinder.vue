@@ -1,6 +1,6 @@
 <script setup>
-// 重复文件查找结果：按内容 MD5 分组（仅当前资料库）；默认不删，勾选后才可移入回收站
-import { computed } from 'vue'
+// 重复文件查找结果：精确 MD5 分组 / AI 相似分组（仅当前资料库）；默认不删，勾选后才可移入回收站
+import { computed, ref } from 'vue'
 import { useLibrary } from '../stores/library'
 import { fileUrl } from '../api'
 import { isTextPath, isVideoPath } from '../lib/fileKinds'
@@ -8,6 +8,11 @@ import { isTextPath, isVideoPath } from '../lib/fileKinds'
 const lib = useLibrary()
 const f = computed(() => lib.dupFinder)
 const selectedSet = computed(() => new Set(f.value.selected))
+const groups = computed(() => (f.value.mode === 'ai' ? f.value.ai.groups : f.value.groups))
+const stats = computed(() => (f.value.mode === 'ai' ? f.value.ai.stats : f.value.stats))
+const activeError = computed(() => (f.value.mode === 'ai' ? f.value.ai.error : f.value.error))
+const activeLoading = computed(() => (f.value.mode === 'ai' ? f.value.ai.loading : f.value.loading))
+const aiKey = ref('')
 
 const scopeLabel = computed(() => {
   const root = lib.roots.find((r) => r.id === f.value.rootId)
@@ -18,11 +23,33 @@ const pct = computed(() => {
   const p = f.value.progress
   return p.total ? Math.min(100, Math.round((p.done / p.total) * 100)) : 0
 })
+const aiPct = computed(() => {
+  const p = f.value.ai.progress
+  return p.total ? Math.min(100, Math.round((p.done / p.total) * 100)) : 0
+})
+const activePct = computed(() => (f.value.mode === 'ai' ? aiPct.value : pct.value))
+const activeLoadingText = computed(() => {
+  if (f.value.mode !== 'ai') {
+    return f.value.progress.total ? `正在按内容比对 ${f.value.progress.done}/${f.value.progress.total}` : '正在按文件大小预筛…'
+  }
+  const p = f.value.ai.progress
+  if (p.phase === 'hash') return p.total ? `分析缩略图 ${p.done}/${p.total}` : '准备缩略图…'
+  if (p.phase === 'ai') return p.total ? `AI 比对 ${p.done}/${p.total} 对（候选 ${p.candidates || p.total} 对）` : 'AI 比对…'
+  return '准备中…'
+})
 const selectedBytes = computed(() => {
   const sizes = new Map()
-  for (const g of f.value.groups) for (const x of g.files) sizes.set(x.path, x.size)
+  for (const g of groups.value) for (const x of g.files) sizes.set(x.path, x.size)
   return f.value.selected.reduce((s, p) => s + (sizes.get(p) || 0), 0)
 })
+async function saveAi() {
+  const r = await lib.saveAiConfig({
+    baseUrl: f.value.ai.baseUrl,
+    model: f.value.ai.model,
+    apiKey: aiKey.value,
+  })
+  if (r?.ok) aiKey.value = ''
+}
 
 const fmtSize = (n) => {
   if (!n) return '0 B'
@@ -54,32 +81,56 @@ function thumbOf(file) {
             查找重复
             <span class="df-scope">{{ scopeLabel }}</span>
           </div>
-          <div v-if="f.stats && !f.loading" class="df-stats">
-            <b>{{ f.stats.groups }}</b> 组 · <b>{{ f.stats.files }}</b> 个文件 · 可省 <b>{{ fmtSize(f.stats.wasted) }}</b>
+          <div class="df-modes">
+            <button :class="{ on: f.mode === 'exact' }" @click="lib.setDupMode('exact')">精确查重</button>
+            <button :class="{ on: f.mode === 'ai' }" @click="lib.setDupMode('ai')">AI 查重</button>
+          </div>
+          <div v-if="stats && !activeLoading" class="df-stats">
+            <b>{{ stats.groups }}</b> 组 · <b>{{ stats.files }}</b> 个文件 · 可省 <b>{{ fmtSize(stats.wasted) }}</b>
+            <span v-if="f.mode === 'ai' && stats.capped" class="df-cap">（候选 {{ stats.candidates }} 对，已查 {{ stats.checked }}）</span>
           </div>
           <button class="df-x" title="关闭（Esc）" @click="lib.closeDupFinder()">✕</button>
         </header>
 
-        <div v-if="f.loading" class="df-loading">
-          <div class="df-spin" />
-          <div class="df-progress"><i :style="{ width: pct + '%' }" /></div>
-          <div class="df-ptext">
-            {{ f.progress.total ? `正在按内容比对 ${f.progress.done}/${f.progress.total}` : '正在按文件大小预筛…' }}
+        <div v-if="f.mode === 'ai'" class="ai-box">
+          <div class="ai-grid">
+            <label>API 地址<input v-model="f.ai.baseUrl" placeholder="https://api.openai.com/v1" spellcheck="false" /></label>
+            <label>模型<input v-model="f.ai.model" placeholder="gpt-4o-mini" spellcheck="false" /></label>
+            <label>API Key<input v-model="aiKey" type="password" autocomplete="off" :placeholder="f.ai.hasKey ? '已保存（留空不改）' : 'sk-…'" /></label>
+            <label class="ai-num">最多比对<input v-model.number="f.ai.maxPairs" type="number" min="1" max="200" /> 对</label>
           </div>
+          <label class="ai-allow">
+            <input v-model="f.ai.allowed" type="checkbox" />
+            <span>允许把候选缩略图发送到该 API（会产生调用费用；不上传原图）</span>
+          </label>
+          <div class="ai-actions">
+            <button class="df-btn" :disabled="f.ai.testing" @click="saveAi">{{ f.ai.testing ? '测试中…' : '保存并测试' }}</button>
+            <button class="df-btn primary" :disabled="f.ai.loading || f.ai.testing || !f.ai.hasKey || !f.ai.allowed" @click="lib.aiFindDuplicates()">开始 AI 查重</button>
+            <span v-if="f.ai.note" class="ai-note" :class="{ err: f.ai.noteErr }">{{ f.ai.note }}</span>
+          </div>
+          <div class="ai-hint">OpenAI 兼容 /chat/completions，模型需支持图片输入。先本地 dHash 缩圈（同图不同尺寸距离很小），再把候选缩略图交给 AI 确认；最多检查 {{ f.ai.maxPairs }} 对。</div>
         </div>
 
-        <div v-else-if="f.error" class="df-empty">{{ f.error }}</div>
-        <div v-else-if="!f.groups.length" class="df-empty">
-          没有发现重复文件
-          <span v-if="f.stats">（扫描 {{ f.stats.scopes }} 个文件）</span>
+        <div v-if="activeLoading" class="df-loading">
+          <div class="df-spin" />
+          <div class="df-progress"><i :style="{ width: activePct + '%' }" /></div>
+          <div class="df-ptext">{{ activeLoadingText }}</div>
+          <button v-if="f.mode === 'ai'" class="df-btn" :disabled="f.ai.canceling" @click="lib.aiCancel()">{{ f.ai.canceling ? '停止中…' : '停止' }}</button>
+        </div>
+
+        <div v-else-if="activeError" class="df-empty">{{ activeError }}</div>
+        <div v-else-if="!groups.length" class="df-empty">
+          {{ f.mode === 'ai' ? '没有发现相似图片' : '没有发现重复文件' }}
+          <span v-if="stats">（扫描 {{ stats.scopes }} 个文件）</span>
         </div>
 
         <div v-else class="df-list">
-          <section v-for="(g, gi) in f.groups" :key="g.hash" class="df-group">
+          <section v-for="(g, gi) in groups" :key="g.hash" class="df-group">
             <div class="df-ghead">
-              <span class="df-gtitle">{{ g.count }} 个重复 <em>· 可省 {{ fmtSize(g.wasted) }}</em></span>
+              <span class="df-gtitle"><em v-if="g.ai" class="df-ai-badge">AI</em>{{ g.count }} 个{{ g.ai ? '相似' : '重复' }} <em>· 可省 {{ fmtSize(g.wasted) }}</em></span>
               <div class="df-quick">
-                <button @click="lib.dupKeep(gi, 'first')">保留第一张</button>
+                <button v-if="f.mode === 'ai'" @click="lib.dupKeep(gi, 'largest')">保留最大</button>
+                <button v-else @click="lib.dupKeep(gi, 'first')">保留第一张</button>
                 <button @click="lib.dupKeep(gi, 'newest')">保留最新</button>
                 <button @click="lib.dupKeep(gi, 'oldest')">保留最旧</button>
               </div>
@@ -137,6 +188,45 @@ function thumbOf(file) {
 .df-scope { margin-left: 10px; font-size: 12px; font-weight: 500; color: var(--text-2); letter-spacing: 0; }
 .df-stats { margin-left: auto; font-size: 12px; color: var(--text-2); }
 .df-stats b { color: var(--text); font-weight: 600; }
+.df-cap { margin-left: 6px; font-size: 10.5px; color: var(--text-2); }
+.df-modes {
+  display: flex; gap: 2px; padding: 3px;
+  border: 1px solid var(--border); border-radius: 9px; background: var(--bg);
+}
+.df-modes button {
+  border: none; background: transparent; color: var(--text-2);
+  font-size: 11.5px; padding: 4px 10px; border-radius: 7px; cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.df-modes button:hover { color: var(--text); }
+.df-modes button.on { background: var(--panel-strong); color: var(--text); font-weight: 600; box-shadow: var(--shadow); }
+.df-ai-badge {
+  display: inline-block; margin-right: 6px; padding: 1px 5px; border-radius: 5px;
+  background: var(--accent-weak); color: var(--accent); font-size: 10px;
+  font-style: normal; font-weight: 700; vertical-align: 1px;
+}
+.ai-box {
+  flex: none; margin: 10px 16px 0; padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: 12px; background: var(--bg);
+}
+.ai-grid { display: grid; grid-template-columns: 1.2fr 1fr 1.2fr 110px; gap: 8px; }
+.ai-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 10.5px; color: var(--text-2); }
+.ai-grid input {
+  height: 28px; border: 1px solid var(--border); border-radius: 7px;
+  background: var(--panel-strong); color: var(--text); font-size: 11.5px;
+  padding: 0 8px; outline: none; min-width: 0;
+}
+.ai-grid input:focus { border-color: var(--accent); }
+.ai-num { flex-direction: row !important; align-items: center; }
+.ai-num input { width: 56px; margin-left: 4px; }
+.ai-allow { display: flex; align-items: flex-start; gap: 6px; margin-top: 8px; font-size: 11px; color: var(--text-2); line-height: 1.5; cursor: pointer; }
+.ai-allow input { accent-color: var(--accent); margin-top: 1px; }
+.ai-actions { display: flex; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+.ai-note { font-size: 11px; color: #4f7d5e; }
+.ai-note.err { color: #b4463b; }
+.ai-hint { margin-top: 7px; font-size: 10.5px; line-height: 1.5; color: var(--text-2); opacity: 0.85; }
+.df-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+.df-btn.primary:disabled { opacity: 0.45; }
 .df-x {
   margin-left: 10px; width: 30px; height: 30px; border: none; border-radius: 9px;
   background: transparent; color: var(--text-2); font-size: 13px; cursor: pointer;

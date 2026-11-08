@@ -82,6 +82,10 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 - 结果：组按可省空间排序；每文件显示缩略图/文件名/所在文件夹/大小/时间；快捷「保留第一张 / 最新 / 最旧」（同内容尺寸相同，“最大”无意义），可手动勾选；默认不勾。
 - 删除只走图巢回收站；确认卡列前 5 个文件名；删后组内 <2 自动消失、统计实时更新。
 - 实测全库 6,724 文件 258ms（27 个同尺寸候选）→ 9 组 / 19 文件 / 可省 13.1MB。
+- **AI 二次查重**（DupFinder 顶部「AI 查重」页签）：配置 OpenAI 兼容 `/chat/completions` 视觉 API（地址/模型/Key；Key 用 `electron.safeStorage` 加密存 `dataDir/picnest-ai.json`，**不回传渲染层**）；「保存并测试」用两张 64×64 色块验证视觉连通。
+- **流程**：范围同精确查重 → 缩略图 dHash（9×8 灰度 64-bit）→ 汉明距离 ≤10 生成候选对（按距离排序，最多 `maxPairs` 默认 40、可调 1–200）→ 候选对的 384px 白底 JPEG 缩略图发 API 问 `{same}` → 并查集成组。
+- **结果**：组带 AI 徽标；可省=sum−max（保留最大有意义，快捷「保留最大/最新/最旧」）；进度 `picnest-ai-dup-progress`（hash / ai 两阶段），可停止；只处理图片（跳过视频/文本），**只上传候选缩略图、不上传原图**；必须勾选允许上传才能开始；删除仍只走图巢回收站。
+- 实测（本地 mock 视觉 API）：3 张测试图（128/64 同图 + 噪声图）→ 1 候选对、1 次 AI 调用、正确成组；配置返回 encrypted:true。
 
 ### 简报 / 黑白 / 无标题栏大图
 - **简报模式**：全屏黑底（页面级 `requestFullscreen`），单击下一张、←/A 上一张、→/D 下一张、Esc 退出；视频静音循环、文本占位；计数/提示/右上关闭。
@@ -153,6 +157,7 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 - 标签系统（筛选栏已预留标签位）。
 - 尺寸/评分排序 SQL 补全（目前前端排序）；滑尺 hover 预览；既有同名副本「合并到同名文件夹…」。
 - M6 采集后续：Eagle 兼容层（41595/41593，Eagle 关闭时可选开启）、采集 token 鉴权、整页滚动截图/视频/标签；M7 Eagle 库迁移（先只读预演）。
+- AI 查重后续：本地 CLIP/embedding 离线方案、按 API 价格预估费用/批量调用、定时后台扫描；当前每个候选对 1 次视觉调用（上限可调），且只支持图片。
 - 目录删除确认细化（是否「删除并清空回收站」）；大图无视频帧步进（Eagle Ctrl+←/→ 未做）。
 - 查重无取消 IPC（关窗后主进程扫完丢弃）；同尺寸候选极多时首扫可能慢。
 - 文件夹整包 MD5 查重仍在主进程同步执行；超大文件夹首次放入会卡。
@@ -172,7 +177,7 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 | `ui/src/components/Lightbox.vue` | 大图：图片/视频/文本三态、透明顶栏/dock、A/D、右键菜单、旋转翻转保存 |
 | `ui/src/components/BriefMode.vue` | 简报模式：全屏、单击/右键、A/D、滚轮缩放/拖拽平移、灰度 |
 | `ui/src/components/ContextMenu.vue` · `DirContextMenu.vue` | 图片菜单（封面开关/查重/简报/灰度/未分类）/文件夹菜单 |
-| `ui/src/components/DupFinder.vue` | 查重结果分组面板（快捷保留、勾选、软删） |
+| `ui/src/components/DupFinder.vue` | 查重结果分组面板（精确/AI 页签、AI 设置、快捷保留、勾选、软删） |
 | `ui/src/components/ConfirmDialog.vue` · `NamePromptDialog.vue` · `DuplicateDialog.vue` · `ImportResultCard.vue` · `TrashMenu.vue` | 确认/命名/录入三选一/结果卡/回收站菜单 |
 | `ui/src/components/FilterBar.vue` · `ColorPicker.vue` | 筛选 · HSV 取色 |
 | `ui/vite.config.js` | dev 绑定 127.0.0.1 + watch polling；build 输出到 app dist |

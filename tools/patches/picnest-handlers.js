@@ -1649,6 +1649,277 @@ electron.ipcMain.handle("picnest-find-duplicates", async (event, folderId, rel) 
     return { ok: false, error: String((e && e.message) || e) };
   }
 });
+/* ==== AI 查重（OpenAI 兼容视觉 API；缩略图 dHash 缩圈 → AI 逐对确认） ==== */
+const PICNEST_AI_CFG_PATH = path.join(dataDir, "picnest-ai.json");
+const PICNEST_AI_IMG_EXT = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".avif", ".tif", ".tiff", ".svg"]);
+let picnestAiCancel = false;
+
+function picnestAiReadConfig() {
+  try {
+    const c = JSON.parse(fs.readFileSync(PICNEST_AI_CFG_PATH, "utf-8"));
+    let apiKey = "";
+    if (c.keyEnc) {
+      try { apiKey = electron.safeStorage.decryptString(Buffer.from(c.keyEnc, "base64")); } catch (e) { apiKey = ""; }
+    } else if (c.keyPlain) apiKey = c.keyPlain;
+    return { baseUrl: c.baseUrl || "", model: c.model || "", apiKey };
+  } catch (e) { return { baseUrl: "", model: "", apiKey: "" }; }
+}
+function picnestAiEncryptKey(key) {
+  try {
+    if (electron.safeStorage?.isEncryptionAvailable?.()) {
+      return { keyEnc: electron.safeStorage.encryptString(key).toString("base64") };
+    }
+  } catch (e) {}
+  return { keyPlain: key };
+}
+function picnestAiSaveConfig(baseUrl, model, apiKey) {
+  const cleanBase = String(baseUrl || "").trim().replace(/\/+$/, "");
+  const cleanModel = String(model || "").trim();
+  if (!/^https?:\/\//i.test(cleanBase)) throw new Error("API 地址需以 http(s):// 开头");
+  if (!cleanModel) throw new Error("请填写模型名");
+  const old = picnestAiReadConfig();
+  const key = String(apiKey || "").trim() || old.apiKey;
+  const out = { baseUrl: cleanBase, model: cleanModel };
+  if (key) Object.assign(out, picnestAiEncryptKey(key));
+  fs.writeFileSync(PICNEST_AI_CFG_PATH, JSON.stringify(out, null, 2));
+  return { hasKey: !!key, encrypted: !!out.keyEnc };
+}
+
+electron.ipcMain.handle("picnest-ai-config-get", () => {
+  const c = picnestAiReadConfig();
+  let encrypted = false;
+  try { encrypted = !!JSON.parse(fs.readFileSync(PICNEST_AI_CFG_PATH, "utf-8")).keyEnc; } catch (e) {}
+  return { ok: true, baseUrl: c.baseUrl, model: c.model, hasKey: !!c.apiKey, encrypted };
+});
+electron.ipcMain.handle("picnest-ai-config-set", (_event, opts) => {
+  try {
+    const r = picnestAiSaveConfig(opts?.baseUrl, opts?.model, opts?.apiKey);
+    return { ok: true, ...r };
+  } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+});
+
+async function picnestAiCompare(cfg, dataA, dataB) {
+  const base = String(cfg.baseUrl || "").trim().replace(/\/+$/, "");
+  const endpoint = /\/chat\/completions$/i.test(base) ? base : base + "/chat/completions";
+  const body = {
+    model: cfg.model,
+    temperature: 0,
+    max_tokens: 80,
+    messages: [
+      { role: "system", content: "You are an image duplicate checker. Reply with JSON only." },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "Are these two images the same artwork or the same photo? Allow different resolution, compression, watermark, text overlay, or minor cropping. Reply exactly with JSON: {\"same\":true,\"confidence\":0.0} or {\"same\":false,\"confidence\":0.0}." },
+          { type: "image_url", image_url: { url: dataA } },
+          { type: "image_url", image_url: { url: dataB } },
+        ],
+      },
+    ],
+  };
+  const ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
+  const timer = setTimeout(() => { try { ctl?.abort(); } catch (e) {} }, 90000);
+  try {
+    let res = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      res = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer " + cfg.apiKey },
+        body: JSON.stringify(body),
+        signal: ctl?.signal,
+      });
+      if (res.status === 429 || res.status >= 500) { if (attempt === 0) { await new Promise((r) => setTimeout(r, 1200)); continue; } }
+      break;
+    }
+    if (!res.ok) {
+      let txt = "";
+      try { txt = (await res.text()).slice(0, 240); } catch (e) {}
+      throw new Error(`API HTTP ${res.status}${txt ? ": " + txt : ""}`);
+    }
+    const json = await res.json();
+    const content = json.choices?.[0]?.message?.content;
+    const text = typeof content === "string" ? content
+      : Array.isArray(content) ? content.map((x) => x?.text || "").join("") : "";
+    let obj = null;
+    const m = /\{[\s\S]*\}/.exec(text || "");
+    if (m) { try { obj = JSON.parse(m[0]); } catch (e) {} }
+    if (!obj) {
+      const t = /\bsame\b[^a-z]{0,20}(true|false)/i.exec(text || "");
+      if (!t) throw new Error("AI 返回无法解析: " + String(text || "").slice(0, 120));
+      return t[1].toLowerCase() === "true";
+    }
+    return !!obj.same;
+  } finally { clearTimeout(timer); }
+}
+electron.ipcMain.handle("picnest-ai-test", async () => {
+  try {
+    const cfg = picnestAiReadConfig();
+    if (!cfg.baseUrl || !cfg.model || !cfg.apiKey) return { ok: false, error: "请先填写并保存 API 地址、模型和 Key" };
+    const sharp = (await import("sharp")).default;
+    const mk = async (rgb) => {
+      const buf = await sharp({ create: { width: 64, height: 64, channels: 3, background: rgb } }).png().toBuffer();
+      return "data:image/png;base64," + buf.toString("base64");
+    };
+    const same = await picnestAiCompare(cfg, await mk({ r: 220, g: 60, b: 60 }), await mk({ r: 60, g: 80, b: 220 }));
+    return { ok: true, same };
+  } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+});
+
+function picnestAiPop32(x) {
+  x = x >>> 0;
+  x = x - ((x >>> 1) & 0x55555555);
+  x = (x & 0x33333333) + ((x >>> 2) & 0x33333333);
+  x = (x + (x >>> 4)) & 0x0f0f0f0f;
+  return (x * 0x01010101) >>> 24;
+}
+function picnestAiHam(a, b) {
+  return picnestAiPop32((a[0] ^ b[0]) >>> 0) + picnestAiPop32((a[1] ^ b[1]) >>> 0);
+}
+async function picnestAiDHash(file) {
+  const sharp = (await import("sharp")).default;
+  const src = file.thumbnail_path && fs.existsSync(file.thumbnail_path) ? file.thumbnail_path : file.file_path;
+  const buf = await sharp(src).rotate().resize(9, 8, { fit: "fill" }).greyscale().raw().toBuffer();
+  let a = 0, b = 0, bit = 0;
+  for (let y = 0; y < 8; y++) {
+    for (let x = 0; x < 8; x++) {
+      const left = buf[y * 9 + x], right = buf[y * 9 + x + 1];
+      if (left > right) {
+        if (bit < 32) a = (a | (1 << bit)) >>> 0;
+        else b = (b | (1 << (bit - 32))) >>> 0;
+      }
+      bit++;
+    }
+  }
+  return [a, b];
+}
+async function picnestAiThumbData(file) {
+  const sharp = (await import("sharp")).default;
+  const src = file.thumbnail_path && fs.existsSync(file.thumbnail_path) ? file.thumbnail_path : file.file_path;
+  const buf = await sharp(src).rotate().flatten({ background: "#ffffff" })
+    .resize({ width: 384, height: 384, fit: "inside", withoutEnlargement: true })
+    .jpeg({ quality: 78 }).toBuffer();
+  return "data:image/jpeg;base64," + buf.toString("base64");
+}
+electron.ipcMain.handle("picnest-ai-dup-cancel", () => { picnestAiCancel = true; return { ok: true }; });
+electron.ipcMain.handle("picnest-ai-dup-scan", async (event, folderId, rel, maxPairs) => {
+  const send = (p) => { try { if (!event.sender.isDestroyed()) event.sender.send("picnest-ai-dup-progress", p); } catch (e) {} };
+  try {
+    picnestAiCancel = false;
+    picnestMigrate();
+    const cfg = picnestAiReadConfig();
+    if (!cfg.baseUrl || !cfg.model || !cfg.apiKey) return { ok: false, error: "请先配置并保存 AI API（地址/模型/Key）" };
+    const t0 = Date.now();
+    const root = getDb().prepare("SELECT id, path FROM folders WHERE id = ?").get(folderId);
+    if (!root) return { ok: false, error: "资料库不存在" };
+    const sep = root.path.includes("\\") ? "\\" : "/";
+    const scopeRel = String(rel || "").replace(/^\/+|\/+$/g, "");
+    let rows;
+    if (scopeRel) {
+      const pat = picnestLikeEscape(root.path + sep + scopeRel.split("/").join(sep) + sep) + "%";
+      rows = getDb().prepare(
+        `SELECT id, file_path, file_name, file_size, modify_time, width, height, thumbnail_path
+         FROM images WHERE folder_id = ? AND deleted_at IS NULL AND file_path LIKE ? ESCAPE '\\'`
+      ).all(folderId, pat);
+    } else {
+      rows = getDb().prepare(
+        `SELECT id, file_path, file_name, file_size, modify_time, width, height, thumbnail_path
+         FROM images WHERE folder_id = ? AND deleted_at IS NULL`
+      ).all(folderId);
+    }
+    const images = [];
+    for (const r of rows) {
+      if (!PICNEST_AI_IMG_EXT.has(path.extname(r.file_path).toLowerCase())) continue;
+      try {
+        const st = fs.statSync(r.file_path);
+        if (st.isFile() && st.size > 0) images.push({ ...r, size: st.size, hash: null });
+      } catch (e) {}
+    }
+    send({ phase: "hash", done: 0, total: images.length });
+    let done = 0;
+    await picnestMapLimit(images, 4, async (im) => {
+      try { im.hash = await picnestAiDHash(im); } catch (e) { im.hash = null; }
+      done++;
+      if (done % 4 === 0 || done === images.length) send({ phase: "hash", done, total: images.length });
+    });
+    const valid = images.filter((im) => im.hash);
+    const threshold = 10;
+    let pairs = [];
+    for (let i = 0; i < valid.length; i++) {
+      for (let j = i + 1; j < valid.length; j++) {
+        const d = picnestAiHam(valid[i].hash, valid[j].hash);
+        if (d <= threshold) {
+          pairs.push({ i, j, d });
+          if (pairs.length > 4000) { pairs.sort((x, y) => x.d - y.d); pairs.length = 1000; }
+        }
+      }
+    }
+    pairs.sort((x, y) => x.d - y.d);
+    const cap = Math.max(1, Math.min(200, Number(maxPairs) || 40));
+    const picked = pairs.slice(0, cap);
+    send({ phase: "ai", done: 0, total: picked.length, candidates: pairs.length });
+    const dataCache = new Map();
+    const getData = async (idx) => {
+      if (dataCache.has(idx)) return dataCache.get(idx);
+      const d = await picnestAiThumbData(valid[idx]);
+      dataCache.set(idx, d);
+      return d;
+    };
+    const confirmed = [];
+    let checked = 0;
+    for (const p of picked) {
+      if (picnestAiCancel) return { ok: false, error: "已取消" };
+      let da = "", db = "";
+      try { da = await getData(p.i); db = await getData(p.j); } catch (e) { checked++; continue; }
+      const same = await picnestAiCompare(cfg, da, db);
+      checked++;
+      if (same) confirmed.push(p);
+      if (checked % 2 === 0 || checked === picked.length) {
+        send({ phase: "ai", done: checked, total: picked.length, candidates: pairs.length });
+      }
+    }
+    const parent = valid.map((_, i) => i);
+    const find = (x) => { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
+    const union = (a, b) => { a = find(a); b = find(b); if (a !== b) parent[b] = a; };
+    for (const p of confirmed) union(p.i, p.j);
+    const byRoot = new Map();
+    for (let i = 0; i < valid.length; i++) {
+      const r = find(i);
+      if (!byRoot.has(r)) byRoot.set(r, []);
+      byRoot.get(r).push(i);
+    }
+    const relOf = (fp) => path.relative(root.path, path.dirname(fp)).replace(/[\\/]+/g, "/");
+    const groups = [];
+    for (const [r, idx] of byRoot.entries()) {
+      if (idx.length < 2) continue;
+      const filesOut = idx.map((i) => {
+        const f = valid[i];
+        return { path: f.file_path, name: f.file_name, size: f.size, mtime: f.modify_time, width: f.width, height: f.height, thumb: f.thumbnail_path || "", rel: relOf(f.file_path) };
+      });
+      filesOut.sort((a, b) => b.size - a.size || String(a.rel).localeCompare(String(b.rel), "zh") || String(a.name).localeCompare(String(b.name), "zh"));
+      const sum = filesOut.reduce((s, f) => s + f.size, 0);
+      const maxSize = filesOut[0]?.size || 0;
+      groups.push({ hash: "ai-" + r, ai: true, size: maxSize, count: filesOut.length, wasted: Math.max(0, sum - maxSize), files: filesOut });
+    }
+    groups.sort((a, b) => b.wasted - a.wasted || b.count - a.count);
+    const stats = {
+      scopes: images.length,
+      hashable: valid.length,
+      candidates: pairs.length,
+      checked,
+      caps: cap,
+      capped: pairs.length > picked.length,
+      threshold,
+      groups: groups.length,
+      files: groups.reduce((s, g) => s + g.count, 0),
+      wasted: groups.reduce((s, g) => s + g.wasted, 0),
+      ms: Date.now() - t0,
+      ai: true,
+    };
+    return { ok: true, rootId: folderId, rel: scopeRel, groups, stats };
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
+  }
+});
 /* ==== M6 采集：本地保存服务（自研扩展用，127.0.0.1:41600） ====
    协议：GET /api/v1/ping | /api/v1/context | /api/v1/folders?rootId=
         POST /api/v1/save {kind:'image'|'page', src|dataUrl, title, url, annotation, star, rootId, rel}

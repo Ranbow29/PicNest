@@ -29,6 +29,17 @@ export function extractDropUrls(dt) {
   return [...urls]
 }
 
+function defaultAiDupState() {
+  return {
+    configLoaded: false, baseUrl: '', model: '', hasKey: false, encrypted: true,
+    allowed: false, maxPairs: 40,
+    loading: false, testing: false, canceling: false,
+    note: '', noteErr: false,
+    progress: { phase: '', done: 0, total: 0, candidates: 0 },
+    groups: [], stats: null, error: '',
+  }
+}
+
 export const useLibrary = defineStore('library', {
   state: () => ({
     roots: [],            // [{id, path, display_name}]
@@ -69,7 +80,7 @@ export const useLibrary = defineStore('library', {
     contextMenu: { open: false, x: 0, y: 0, image: null },
     renaming: false,
     dupDialog: { open: false, items: [], targetRel: undefined, mode: 'files', count: 0, resolve: null },
-    dupFinder: { open: false, rootId: null, rel: '', loading: false, progress: { done: 0, total: 0 }, groups: [], stats: null, error: '', selected: [] },
+    dupFinder: { open: false, rootId: null, rel: '', mode: 'exact', loading: false, progress: { done: 0, total: 0 }, groups: [], stats: null, error: '', selected: [], ai: defaultAiDupState() },
     confirmDialog: { open: false, title: '', message: '', details: [], confirmText: '确定', danger: false, resolve: null },
     importResult: { open: false, nonce: 0, summary: '', details: [], tone: 'ok' }, // 录入汇总结果卡
     clipboard: { kind: '', paths: [], count: 0, root: false }, // 应用内复制剪贴板（kind: dirs | files）
@@ -179,6 +190,10 @@ export const useLibrary = defineStore('library', {
         // 查重扫描进度（主进程逐文件 MD5）
         window.picrand?.onPicnestDupProgress?.((d) => {
           if (this.dupFinder.open) this.dupFinder.progress = { done: d?.done || 0, total: d?.total || 0 }
+        })
+        window.picrand?.onPicnestAiDupProgress?.((d) => {
+          if (!this.dupFinder.open || !this.dupFinder.ai.loading) return
+          this.dupFinder.ai.progress = { ...this.dupFinder.ai.progress, ...(d || {}) }
         })
         // 色板后台构建/回填（颜色筛选与详情色板共用；此前无调用点=颜色筛选恒空，已修）
         this.ensurePalettes().catch(() => {})
@@ -938,12 +953,17 @@ export const useLibrary = defineStore('library', {
       this.confirmDialog = { open: false, title: '', message: '', details: [], confirmText: '确定', danger: false, resolve: null }
     },
 
-    /* ---- 重复文件查找（仅当前资料库；右键入口） ---- */
+    /* ---- 重复文件查找（精确 MD5 / AI 相似；仅当前资料库；右键入口） ---- */
     openDupFinder(rootId, rel) {
       const rid = rootId ?? this.activeRootId
       this.closeDirMenu()
-      this.dupFinder = { open: true, rootId: rid, rel: rel || '', loading: true, progress: { done: 0, total: 0 }, groups: [], stats: null, error: '', selected: [] }
+      this.dupFinder = {
+        open: true, rootId: rid, rel: rel || '', mode: 'exact', loading: true,
+        progress: { done: 0, total: 0 }, groups: [], stats: null, error: '', selected: [],
+        ai: defaultAiDupState(),
+      }
       this.runDupScan()
+      this.loadAiConfig()
     },
     async runDupScan() {
       const f = this.dupFinder
@@ -959,22 +979,120 @@ export const useLibrary = defineStore('library', {
         if (this.dupFinder.open) { this.dupFinder.loading = false; this.dupFinder.error = String(e?.message || e) }
       }
     },
+    async loadAiConfig() {
+      try {
+        const r = await window.picrand.picnestAiConfigGet()
+        if (!this.dupFinder.open) return
+        const a = this.dupFinder.ai
+        a.configLoaded = true
+        if (r?.ok) {
+          if (!a.baseUrl) a.baseUrl = r.baseUrl || 'https://api.openai.com/v1'
+          if (!a.model) a.model = r.model || 'gpt-4o-mini'
+          a.hasKey = !!r.hasKey
+          a.encrypted = r.encrypted !== false
+        }
+      } catch (e) {
+        if (this.dupFinder.open) this.dupFinder.ai.configLoaded = true
+      }
+    },
+    setDupMode(mode) {
+      const m = mode === 'ai' ? 'ai' : 'exact'
+      if (this.dupFinder.mode === m) return
+      this.dupFinder.mode = m
+      this.dupFinder.selected = []
+      if (m === 'ai' && !this.dupFinder.ai.configLoaded) this.loadAiConfig()
+    },
+    async saveAiConfig(opts = {}) {
+      const ai = this.dupFinder.ai
+      if (ai.testing) return { ok: false }
+      ai.testing = true
+      ai.noteErr = false
+      ai.note = '保存中…'
+      try {
+        const r = await window.picrand.picnestAiConfigSet({
+          baseUrl: opts.baseUrl, model: opts.model, apiKey: opts.apiKey,
+        })
+        if (!r?.ok) { ai.note = r?.error || '保存失败'; ai.noteErr = true; return r }
+        ai.hasKey = !!r.hasKey
+        ai.encrypted = r.encrypted !== false
+        ai.baseUrl = String(opts.baseUrl || ai.baseUrl).trim()
+        ai.model = String(opts.model || ai.model).trim()
+        ai.note = '已保存，正在测试连接…'
+        const t = await window.picrand.picnestAiTest()
+        if (t?.ok) {
+          ai.note = '连接成功：视觉模型可用'
+          ai.noteErr = false
+        } else {
+          ai.note = '保存成功，但测试失败：' + (t?.error || '未知错误')
+          ai.noteErr = true
+        }
+        return r
+      } catch (e) {
+        ai.note = String(e?.message || e)
+        ai.noteErr = true
+        return { ok: false, error: ai.note }
+      } finally { ai.testing = false }
+    },
+    async aiFindDuplicates() {
+      const f = this.dupFinder
+      const ai = f.ai
+      if (ai.loading || ai.testing) return
+      if (!ai.hasKey) { ai.error = '请先在 AI 设置里保存 API Key'; return }
+      if (!ai.allowed) { ai.error = '请先勾选「允许上传候选缩略图」'; return }
+      ai.loading = true
+      ai.canceling = false
+      ai.error = ''
+      ai.note = ''
+      ai.groups = []
+      ai.stats = null
+      ai.progress = { phase: '', done: 0, total: 0, candidates: 0 }
+      f.selected = []
+      const rid = f.rootId, rel = f.rel
+      try {
+        const r = await window.picrand.picnestAiDupScan(rid, rel, ai.maxPairs)
+        if (!this.dupFinder.open || this.dupFinder.rootId !== rid || this.dupFinder.rel !== rel) return
+        if (!r?.ok) {
+          if (r?.error !== '已取消') ai.error = r?.error || 'AI 查重失败'
+          return
+        }
+        ai.groups = r.groups || []
+        ai.stats = r.stats || null
+      } catch (e) {
+        if (this.dupFinder.open) ai.error = String(e?.message || e)
+      } finally {
+        ai.loading = false
+        ai.canceling = false
+      }
+    },
+    async aiCancel() {
+      const ai = this.dupFinder.ai
+      if (!ai.loading) return
+      ai.canceling = true
+      try { await window.picrand.picnestAiDupCancel() } catch { /* 静默 */ }
+    },
     closeDupFinder() {
-      this.dupFinder = { open: false, rootId: null, rel: '', loading: false, progress: { done: 0, total: 0 }, groups: [], stats: null, error: '', selected: [] }
+      if (this.dupFinder.ai?.loading) this.aiCancel()
+      this.dupFinder = {
+        open: false, rootId: null, rel: '', mode: 'exact', loading: false,
+        progress: { done: 0, total: 0 }, groups: [], stats: null, error: '', selected: [],
+        ai: defaultAiDupState(),
+      }
     },
     toggleDupSelected(path) {
       const i = this.dupFinder.selected.indexOf(path)
       if (i >= 0) this.dupFinder.selected.splice(i, 1)
       else this.dupFinder.selected.push(path)
     },
-    /* 快捷保留：first | newest | oldest（同组尺寸相同，"最大"没有区分度） */
+    /* 快捷保留：first | newest | oldest | largest（AI 组尺寸不同，"最大"有意义） */
     dupKeep(gi, mode) {
-      const g = this.dupFinder.groups[gi]
+      const groups = this.dupFinder.mode === 'ai' ? this.dupFinder.ai.groups : this.dupFinder.groups
+      const g = groups[gi]
       if (!g?.files?.length) return
       const files = g.files
       let keep = files[0]
       if (mode === 'newest') keep = files.reduce((a, b) => ((b.mtime || 0) > (a.mtime || 0) ? b : a), files[0])
       else if (mode === 'oldest') keep = files.reduce((a, b) => ((b.mtime || 0) < (a.mtime || 0) ? b : a), files[0])
+      else if (mode === 'largest') keep = files.reduce((a, b) => ((b.size || 0) > (a.size || 0) ? b : a), files[0])
       const inGroup = new Set(files.map((f) => f.path))
       this.dupFinder.selected = this.dupFinder.selected.filter((p) => !inGroup.has(p))
         .concat(files.filter((f) => f.path !== keep.path).map((f) => f.path))
@@ -995,18 +1113,35 @@ export const useLibrary = defineStore('library', {
       const r = await this.trashImages(paths)
       if (!r?.moved) return
       const gone = new Set(paths)
-      const groups = this.dupFinder.groups
+      const isAi = this.dupFinder.mode === 'ai'
+      const srcGroups = isAi ? this.dupFinder.ai.groups : this.dupFinder.groups
+      const groups = srcGroups
         .map((g) => ({ ...g, files: g.files.filter((f) => !gone.has(f.path)) }))
         .filter((g) => g.files.length > 1)
-        .map((g) => ({ ...g, count: g.files.length, wasted: g.size * (g.files.length - 1) }))
+        .map((g) => {
+          const files = g.files
+          const wasted = g.ai
+            ? Math.max(0, files.reduce((s, f) => s + (f.size || 0), 0) - Math.max(0, ...files.map((f) => f.size || 0)))
+            : (g.size || 0) * (files.length - 1)
+          return { ...g, count: files.length, wasted }
+        })
         .sort((a, b) => b.wasted - a.wasted || b.count - a.count)
-      this.dupFinder.groups = groups
+      if (isAi) {
+        this.dupFinder.ai.groups = groups
+        const stats = { ...(this.dupFinder.ai.stats || {}) }
+        stats.groups = groups.length
+        stats.files = groups.reduce((s, g) => s + g.count, 0)
+        stats.wasted = groups.reduce((s, g) => s + g.wasted, 0)
+        this.dupFinder.ai.stats = stats
+      } else {
+        this.dupFinder.groups = groups
+        const stats = { ...(this.dupFinder.stats || {}) }
+        stats.groups = groups.length
+        stats.files = groups.reduce((s, g) => s + g.count, 0)
+        stats.wasted = groups.reduce((s, g) => s + g.wasted, 0)
+        this.dupFinder.stats = stats
+      }
       this.dupFinder.selected = []
-      const stats = { ...(this.dupFinder.stats || {}) }
-      stats.groups = groups.length
-      stats.files = groups.reduce((s, g) => s + g.count, 0)
-      stats.wasted = groups.reduce((s, g) => s + g.wasted, 0)
-      this.dupFinder.stats = stats
     },
 
     async removeFromLibrary(path) {

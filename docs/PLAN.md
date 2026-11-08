@@ -336,3 +336,11 @@ PicNest/
     同名 `(n)`）→ 新夹追加列表并高亮，点击即保存；主进程发 `sync-db dirs-changed`，store 分支 `refreshTree()`。子夹下新建暂不做。
     **防盗链/覆盖层**：服务端下载外部图片带页面 Referer + 常规 Edge/Chrome UA（Pixiv `i.pximg.net` 必需）；
     按住目标先用事件路径找 IMG，失败再 `elementsFromPoint` 按坐标找底层可见 `<img>`（Pinterest 覆盖层实测）。
+51. **AI 查重（2026-11-09，Feb 指定）**：DupFinder 顶部「精确查重 / AI 查重」页签；AI 分支用 OpenAI 兼容视觉 API。
+    **配置**：baseUrl/model/key；key 用 `electron.safeStorage` 加密写 `dataDir/picnest-ai.json`，渲染层只拿 hasKey；
+    保存后用两张 64×64 色块请求一次 chat/completions 验证视觉连通（密钥不回传渲染层）。
+    **候选**：范围同精确查重；缩略图 → sharp 9×8 灰度 dHash（64-bit，两段 32-bit popcount）→ 汉明距离 ≤10 生成候选对，
+    按距离排序取 maxPairs（默认 40，可调 1–200）；只处理图片后缀，跳过文本/视频。
+    **AI**：候选对缩略图 384px 白底 JPEG → `/chat/completions`（system 要求只回 JSON `{same,confidence}`）→ 解析；
+    429/5xx 重试一次；并查集成组；只上传候选缩略图，必须勾选允许上传；进度事件 `picnest-ai-dup-progress`（hash/ai），支持取消。
+    **结果**：AI 徽标；wasted = sum − max（保留最大有意义），快捷保留最大/最新/最旧；删除仍走图巢回收站，选中/批量软删共用精确分支。
