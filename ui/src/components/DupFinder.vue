@@ -87,7 +87,7 @@ function thumbOf(file) {
           </div>
           <div v-if="stats && !activeLoading" class="df-stats">
             <b>{{ stats.groups }}</b> 组 · <b>{{ stats.files }}</b> 个文件 · 可省 <b>{{ fmtSize(stats.wasted) }}</b>
-            <span v-if="f.mode === 'ai'" class="df-cap">（dHash {{ stats.dhashPairs ?? stats.candidates }} 对 → 色块筛后 {{ stats.candidates }} 对，已查 {{ stats.checked }}）</span>
+            <span v-if="f.mode === 'ai'" class="df-cap">（dHash {{ stats.dhashPairs ?? stats.candidates }} 对 → 本地预筛后 {{ stats.candidates }} 对，已查 {{ stats.checked }}）</span>
           </div>
           <button class="df-x" title="关闭（Esc）" @click="lib.closeDupFinder()">✕</button>
         </header>
@@ -117,7 +117,7 @@ function thumbOf(file) {
             <button class="df-btn primary" :disabled="f.ai.loading || f.ai.testing || !f.ai.hasKey || !f.ai.allowed" @click="lib.aiFindDuplicates()">开始 AI 查重</button>
             <span v-if="f.ai.note" class="ai-note" :class="{ err: f.ai.noteErr }">{{ f.ai.note }}</span>
           </div>
-          <div class="ai-hint">OpenAI 兼容 /chat/completions + /models，模型需支持图片输入。先本地 dHash 缩圈，再用 32×32 色块签名过滤（dHash≤4 的强结构对直接保留），最后把候选缩略图交给 AI 确认；最多检查 {{ f.ai.maxPairs }} 对。</div>
+          <div class="ai-hint">OpenAI 兼容 /chat/completions + /models，模型需支持图片输入。先本地 dHash 缩圈，再用 32×32 色块 + pHash 预筛（dHash≤4 的强结构对直接保留），最后把候选缩略图交给 AI 确认；最多检查 {{ f.ai.maxPairs }} 对。</div>
         </div>
 
         <div v-if="activeLoading" class="df-loading">

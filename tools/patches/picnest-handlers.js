@@ -1890,6 +1890,39 @@ function picnestAiColorDiff(a, b) {
   }
   return diff;
 }
+// 64-bit pHash：32×32 灰度做 DCT，取左上 8×8 低频（去 DC）中位数二值化。
+// 对缩放/JPEG 比重采样稳定，又能比 9×8 dHash 更好地分辨“同版式不同文字”。
+const PICNEST_AI_COS = Array.from({ length: 32 }, (_, u) =>
+  Array.from({ length: 32 }, (_, x) => Math.cos(((2 * x + 1) * u * Math.PI) / 64)));
+function picnestAiPHash(rgb) {
+  const g = new Float64Array(1024);
+  for (let i = 0; i < 1024; i++) g[i] = 0.299 * rgb[i * 3] + 0.587 * rgb[i * 3 + 1] + 0.114 * rgb[i * 3 + 2];
+  const vals = [];
+  for (let v = 0; v < 8; v++) {
+    for (let u = 0; u < 8; u++) {
+      if (!u && !v) continue;
+      let s = 0;
+      for (let y = 0; y < 32; y++) {
+        const row = y * 32;
+        let rowSum = 0;
+        for (let x = 0; x < 32; x++) rowSum += g[row + x] * PICNEST_AI_COS[u][x];
+        s += rowSum * PICNEST_AI_COS[v][y];
+      }
+      vals.push(s);
+    }
+  }
+  const sorted = [...vals].sort((a, b) => a - b);
+  const med = sorted[Math.floor(sorted.length / 2)];
+  let a = 0, b = 0, bit = 0;
+  for (const val of vals) {
+    if (val > med) {
+      if (bit < 32) a = (a | (1 << bit)) >>> 0;
+      else b = (b | (1 << (bit - 32))) >>> 0;
+    }
+    bit++;
+  }
+  return [a, b];
+}
 async function picnestAiThumbData(file) {
   const sharp = (await import("sharp")).default;
   const src = file.thumbnail_path && fs.existsSync(file.thumbnail_path) ? file.thumbnail_path : file.file_path;
@@ -1929,7 +1962,7 @@ electron.ipcMain.handle("picnest-ai-dup-scan", async (event, folderId, rel, maxP
       if (!PICNEST_AI_IMG_EXT.has(path.extname(r.file_path).toLowerCase())) continue;
       try {
         const st = fs.statSync(r.file_path);
-        if (st.isFile() && st.size > 0) images.push({ ...r, size: st.size, hash: null, color: null });
+        if (st.isFile() && st.size > 0) images.push({ ...r, size: st.size, hash: null, color: null, phash: null });
       } catch (e) {}
     }
     send({ phase: "hash", done: 0, total: images.length });
@@ -1938,6 +1971,7 @@ electron.ipcMain.handle("picnest-ai-dup-scan", async (event, folderId, rel, maxP
       const [h, c] = await Promise.allSettled([picnestAiDHash(im), picnestAiColorBlocks(im)]);
       im.hash = h.status === "fulfilled" ? h.value : null;
       im.color = c.status === "fulfilled" ? c.value : null;
+      im.phash = im.color ? picnestAiPHash(im.color) : null;
       done++;
       if (done % 4 === 0 || done === images.length) send({ phase: "hash", done, total: images.length });
     });
@@ -1945,6 +1979,7 @@ electron.ipcMain.handle("picnest-ai-dup-scan", async (event, folderId, rel, maxP
     const threshold = 10;
     const colorLimit = 128;   // 32×32 中允许 128 块（12.5%）颜色量化不同
     const colorBypass = 4;    // dHash 距离 ≤4：结构几乎一致，可能是换色/裁剪，直接放行
+    const phashLimit = 6;     // 64-bit pHash 汉明距离；同图缩放/压缩通常 0–4
     let dhashPairs = 0;
     let colorFiltered = 0;
     let pairs = [];
@@ -1955,8 +1990,10 @@ electron.ipcMain.handle("picnest-ai-dup-scan", async (event, folderId, rel, maxP
           dhashPairs++;
           let cd = null;
           if (valid[i].color && valid[j].color) cd = picnestAiColorDiff(valid[i].color, valid[j].color);
-          if (d <= colorBypass || cd == null || cd <= colorLimit) {
-            pairs.push({ i, j, d, color: cd });
+          let ph = null;
+          if (valid[i].phash && valid[j].phash) ph = picnestAiHam(valid[i].phash, valid[j].phash);
+          if (d <= colorBypass || cd == null || ph == null || (cd <= colorLimit && ph <= phashLimit)) {
+            pairs.push({ i, j, d, color: cd, phash: ph });
             if (pairs.length > 20000) {
               pairs.sort((x, y) => x.d - y.d || (x.color ?? 9999) - (y.color ?? 9999));
               pairs.length = 10000;
@@ -2025,6 +2062,7 @@ electron.ipcMain.handle("picnest-ai-dup-scan", async (event, folderId, rel, maxP
       threshold,
       colorLimit,
       colorBypass,
+      phashLimit,
       groups: groups.length,
       files: groups.reduce((s, g) => s + g.count, 0),
       wasted: groups.reduce((s, g) => s + g.wasted, 0),
