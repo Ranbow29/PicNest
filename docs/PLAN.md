@@ -332,5 +332,7 @@ PicNest/
     物理文件保留；仍然保存=`force` 保留旧图再存一份。右键/页面截图只提示跳过。历史重复不自动清理。
     **未分类图标**：移植 PicNest FolderIcon（Wenku8 `archive_icon_fold_art`，GPL-2.0-or-later）几何 + `springAt`，
     面板打开/悬停时播放一次 640ms 弹簧手势。
+    **面板新建文件夹**：右栏底部「＋ 新建文件夹…」inline 输入 → `POST /api/v1/folder/create`（库根；非法字符清理、
+    同名 `(n)`）→ 新夹追加列表并高亮，点击即保存；主进程发 `sync-db dirs-changed`，store 分支 `refreshTree()`。子夹下新建暂不做。
     **防盗链/覆盖层**：服务端下载外部图片带页面 Referer + 常规 Edge/Chrome UA（Pixiv `i.pximg.net` 必需）；
     按住目标先用事件路径找 IMG，失败再 `elementsFromPoint` 按坐标找底层可见 `<img>`（Pinterest 覆盖层实测）。

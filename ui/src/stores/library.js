@@ -163,6 +163,13 @@ export const useLibrary = defineStore('library', {
             if (img && !img.thumbnail_path) img.thumbnail_path = data.thumbnail_path
             return
           }
+          if (data?.type === 'dirs-changed') {
+            if (data.rootId == null || Number(data.rootId) === Number(this.activeRootId)) {
+              clearTimeout(this._deb)
+              this._deb = setTimeout(() => this.refreshTree(), 300)
+            }
+            return
+          }
           if (data?.type === 'add' || data?.type === 'unlink') {
             if (Date.now() < (this.suppressSyncUntil || 0)) return // 内部移动已本地增量处理
             clearTimeout(this._deb)

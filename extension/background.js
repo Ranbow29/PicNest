@@ -122,6 +122,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (!ctx.roots.some((r) => String(r.id) === String(rootId))) rootId = ctx.rootId
         const data = await api('/api/v1/folders?rootId=' + encodeURIComponent(rootId))
         sendResponse({ ok: true, root: data.root, folders: data.folders, context: ctx })
+      } else if (msg?.type === 'create-folder') {
+        const data = await apiRaw('/api/v1/folder/create', {
+          rootId: msg.rootId,
+          parentRel: msg.parentRel || '',
+          name: msg.name,
+        })
+        if (!data.ok) throw new Error(data.error || '新建文件夹失败')
+        sendResponse({ ok: true, folder: data.folder })
       } else if (msg?.type === 'save-panel') {
         const body = {
           kind: 'image',

@@ -1928,6 +1928,29 @@ function picnestStartCollectServer() {
           folders: picnestCollectTree(root.path),
         });
       }
+      if (req.method === "POST" && url.pathname === "/api/v1/folder/create") {
+        const body = await picnestCollectReadJson(req);
+        const parent = picnestCollectTarget(body.rootId, body.parentRel || "");
+        let name = String(body.name || "")
+          .replace(/[\\/:*?"<>|\r\n\t]/g, " ")
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 80);
+        if (!name) return picnestCollectJson(res, 400, { ok: false, error: "文件夹名不能为空" });
+        let dest = path.join(parent.abs, name);
+        let n = 2;
+        while (fs.existsSync(dest)) dest = path.join(parent.abs, `${name} (${n++})`);
+        fs.mkdirSync(dest);
+        const finalName = path.basename(dest);
+        const rel = parent.rel ? parent.rel + "/" + finalName : finalName;
+        try {
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send("sync-db", { type: "dirs-changed", rootId: parent.root.id, rel });
+          }
+        } catch (e) {}
+        picnestCollectLog("mkdir", dest, `root=${parent.root.id}`);
+        return picnestCollectJson(res, 200, { ok: true, folder: { id: rel, name: finalName, parent: parent.rel || null } });
+      }
       if (req.method === "POST" && url.pathname === "/api/v1/save") {
         const body = await picnestCollectReadJson(req);
         const items = Array.isArray(body.items) ? body.items : [body];

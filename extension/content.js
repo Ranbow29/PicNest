@@ -141,6 +141,18 @@
     .dup button[data-act="overwrite"] { border-color: rgba(180,68,59,.5); color: #b4463b; }
     .dup button[data-act="force"] { background: #b4884b; border-color: #b4884b; color: #fff; }
     .dup button:hover { filter: brightness(.98); }
+    .newdir { flex: none; margin-top: 4px; height: 28px; border: 1px dashed rgba(0,0,0,.18);
+      border-radius: 8px; background: #fff; color: #8a6a3a; font-size: 11.5px; cursor: pointer; }
+    .newdir:hover { border-color: #b4884b; background: rgba(180,136,75,.08); }
+    .newdir[hidden], .newdir-form[hidden] { display: none; }
+    .newdir-form { flex: none; display: flex; gap: 6px; margin-top: 4px; }
+    .newdir-input { flex: 1; min-width: 0; height: 28px; border: 1px solid rgba(0,0,0,.16);
+      border-radius: 7px; padding: 0 8px; font-size: 12px; color: #262626; background: #fff; outline: none; }
+    .newdir-input:focus { border-color: #b4884b; }
+    .nd-btn { height: 28px; padding: 0 10px; border-radius: 7px; border: 1px solid rgba(0,0,0,.14);
+      background: #fff; color: #6f6a60; font-size: 11.5px; cursor: pointer; }
+    .nd-btn.ok { background: #b4884b; border-color: #b4884b; color: #fff; }
+    .nd-btn:hover { filter: brightness(.98); }
     @media (prefers-color-scheme: dark) {
       .ring .bg { stroke: rgba(255,255,255,.25); }
     }
@@ -166,6 +178,12 @@
           if (a) { act = a.dataset.act; break }
         }
       }
+      if (act === 'newdir') { showNewDir(session); return }
+      if (act === 'create') {
+        createNewFolder(session, session.panel?.querySelector('.newdir-input')?.value || '')
+        return
+      }
+      if (act === 'cancelnew') { hideNewDir(session); return }
       if (act === 'skip') { closePanel(); return }
       if (act === 'overwrite') { saveTo(session, session.pendingRel, false, true); return }
       if (act === 'force') { saveTo(session, session.pendingRel, true); return }
@@ -233,8 +251,7 @@
   function removeDup(s) {
     try { s.panel?.querySelector('.dup')?.remove() } catch { /* 静默 */ }
   }
-  function showDuplicate(s, matches) {
-    removeDup(s)
+  function showDuplicate(s, matches) {    removeDup(s)
     if (!s.panel) return
     const dup = document.createElement('div')
     dup.className = 'dup'
@@ -267,6 +284,52 @@
     s.panel.insertBefore(dup, s.panel.querySelector('.foot'))
     s.skipClick = 0
     setStatus(s, '', '发现相同图片')
+  }
+  function showNewDir(s) {
+    const p = s.panel
+    if (!p) return
+    const btn = p.querySelector('.newdir')
+    const form = p.querySelector('.newdir-form')
+    if (!btn || !form) return
+    btn.hidden = true
+    form.hidden = false
+    form.querySelector('.newdir-input')?.focus()
+  }
+  function hideNewDir(s) {
+    const p = s.panel
+    if (!p) return
+    const btn = p.querySelector('.newdir')
+    const form = p.querySelector('.newdir-form')
+    if (!btn || !form) return
+    form.hidden = true
+    btn.hidden = false
+    const input = form.querySelector('.newdir-input')
+    if (input) input.value = ''
+  }
+  function createNewFolder(s, name) {
+    if (!s.root || s.saving) return
+    const clean = String(name || '').trim()
+    if (!clean) { setStatus(s, 'err', '请输入文件夹名称'); return }
+    if (!runtimeAlive()) { setStatus(s, 'err', refreshHint()); return }
+    s.saving = true
+    setStatus(s, 'saving', '新建中…')
+    try {
+      chrome.runtime.sendMessage({ type: 'create-folder', rootId: s.root.id, parentRel: '', name: clean }, (res) => {
+        if (session !== s) return
+        s.saving = false
+        if (!res?.ok) { setStatus(s, 'err', res?.error || '新建失败'); return }
+        s.createdRel = res.folder.id
+        s.folders = (s.folders || []).concat([{ rel: res.folder.id, name: res.folder.name, depth: 0 }])
+        renderPanel(s)
+        const row = [...s.panel.querySelectorAll('.row')].find((r) => r.dataset.rel === res.folder.id)
+        if (row) row.scrollIntoView({ block: 'nearest' })
+        setStatus(s, '', '已创建：' + res.folder.name + '（点击它保存）')
+      })
+    } catch (e) {
+      s.saving = false
+      const msg = String(e?.message || e)
+      setStatus(s, 'err', /context invalidated|Extension context/i.test(msg) ? refreshHint() : msg)
+    }
   }
 
   function showRing(s) {
@@ -333,6 +396,12 @@
         <div class="listwrap">
           <div class="cap">文件夹</div>
           <div class="list"></div>
+          <button class="newdir" data-act="newdir" title="在当前根文件的库根新建文件夹">＋ 新建文件夹…</button>
+          <div class="newdir-form" hidden>
+            <input class="newdir-input" maxlength="80" placeholder="文件夹名称" spellcheck="false" />
+            <button class="nd-btn ok" data-act="create">创建</button>
+            <button class="nd-btn" data-act="cancelnew">取消</button>
+          </div>
         </div>
       </div>
       <div class="foot"><span class="hint"></span><span class="state"></span></div>`
@@ -370,12 +439,22 @@
         row.appendChild(ico.firstChild)
         row.appendChild(name)
         if (last.rootId != null && String(last.rootId) === String(s.root?.id) && last.rel === f.rel) row.classList.add('last')
+        if (s.createdRel === f.rel) row.classList.add('last')
         list.appendChild(row)
       }
     }
     const uncat = panel.querySelector('.uncat')
     if (last.rootId != null && String(last.rootId) === String(s.root?.id) && (last.rel || '') === '') uncat.classList.add('last')
     uncat.addEventListener('mouseenter', () => playFolderIcon(panel))
+    const ndInput = panel.querySelector('.newdir-input')
+    if (ndInput) {
+      ndInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault()
+          createNewFolder(s, ndInput.value)
+        }
+      })
+    }
     setHint(s)
     positionPanel(s, panel)
     if (s.folders || error) playFolderIcon(panel)
