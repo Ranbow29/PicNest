@@ -725,7 +725,7 @@ function onKey(e) {
 
 /* ---- 文本：内置编辑器 ---- */
 .text-stage {
-  position: absolute; inset: 0; z-index: 20;
+  position: absolute; inset: 0; z-index: 10; /* 低于标题栏(20)：否则盖住左上角退出钮 */
   display: flex; flex-direction: column; gap: 8px;
   padding: 54px 22px 20px; background: var(--panel-strong);
 }
