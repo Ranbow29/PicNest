@@ -135,6 +135,8 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。
   详情浮岛 right/bottom 10 与主面板内缘对齐，**底色为竖向玻璃渐变**（`--panel-insp-top/mid/low/bot`，
   0.97 → 0.93@46% → 0.86@74% → 0.60，顶端实白、越往下越透）+ `backdrop-filter: blur(22px)`，同用 `--shadow-float`
   （文字密集的正文上也不会透底）。圆角保持主面板 6 / 浮岛 14
+- **详情宽度拖拽柄在浮岛左缘**（不再贴窗口右缘）：绝对定位 `right: calc(var(--insp-w) + 6px)`、top 64 / bottom 10、宽 8px、z-index 13，
+  4px 骑在浮岛左缘上；`--insp-w` 同时设在 `.browse` / `.insp-overlay` 容器上供手柄计算；`invert` 保留 = 向左拖加宽
 - 手动拖窗、置顶按钮、颜色筛选对齐 Eagle 真源、裁剪三选一、丢回收站/从库移除
 - **大图支持图片 / 视频 / 文本三种形态**；视频与文本的专属工具栏见上节
 

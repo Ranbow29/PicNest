@@ -208,3 +208,6 @@ PicNest/
     并加 `backdrop-filter: blur(22px)`——**0.85 半透明在文字密集页面会透底**，看起来像浮不起来；纯色实白又会失去玻璃感。
     渐变必须「上实下透」（Feb 指定仿顶栏玻璃，方向相反），底部 0.60 是阅读性下限，再透按钮文字会掉对比。圆角维持主面板 6 / 浮岛 14（既有定稿，勿顺手改）。
     改定位时注意 `.insp-overlay` / `.browse` 两处 Inspector 与 resize-handle 的 bottom 要一起改（8→10）。
+    **详情拖拽柄移位（Feb 指定）**：原先手柄在窗口右缘、方向反直觉；现在绝对定位骑在浮岛**左缘**
+    （`right: calc(var(--insp-w) + 6px)`、top 64 / bottom 10、宽 8、z-index 13），`invert` 保留（向左拖=加宽）。
+    `--insp-w` 必须同时设在 `.browse` / `.insp-overlay` 容器上，否则手柄算不出左缘位置。

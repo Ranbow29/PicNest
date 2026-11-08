@@ -120,7 +120,7 @@ const chipStyle = computed(() => {
       <TitleBar />
       <div class="main-inner">
         <!-- 浏览模式：网格 + 详情浮岛（v-show 保滚动位置） -->
-        <div v-show="!lib.lightbox.open" class="browse">
+        <div v-show="!lib.lightbox.open" class="browse" :style="{ '--insp-w': lib.inspectorWidth + 'px' }">
           <ImageGrid :class="{ 'insp-open': lib.viewer.showInspector }" />
           <Transition name="insp">
             <Inspector v-if="lib.viewer.showInspector" :style="{ '--insp-w': lib.inspectorWidth + 'px' }" />
@@ -130,7 +130,7 @@ const chipStyle = computed(() => {
         <!-- 大图工作区：舞台 + 详情计划式浮岛（可收起，滑出动画） -->
         <template v-if="lib.lightbox.open">
           <Lightbox />
-          <div class="insp-overlay">
+          <div class="insp-overlay" :style="{ '--insp-w': lib.inspectorWidth + 'px' }">
             <Transition name="insp">
               <Inspector v-if="lib.viewer.showInspector" :style="{ '--insp-w': lib.inspectorWidth + 'px' }" />
             </Transition>
@@ -182,8 +182,15 @@ const chipStyle = computed(() => {
   max-height: none;
   pointer-events: auto;
 }
-.insp-overlay .resize-handle { margin: 64px 0 10px 0; pointer-events: auto; z-index: 12; }
-.browse .resize-handle { margin: 64px 0 10px 0; z-index: 12; }
+/* 详情宽度拖拽柄：骑在浮岛左缘（原先贴着窗口右缘，方向反直觉） */
+.browse > .resize-handle, .insp-overlay .resize-handle {
+  position: absolute; top: 64px; bottom: 10px; right: calc(var(--insp-w, 296px) + 6px);
+  width: 8px; height: auto; margin: 0; z-index: 13; pointer-events: auto;
+}
+.browse > .resize-handle:hover, .browse > .resize-handle:active,
+.insp-overlay .resize-handle:hover, .insp-overlay .resize-handle:active {
+  box-shadow: inset -1px 0 0 var(--accent); /* 高光线贴浮岛左缘 */
+}
 .insp-enter-active, .insp-leave-active { transition: transform 0.24s ease, opacity 0.24s ease; }
 .insp-enter-from, .insp-leave-to { transform: translateX(40px); opacity: 0; }
 /* 大图模式详情容器：必须 inset:0（缺 left 会收缩成手柄宽，overflow:hidden 裁掉整个面板）；
