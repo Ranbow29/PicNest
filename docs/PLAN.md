@@ -160,7 +160,3 @@ PicNest/
     「显示子文件夹内容」开关：关 = `recursive=false` 且 `dirRel=""`，**directOnly 判断不能依赖 dirRel 真值**
     （空 rel 也要排除更深层，否则会返回全库）。图片拖到侧栏「回收站」入口 = `picnestRemove` 软删 + 本地过滤。
     主面板整圈 `drop-main` 虚线已移除（无实际作用，只剩卡片/树行/浮签反馈）。
-35. **视频大图 + Eagle 步进**：Lightbox 按扩展名切 `<video>`；视频不做图片式 transform 缩放/平移
-    （`onWheel/onDown/onMove` 直接 return），工具栏只留上一张/下一张，双击 `requestFullscreen`，全屏 Esc 先退全屏。
-    `Ctrl+←/→` 步进值来自 Eagle 真源 `player.step.forward/backward`：`step = min(duration * 0.02, 10)` 秒；
-    普通箭头在 `e.target.tagName === 'VIDEO'` 时跳过图片导航，避免和原生控件重复。

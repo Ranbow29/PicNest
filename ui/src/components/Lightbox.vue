@@ -16,12 +16,6 @@ const url = computed(() => {
   return img?.file_path ? fileUrl(img.file_path) : ''
 })
 const meta = computed(() => lib.images.find((i) => i.file_path === lib.lightbox.path) || null)
-const isVideo = computed(() => /\.(mp4|webm|mov|mkv|avi|flv|f4v)$/i.test(meta.value?.file_path || ''))
-const videoEl = ref(null)
-const videoStyle = computed(() => {
-  const insp = lib.viewer.showInspector ? lib.inspectorWidth + 16 : 0
-  return { maxWidth: `calc(100% - ${40 + insp}px)`, maxHeight: 'calc(100% - 100px)' }
-})
 
 function fitToWindow() {
   const img = meta.value
@@ -38,13 +32,6 @@ function fitToWindow() {
 }
 function oneToOne() { lib.viewer.scale = 1; lib.viewer.tx = 0; lib.viewer.ty = 0 }
 function dblClick() {
-  if (isVideo.value) {
-    const v = videoEl.value
-    if (!v) return
-    if (document.fullscreenElement) document.exitFullscreen?.()
-    else v.requestFullscreen?.()
-    return
-  }
   if (Math.abs(lib.viewer.scale - 1) < 0.02) fitToWindow()
   else oneToOne()
 }
@@ -71,19 +58,16 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 
 function onWheel(e) {
   if (lib.viewer.cropMode) return // 裁切中禁缩放：图片矩形一变，裁剪框坐标体系就失配
-  if (isVideo.value) return // 视频交给原生控件/全屏，不做图片式缩放
   e.preventDefault()
     const k = e.deltaY < 0 ? 1.12 : 1 / 1.12
   lib.viewer.scale = Math.min(8, Math.max(0.05, lib.viewer.scale * k))
 }
 function onDown(e) {
   if (lib.viewer.cropMode) return // 裁切中禁用平移，由裁切层接管
-  if (isVideo.value) return
   dragging.value = true; lastX = e.clientX; lastY = e.clientY
 }
 function onMove(e) {
   if (lib.viewer.cropMode) return // 裁切跟踪由 window 级监听独占（防双重处理）
-  if (isVideo.value) return
   if (!dragging.value) return
   lib.viewer.tx += e.clientX - lastX
   lib.viewer.ty += e.clientY - lastY
@@ -313,33 +297,16 @@ async function applyCrop() {
   }
 }
 
-/* Eagle 同款：Ctrl+←/→ 视频步进 2% 时长，单次最多 10 秒 */
-function stepVideo(dir) {
-  const v = videoEl.value
-  if (!isVideo.value || !v) return false
-  const duration = Number.isFinite(v.duration) ? v.duration : 0
-  if (!duration) return false
-  const step = Math.min(duration * 0.02, 10)
-  try {
-    v.currentTime = Math.max(0, Math.min(duration, (v.currentTime || 0) + dir * step))
-  } catch (e) { return false }
-  return true
-}
-
 function onKey(e) {
   if (!lib.lightbox.open) return
-  if (e.key === 'Escape' && document.fullscreenElement) return // 先退出全屏，不关大图
   if (e.key === 'Escape') {
     if (cropAsk.value) { cropAsk.value = false }
     else if (lib.viewer.cropMode) { exitCrop() }
     else lib.closeLightbox()
   }
   else if (e.key === 'Enter' && lib.viewer.cropMode && crop.value) applyCrop()
-  else if ((e.ctrlKey || e.metaKey) && (e.key === 'ArrowLeft' || e.key === 'ArrowRight') && !lib.viewer.cropMode) {
-    if (stepVideo(e.key === 'ArrowRight' ? 1 : -1)) e.preventDefault()
-  }
-  else if (e.key === 'ArrowLeft' && !e.ctrlKey && !e.metaKey && !e.altKey && !lib.viewer.cropMode && e.target?.tagName !== 'VIDEO') lib.lightboxNav(-1)
-  else if (e.key === 'ArrowRight' && !e.ctrlKey && !e.metaKey && !e.altKey && !lib.viewer.cropMode && e.target?.tagName !== 'VIDEO') lib.lightboxNav(1)
+  else if (e.key === 'ArrowLeft' && !lib.viewer.cropMode) lib.lightboxNav(-1)
+  else if (e.key === 'ArrowRight' && !lib.viewer.cropMode) lib.lightboxNav(1)
   else if (e.key === '0') fitToWindow()
 }
 </script>
@@ -350,12 +317,7 @@ function onKey(e) {
     @wheel="onWheel"
     @mousedown="onDown" @mousemove="onMove" @mouseup="onUp" @mouseleave="onUp"
   >
-    <video
-      v-if="isVideo" ref="videoEl" :src="url" class="stage video-stage"
-      controls draggable="false" :style="videoStyle" @dblclick="dblClick"
-    />
     <img
-      v-else
       ref="imgEl" :src="url" class="stage" draggable="false"
       :style="{
         transform: `translate(${lib.viewer.tx}px, ${lib.viewer.ty}px) scale(${lib.viewer.scale}) rotate(${lib.viewer.rot}deg)` + (lib.viewer.flopX ? ' scaleX(-1)' : ''),
@@ -392,21 +354,15 @@ function onKey(e) {
     <div class="dock glass-pill">
       <button class="dock-btn" title="上一张（←）" @click="lib.lightboxNav(-1)">‹</button>
       <button class="dock-btn" title="下一张（→）" @click="lib.lightboxNav(1)">›</button>
-      <template v-if="!isVideo">
-        <i class="vsep" />
-        <button class="dock-btn" :class="{ on: lib.viewer.flopX }" title="水平翻转" @click="lib.viewer.flopX = !lib.viewer.flopX">⇋</button>
-        <button class="dock-btn" :class="{ on: lib.viewer.rot % 360 !== 0 }" title="旋转 90°" @click="lib.viewer.rot = (lib.viewer.rot + 90) % 360; lib.viewer.fitNonce++">↻</button>
-        <button class="dock-btn" :class="{ on: lib.viewer.cropMode }" :disabled="lib.viewer.rot % 180 !== 0 || lib.viewer.flopX"
-                :title="lib.viewer.cropMode ? '退出裁切' : '裁切（旋转/翻转时不可用）'"
-                @click="toggleCrop">⛶</button>
-        <i class="vsep" />
-        <button class="dock-btn wide" title="原始大小（1:1）" @click="oneToOne">1:1</button>
-        <button class="dock-btn wide" title="缩放到窗口大小" @click="fitToWindow">⤢ 适应</button>
-      </template>
-      <template v-else>
-        <i class="vsep" />
-        <span class="note">Ctrl + ←/→ 步进 2%（最多 10 秒）</span>
-      </template>
+      <i class="vsep" />
+      <button class="dock-btn" :class="{ on: lib.viewer.flopX }" title="水平翻转" @click="lib.viewer.flopX = !lib.viewer.flopX">⇋</button>
+      <button class="dock-btn" :class="{ on: lib.viewer.rot % 360 !== 0 }" title="旋转 90°" @click="lib.viewer.rot = (lib.viewer.rot + 90) % 360; lib.viewer.fitNonce++">↻</button>
+      <button class="dock-btn" :class="{ on: lib.viewer.cropMode }" :disabled="lib.viewer.rot % 180 !== 0 || lib.viewer.flopX"
+              :title="lib.viewer.cropMode ? '退出裁切' : '裁切（旋转/翻转时不可用）'"
+              @click="toggleCrop">⛶</button>
+      <i class="vsep" />
+      <button class="dock-btn wide" title="原始大小（1:1）" @click="oneToOne">1:1</button>
+      <button class="dock-btn wide" title="缩放到窗口大小" @click="fitToWindow">⤢ 适应</button>
     </div>
     <div v-if="!url" class="empty">图片不存在</div>
     <!-- 裁剪结果 toast：不随 cropMode 消失（挂在舞台根层） -->
@@ -439,7 +395,6 @@ function onKey(e) {
   user-select: none;
   box-shadow: 0 20px 80px rgba(0, 0, 0, 0.35);
 }
-.video-stage { background: #000; border-radius: 6px; }
 .glass-pill {
   position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%);
   z-index: 40; /* 高于 crop-layer(30)：裁剪时 应用/取消/比例/导航 按钮必须可点 */
