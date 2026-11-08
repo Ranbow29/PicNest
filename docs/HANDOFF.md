@@ -105,6 +105,7 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 - **三向尺寸拖拽**（InspResize）：左缘宽、顶边高、左上角自由变换；支点固定右下；高度 0=自适应满高，双击顶边/角柄恢复满高。
 - **详情打开时正文真让位**：`.browse.insp-open` 提供 `--insp-reserve`，`.grid-viewport` padding-right 消费；**不要再给 ImageGrid 传 class（fragment 根会丢），也不要让卡片条二次扣详情宽**。
 - 主面板 `margin:12/12/12/10` + `--shadow-float` + 顶部高光；底座 `#eee7da`；圆角主面板 6 / 浮岛 14（既有定稿，勿改）。
+- **网格卡片浮岛**：每张图常驻 `--shadow-tile`（近影+中影+柔光）、`--tile-edge` 顶缘高光、圆角 12；hover 抬升 3px + `--shadow-tile-hover`（`--ease-overshoot`）；选中环叠在浮岛影上，子文件夹封面同款。`.wi` 入场波用 `animation-fill-mode: backwards`（`both` 会永久压住 hover transform）。
 - 顶栏**不要**改成浮岛：试过（c7b0844），Feb 当场要求回调（f90daf8），保留全宽玻璃+20px 拖尾。
 - 随机自弹已移除；入场波 520ms；滑尺 48 槽 cos² 波峰 + 单条金色 dash。
 
@@ -182,6 +183,7 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 22. 详情让位已通过 viewport padding 实现，卡片条/列数不要再二次扣详情宽。
 23. 旋转/翻转写回：flop 后 rotate；同路径刷新靠 `?v=modify_time`；封面若引用该图要更新 coverThumb。
 24. 封面菜单是文件夹级开关（有手动封面即显示 ✓，再按清除），换新封面两次操作是预期。
+25. 入场波 `.wi` 的 fill-mode 保持 `backwards`，不要改回 `both`（会永久压住 hover 的 transform）；卡片浮岛靠 `--shadow-tile*` / `--tile-edge` 双主题 token。
 
 ## 七、验收状态 / 最近提交
 

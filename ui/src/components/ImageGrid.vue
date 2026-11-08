@@ -768,12 +768,24 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
 .cell { position: absolute; top: 0; left: 0; cursor: default; will-change: transform; }
 .thumb {
   position: relative; width: 100%; height: 100%;
-  border-radius: 10px; overflow: hidden;
+  border-radius: 12px; overflow: hidden;
   background: var(--bg-2); border: 1px solid var(--border);
-  transition: box-shadow 0.18s, border-color 0.18s, transform 0.18s;
+  box-shadow: var(--shadow-tile);
+  transition: box-shadow 0.24s ease, border-color 0.18s, transform 0.26s var(--ease-overshoot);
 }
-.cell:hover .thumb { transform: translateY(-2px); box-shadow: var(--shadow); }
-.cell.selected .thumb { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent), 0 0 0 6px var(--accent-weak); }
+/* 浮岛顶缘：一线玻璃高光 + 极淡整圈内描边（只有 ::after 能压在 img 之上） */
+.thumb::after {
+  content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+  box-shadow: inset 0 1px 0 var(--tile-edge), inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+.cell:hover .thumb { transform: translateY(-3px); box-shadow: var(--shadow-tile-hover); }
+.cell.selected .thumb {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent), 0 0 0 6px var(--accent-weak), var(--shadow-tile);
+}
+.cell.selected:hover .thumb {
+  box-shadow: 0 0 0 2px var(--accent), 0 0 0 6px var(--accent-weak), var(--shadow-tile-hover);
+}
 .reorder-line {
   position: absolute; width: 3px; border-radius: 2px;
   background: var(--accent);
@@ -855,14 +867,15 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
 .sf-row { display: flex; flex-wrap: wrap; gap: 14px; padding: 4px 2px 0; align-content: flex-start; }
 .sf-card { flex: none; width: 168px; height: 136px; cursor: pointer; }
 .sf-cover {
-  height: 92px; border-radius: 10px; overflow: hidden;
+  height: 92px; border-radius: 12px; overflow: hidden;
   background: var(--bg-2); border: 1px solid var(--border);
+  box-shadow: var(--shadow-tile);
   display: flex; align-items: center; justify-content: center;
-  transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
+  transition: border-color 0.18s, box-shadow 0.24s ease, transform 0.26s var(--ease-overshoot);
 }
 .sf-cover img { display: block; width: 100%; height: 100%; object-fit: cover; }
-.sf-card:hover .sf-cover { border-color: var(--accent); transform: translateY(-2px); box-shadow: var(--shadow); }
-.sf-card.sel .sf-cover { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent), 0 0 0 6px var(--accent-weak); }
+.sf-card:hover .sf-cover { border-color: var(--accent); transform: translateY(-3px); box-shadow: var(--shadow-tile-hover); }
+.sf-card.sel .sf-cover { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent), 0 0 0 6px var(--accent-weak), var(--shadow-tile); }
 .sf-card.drop-into .sf-cover { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-weak); background: var(--accent-weak); }
 .sf-name { margin-top: 7px; font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sf-count { margin-top: 2px; font-size: 11px; color: var(--text-2); }
