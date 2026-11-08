@@ -80,6 +80,16 @@ watch(searchText, (v) => {
 })
 
 function onKey(e) {
+  if (e.key === 'Escape') {
+    if (lib.lightbox.open) return // 大图模式归 Lightbox
+    if (panelOpen.value || lib.filterBarOpen) {
+      e.preventDefault() // 告诉 App 这一下 Esc 已被消费，不再清空选中
+      panelOpen.value = false
+      lib.filterBarOpen = false
+      collectiveShake()
+    }
+    return
+  }
   if (e.ctrlKey && e.shiftKey && (e.key === 'F' || e.key === 'f')) {
     if (lib.lightbox.open) return
     e.preventDefault()

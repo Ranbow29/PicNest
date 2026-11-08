@@ -166,3 +166,12 @@ PicNest/
     `goBack/goForward` 改 navIndex 后走 `applyNav`：跨库先 `switchRoot`（不记录）再 openDir/switchView。面包屑用
     `crumbs` 计算（全部 + 当前 rel 的每级前缀；特殊视图为 全部 + 视图名），非当前项用 `.crumb-link` 按钮点击
     `openDir(rel)` / `switchView(view)`。按钮在 drag-surface 内，`isInteractive` 已排除 button，不触发拖窗。
+36. **框选 / 全选 / 批量软删**：框选挂在 `.canvas` 的 `@pointerdown.self`（只有空白背景起手，格子/卡片/头块不拦截），
+    4px 阈值后才算拖拽；命中测试用 `items` 的画布绝对坐标（含虚拟滚动外的项），实时写 `setImageSelection(paths, {add, base})`。
+    拖拽中贴视口上下缘 34px 时 rAF 持续自动滚动（按住不动也滚），每次滚动按 canvas rect 重算选区。
+    **松手后 320ms 内的 click 必须抑制**（`mqSuppressClickUntil`），否则「点空白=选中当前文件夹」会立刻覆盖框选结果。
+    Shift 加选以按下时的选中集为 base；Ctrl+A 走 `filteredImages`（选中筛选后可见全部），输入框/灯箱/右键菜单内不拦截。
+    Esc 分层退出：输入框 → 灯箱（含裁剪）→ 确认卡（取消）→ 重复三选一（不自动选）→ 右键菜单 → 筛选栏 → 最后才 `clearSelections()`
+    （合并视图退出时回原浏览文件夹）。TitleBar 的 Esc 关布局/筛选弹板时要 `preventDefault()`，App 顶层以 `defaultPrevented` 让行。
+    批量软删入口只放右键菜单（Feb 定：删除不给独立按钮防误触）：多选时文案「丢到回收站（N 张）」，先弹确认卡
+    （数量 + 前 5 个文件名）再走 `trashImages`；`trashImages` 的选中收缩改为整批 filter（逐项 prune 在 Ctrl+A 后是 O(n·m)）。

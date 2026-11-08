@@ -13,6 +13,7 @@ const pos = computed(() => ({
 
 const items = computed(() => {
   if (!menu.value.image) return []
+  const nSel = lib.selectedPaths.length
   if (lib.view === 'trash') {
     return [
       { key: 'restore', label: '还原到原文件夹', run: () => lib.restoreFromTrash(menu.value.image.file_path) },
@@ -39,7 +40,7 @@ const items = computed(() => {
     { key: 'copypath', label: '复制文件路径', run: async () => { try { await navigator.clipboard.writeText(menu.value.image.file_path) } catch {} } },
     { key: 'remove', label: '从库中移除（文件保留）', run: () => lib.removeFromLibrary(menu.value.image.file_path) },
     { sep: true },
-    { key: 'del', label: '丢到回收站', danger: true, run: () => lib.del(menu.value.image.file_path) },
+    { key: 'del', label: nSel > 1 ? `丢到回收站（${nSel} 张）` : '丢到回收站', danger: true, run: () => lib.delSelected() },
   ]
 })
 

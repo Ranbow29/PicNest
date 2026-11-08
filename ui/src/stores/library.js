@@ -1006,7 +1006,10 @@ export const useLibrary = defineStore('library', {
       if (ok) {
         this.suppressWaveUntil = Date.now() + 800
         this.images = this.images.filter((i) => !set.has(i.file_path))
-        for (const p of list) this.pruneImageSelection(p)
+        /* 整批收缩选中（逐项 prune 在大批量下是 O(n·m)，Ctrl+A 之后会卡） */
+        this.selectedPaths = this.selectedPaths.filter((p) => !set.has(p))
+        if (this.selectionAnchor && set.has(this.selectionAnchor)) this.selectionAnchor = this.selectedPaths[this.selectedPaths.length - 1] || null
+        if (this.selectedPath && set.has(this.selectedPath)) this.selectedPath = this.selectedPaths[this.selectedPaths.length - 1] || null
         if (this.lightbox.open && set.has(this.lightbox.path)) this.closeLightbox()
         await this.refreshTree()
         this.showNote(`已移入回收站 ${ok} 张${failed ? ` · 失败 ${failed}` : ''}`)
@@ -1493,6 +1496,36 @@ export const useLibrary = defineStore('library', {
       this.selectedPaths = []
       this.selectionAnchor = null
     },
+    /* Ctrl+A：选中当前可见（筛选后）全部图片 */
+    selectAllImages() {
+      if (!this.images.length) return 0
+      const list = this.filteredImages.map((i) => i.file_path)
+      this.selectedPaths = list
+      this.selectedPath = list[list.length - 1] || null
+      this.selectionAnchor = list[0] || null
+      if (!this.selectionView) this.clearDirSelection()
+      return list.length
+    },
+    /* 框选：拖拽过程中直接写入选中集；add=保留按下前的底集（Shift 加选） */
+    setImageSelection(paths, opts = {}) {
+      if (!this.selectionView) this.clearDirSelection()
+      const list = [...new Set((paths || []).filter(Boolean))]
+      this.selectedPaths = opts.add ? [...new Set([...(opts.base || []), ...list])] : list
+      this.selectionAnchor = this.selectedPaths[this.selectedPaths.length - 1] || null
+      this.selectedPath = this.selectedPaths[this.selectedPaths.length - 1] || null
+    },
+    /* Esc：清空图片/文件夹选中；合并视图要退回原浏览文件夹 */
+    clearSelections() {
+      const wasMerged = this.selectionView
+      const had = this.selectedPaths.length > 0 || this.selectedDirs.length > 0 || wasMerged
+      this.clearImageSelection()
+      this.clearDirSelection()
+      if (wasMerged) {
+        this.selectionView = false
+        this.loadImages()
+      }
+      return had
+    },
     /* 图片从当前列表消失（删除/移走）时收缩多选，主选中顺延到最后一项 */
     pruneImageSelection(path) {
       this.selectedPaths = this.selectedPaths.filter((p) => p !== path)
@@ -1636,6 +1669,26 @@ export const useLibrary = defineStore('library', {
       this.images = this.images.filter((i) => i.file_path !== path)
       this.pruneImageSelection(path)
       if (this.counts) this.counts.trash = (this.counts.trash ?? 0) + 1
+    },
+    /* 多选批量软删（右键菜单入口）：先确认数量与前几个文件名，再走 trashImages */
+    async delSelected() {
+      this.closeContextMenu()
+      const paths = this.selectedPaths.slice()
+      if (!paths.length) return
+      if (paths.length === 1) return this.del(paths[0])
+      if (this.view === 'trash') return { ok: false, error: '回收站里不能重复删除' }
+      const ok = await this.askConfirm({
+        title: `移入回收站 ${paths.length} 张图片？`,
+        message: '文件会移到图巢回收站，可随时还原；磁盘上的原文件保留。',
+        details: [
+          ...paths.slice(0, 5).map((p) => p.split(/[\\/]/).pop()),
+          ...(paths.length > 5 ? [`…等 ${paths.length} 张`] : []),
+        ],
+        confirmText: '移入回收站',
+        danger: true,
+      })
+      if (!ok) return
+      return this.trashImages(paths)
     },
   },
 })

@@ -23,11 +23,30 @@ function isTypingTarget(el) {
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable
 }
 function onKeydown(e) {
-  if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return
+  if (e.defaultPrevented) return // TitleBar 已处理（Esc 关布局/筛选弹板）
   const key = String(e.key || '').toLowerCase()
-  if (key !== 'c' && key !== 'v') return
+  if (key === 'escape') {
+    /* 分层退出：输入框/灯箱/弹窗/右键菜单各有其主，都没有才清空选中 */
+    if (isTypingTarget(e.target)) return
+    if (lib.lightbox.open) return // Lightbox 自己处理（含裁剪态）
+    if (lib.confirmDialog.open) { lib.resolveConfirm(false); return }
+    if (lib.dupDialog.open) return // 重复三选一必须显式选择
+    if (lib.dirMenu.open) { lib.closeDirMenu(); return }
+    if (lib.contextMenu.open) { lib.closeContextMenu(); return }
+    if (lib.filterBarOpen) return
+    lib.clearSelections()
+    return
+  }
+  if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return
   if (isTypingTarget(e.target)) return
   if (lib.confirmDialog.open || lib.dupDialog.open) return
+  if (key === 'a') {
+    if (lib.lightbox.open || lib.dirMenu.open || lib.contextMenu.open) return
+    e.preventDefault()
+    lib.selectAllImages()
+    return
+  }
+  if (key !== 'c' && key !== 'v') return
   if (key === 'c') {
     if (String(window.getSelection?.() || '').trim()) return
     const r = lib.copySelection()

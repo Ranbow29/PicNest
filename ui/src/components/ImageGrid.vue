@@ -414,6 +414,86 @@ function onCellClick(e, img) {
   lib.selectImage(img.file_path, { shift: e.shiftKey, add: e.altKey || e.ctrlKey || e.metaKey })
 }
 
+/* ---------- 框选：空白处按住拖拽，命中格子实时写入选中；Shift=加选 ---------- */
+const canvasEl = ref(null)
+const marquee = ref(null) // { x, y, w, h }
+let mq = null // { startX, startY, clientX, clientY, x0, y0, x1, y1, moved, add, base }
+let mqRAF = 0
+let mqSuppressClickUntil = 0
+
+function mqUpdate() {
+  const el = canvasEl.value
+  if (!el || !mq) return
+  const r = el.getBoundingClientRect()
+  mq.x1 = Math.max(0, Math.min(mq.clientX - r.left, r.width))
+  mq.y1 = Math.max(0, Math.min(mq.clientY - r.top, totalH.value))
+  const x = Math.min(mq.x0, mq.x1), y = Math.min(mq.y0, mq.y1)
+  const w = Math.abs(mq.x1 - mq.x0), h = Math.abs(mq.y1 - mq.y0)
+  marquee.value = { x, y, w, h }
+  const hit = []
+  for (const it of items.value) {
+    if (it.x < x + w && it.x + it.w > x && it.y < y + h && it.y + it.h > y) hit.push(it.file_path)
+  }
+  lib.setImageSelection(hit, { add: mq.add, base: mq.base })
+}
+/* 贴近视口上下缘时持续滚动（按住不动也滚） */
+function mqScrollStep() {
+  const vp = viewport.value
+  if (!vp || !mq) return false
+  const vr = vp.getBoundingClientRect()
+  const m = 34, speed = 22
+  let d = 0
+  if (mq.clientY < vr.top + m) d = -speed * Math.min(1, (vr.top + m - mq.clientY) / m)
+  else if (mq.clientY > vr.bottom - m) d = speed * Math.min(1, (mq.clientY - (vr.bottom - m)) / m)
+  if (!d) return false
+  const before = vp.scrollTop
+  vp.scrollTop = Math.max(0, Math.min(before + d, vp.scrollHeight - vp.clientHeight))
+  return vp.scrollTop !== before
+}
+function mqTick() {
+  mqRAF = 0
+  const vp = viewport.value
+  if (!mq?.moved || !vp) return
+  if (mqScrollStep()) mqUpdate()
+  const vr = vp.getBoundingClientRect()
+  const near = mq.clientY < vr.top + 34 || mq.clientY > vr.bottom - 34
+  if (near) mqRAF = requestAnimationFrame(mqTick)
+}
+function onMarqueeDown(e) {
+  if (e.button !== 0 || !canvasEl.value) return
+  const r = canvasEl.value.getBoundingClientRect()
+  mq = {
+    startX: e.clientX, startY: e.clientY,
+    clientX: e.clientX, clientY: e.clientY,
+    x0: e.clientX - r.left, y0: e.clientY - r.top,
+    x1: e.clientX - r.left, y1: e.clientY - r.top,
+    moved: false, add: e.shiftKey, base: e.shiftKey ? lib.selectedPaths.slice() : [],
+  }
+  try { canvasEl.value.setPointerCapture(e.pointerId) } catch { /* 合成指针无法捕获 */ }
+  window.addEventListener('pointermove', onMarqueeMove)
+  window.addEventListener('pointerup', onMarqueeUp, { once: true })
+}
+function onMarqueeMove(e) {
+  if (!mq) return
+  if (!mq.moved) {
+    if (Math.hypot(e.clientX - mq.startX, e.clientY - mq.startY) < 4) return
+    mq.moved = true
+  }
+  mq.clientX = e.clientX
+  mq.clientY = e.clientY
+  mqUpdate()
+  if (!mqRAF) mqRAF = requestAnimationFrame(mqTick)
+}
+function onMarqueeUp() {
+  window.removeEventListener('pointermove', onMarqueeMove)
+  if (mqRAF) cancelAnimationFrame(mqRAF)
+  mqRAF = 0
+  if (mq?.moved) mqSuppressClickUntil = Date.now() + 320 // 拖拽后的 click 不再当“点空白”
+  mq = null
+  marquee.value = null
+}
+onBeforeUnmount(onMarqueeUp)
+
 /* ---------- 拖动：格内排序 / 拖进子文件夹卡片 ---------- */
 const reorderCtx = ref(null) // { path, before, x, y, h }：插入线跟随最近的图
 const subDropRel = ref(null)
@@ -489,6 +569,8 @@ async function onCanvasDrop(e) {
 }
 /* 点正文空白：取消图片选中，改为选中当前文件夹（库根则选中库） */
 function onBackgroundClick() {
+  if (Date.now() < mqSuppressClickUntil) return // 框选松手后的合成 click
+  if (mq?.moved) return
   if (lib.view === 'all') lib.selectDir(lib.currentDirRel || '', {})
   else lib.clearImageSelection()
 }
@@ -537,8 +619,9 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
           @pointerdown.prevent="onRulerDown" @pointermove="onRulerMove"
           @pointerup="onRulerUp" @pointercancel="onRulerUp" />
   <div ref="viewport" class="grid-viewport" @wheel="onViewportWheel">
-    <div class="canvas" :style="{ height: totalH + 'px' }"
+    <div ref="canvasEl" class="canvas" :style="{ height: totalH + 'px' }"
          @click.self="onBackgroundClick"
+         @pointerdown.self="onMarqueeDown"
          @dragover="onCanvasDragOver" @dragleave="onCanvasDragLeave" @drop="onCanvasDrop">
       <!-- 编辑排印头块：滚动时整体穿入玻璃顶栏（同 Wenku8） -->
       <header :key="'head-' + waveSeq" class="page-head wi" style="--d: 0ms" @mousedown="startWindowDrag">
@@ -595,6 +678,10 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
         </template>
       </div>
 
+      <!-- 框选矩形（空白拖拽） -->
+      <div v-if="marquee" class="marquee"
+           :style="{ left: marquee.x + 'px', top: marquee.y + 'px', width: marquee.w + 'px', height: marquee.h + 'px' }" />
+
       <!-- 拖动排序插入线（画布级，缝隙也可命中） -->
       <div v-if="reorderCtx" class="reorder-line"
            :style="{ left: reorderCtx.x + 'px', top: reorderCtx.y + 'px', height: reorderCtx.h + 'px' }" />
@@ -641,7 +728,7 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
 .grid-viewport { scrollbar-width: none; }
 .grid-viewport::-webkit-scrollbar { width: 0; height: 0; }
 .grid-viewport::-webkit-scrollbar-thumb { background: transparent; }
-.canvas { position: relative; width: 100%; margin-right: 26px; } /* 右缘让位概览滑尺（详情在其右侧） */
+.canvas { position: relative; width: 100%; margin-right: 26px; user-select: none; } /* 右缘让位概览滑尺（详情在其右侧） */
 .cell { position: absolute; top: 0; left: 0; cursor: default; will-change: transform; }
 .thumb {
   position: relative; width: 100%; height: 100%;
@@ -656,6 +743,12 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
   background: var(--accent);
   box-shadow: 0 0 0 2px var(--accent-weak);
   pointer-events: none; z-index: 5;
+}
+.marquee {
+  position: absolute; z-index: 6; pointer-events: none;
+  border: 1px solid var(--accent); border-radius: 3px;
+  background: var(--accent-weak);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06) inset;
 }
 .thumb img { width: 100%; height: 100%; object-fit: cover; }
 .noimg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--text-2); font-size: 22px; }
