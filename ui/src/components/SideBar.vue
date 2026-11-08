@@ -1,16 +1,36 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useLibrary, extractDropUrls } from '../stores/library'
 import DirTreeItem from './DirTreeItem.vue'
+import FolderIcon from './FolderIcon.vue'
+import NamePromptDialog from './NamePromptDialog.vue'
+import DirContextMenu from './DirContextMenu.vue'
 
 const lib = useLibrary()
 
 const entries = computed(() => [
   { key: 'all', label: '全部', count: lib.counts.all ?? 0, enabled: true },
   { key: 'recent', label: '最近使用', count: lib.counts.recent ?? 0, enabled: true },
+  { key: 'uncategorized', label: '未分类', count: lib.counts.uncategorized ?? 0, enabled: true },
   { key: 'random', label: '随机模式', count: null, enabled: true },
   { key: 'trash', label: '回收站', count: lib.counts.trash ?? 0, enabled: true },
 ])
+
+const libs = computed(() => (lib.roots || []).map((r) => ({
+  ...r,
+  name: r.display_name || r.path.split(/[\\/]/).pop(),
+  active: r.id === lib.activeRootId,
+})))
+
+const askNewFolder = ref(false)
+
+async function newFolderInRoot(name) {
+  const r = await lib.mkdirIn('', name)
+  if (r?.ok) {
+    lib.patchDirMemory('', { expanded: true })
+    if (r.rel) lib.patchDirMemory(r.rel, { expanded: true })
+  }
+}
 
 async function pickFolder() {
   const p = window.picrand
@@ -54,7 +74,7 @@ async function dropToRoot(e) {
     <nav class="views">
       <div
         v-for="e in entries" :key="e.key"
-        class="view-item" :class="{ active: lib.view === e.key, disabled: !e.enabled }"
+        class="view-item" :class="{ active: lib.view === e.key && (e.key !== 'all' || !lib.currentDirRel), disabled: !e.enabled }"
         @click="e.enabled && lib.view !== e.key && lib.switchView(e.key)"
       >
         <span class="label">{{ e.label }}</span>
@@ -62,19 +82,42 @@ async function dropToRoot(e) {
       </div>
     </nav>
 
+    <!-- 资料库：每个根一个节点，点击切换；当前库高亮；右键 = 文件夹菜单 -->
+    <div class="section-head">
+      <span>资料库</span>
+      <span class="head-btns">
+        <button class="add-btn" title="当前库根下新建文件夹" @click="askNewFolder = true">＋</button>
+        <button class="add-btn lib-add" title="添加资料库（选择目录）" @click="pickFolder">⌂</button>
+      </span>
+    </div>
+    <div class="libs">
+      <div v-for="l in libs" :key="l.id" class="lib-item" :class="{ active: l.active }"
+           @click="lib.switchRoot(l.id)"
+           @contextmenu.prevent.stop="lib.openDirMenu($event, { rel: '', node: l, isLibrary: true, absPath: l.path })">
+        <FolderIcon :color="lib.dirMemory['']?.color || ''" :size="17" />
+        <span class="label">{{ l.name }}</span>
+        <span class="count">{{ l.active ? (lib.counts.all ?? 0).toLocaleString() : '' }}</span>
+      </div>
+    </div>
+
     <div class="section-head">
       <span>文件夹</span>
-      <button class="add-btn" title="添加文件夹" @click="pickFolder">＋</button>
+      <button class="add-btn" title="当前库根下新建文件夹" @click="askNewFolder = true">＋</button>
     </div>
 
     <div v-if="lib.scanning" class="scanning">{{ lib.scanNote }}</div>
-    <div v-else-if="!lib.tree" class="empty">还没有文件夹，点上方 ＋ 导入</div>
+    <div v-else-if="!lib.tree" class="empty">还没有资料库，点 ⌂ 导入</div>
     <div v-else class="tree">
       <DirTreeItem :node="lib.tree.tree" :depth="0" @open="openNode" />
     </div>
 
     <div v-if="lib.error" class="error">{{ lib.error }}</div>
+
+    <NamePromptDialog :visible="askNewFolder" title="在库根新建文件夹"
+                      @confirm="(v) => { askNewFolder = false; newFolderInRoot(v) }"
+                      @cancel="askNewFolder = false" />
   </aside>
+  <DirContextMenu />
 </template>
 
 <style scoped>
@@ -102,11 +145,26 @@ async function dropToRoot(e) {
   display: flex; align-items: center; padding: 10px 10px 6px;
   font-size: 11px; color: var(--text-2); letter-spacing: 1px;
 }
+.head-btns { margin-left: auto; display: flex; gap: 2px; }
 .add-btn {
-  margin-left: auto; width: 22px; height: 22px; border: none; border-radius: 6px;
+  width: 22px; height: 22px; border: none; border-radius: 6px;
   background: transparent; color: var(--text-2); cursor: pointer; font-size: 13px;
 }
+.head-btns .add-btn { margin-left: 0; }
+.add-btn.lib-add { font-size: 12px; }
 .add-btn:hover { background: var(--accent-weak); color: var(--accent); }
+
+/* 资料库节点区 */
+.libs { display: flex; flex-direction: column; gap: 2px; padding: 0 4px 4px; }
+.lib-item {
+  display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px;
+  border-radius: 9px; color: var(--text-2); cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.lib-item:hover { background: var(--accent-weak); color: var(--text); }
+.lib-item.active { background: var(--accent-weak); color: var(--accent); font-weight: 600; }
+.lib-item .label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lib-item .count { font-size: 11px; font-variant-numeric: tabular-nums; }
 
 .tree { flex: 1; overflow-y: auto; padding-bottom: 6px; }
 .tree::-webkit-scrollbar { width: 6px; }

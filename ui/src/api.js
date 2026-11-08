@@ -25,13 +25,19 @@ export const api = {
   windowDragEnd: () => p().windowDragEnd?.(),
   // PicNest 新增
   dirTree: (folderId) => invoke('picnestDirTree', folderId),
-  imagesByDir: (folderId, dirRel, offset, limit, sortMode = 'id') =>
-    invoke('picnestImagesByDir', folderId, dirRel, offset, limit, sortMode),
+  imagesByDir: (folderId, dirRel, offset, limit, sortMode = 'id', sortAsc) =>
+    invoke('picnestImagesByDir', folderId, dirRel, offset, limit, sortMode, sortAsc),
   countAll: (folderId) => invoke('picnestCountAll', folderId),
   recent: (folderId, limit) => invoke('picnestRecent', folderId, limit),
   imageOpened: (filePath) => invoke('picnestImageOpened', filePath),
   dirMemoryGet: (key) => invoke('picnestDirMemoryGet', key),
   dirMemorySet: (key, patch) => invoke('picnestDirMemorySet', key, patch),
+  // 资料库文件夹管理
+  mkdir: (parentPath, name) => invoke('picnestMkdir', parentPath, name),
+  renameDir: (oldPath, newName, oldRel, parentRel) => invoke('picnestRenameDir', oldPath, newName, oldRel, parentRel),
+  dirSort: (parentRel, parentAbsPath, mode) => invoke('picnestDirSort', parentRel, parentAbsPath, mode),
+  dirSortRecursive: (rootAbsPath, rootRel, mode) => invoke('picnestDirSortRecursive', rootAbsPath, rootRel, mode),
+  exportDir: (dirPath) => invoke('picnestExportDir', dirPath),
 }
 
 // 本地文件（缩略图/原图）→ 可用的 img src

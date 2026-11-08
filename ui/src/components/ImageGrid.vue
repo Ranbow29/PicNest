@@ -3,9 +3,21 @@ import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { useLibrary } from '../stores/library'
 import { api, fileUrl } from '../api'
 import { startWindowDrag } from '../lib/winDrag'
+import { waveSeq, waveDelay, replayWave } from '../lib/wave'
 
 const lib = useLibrary()
 const showLabels = computed(() => lib.hoverLabels !== false)
+
+/* Wenku8 式全体动效：视图/排序/筛选/内容更新 → 首屏入场波重放（防抖合并连续变更） */
+let waveTimer = null
+watch(
+  () => [lib.view, lib.currentDirRel, lib.sortMode, lib.sortAsc, lib.layout, lib.activeRootId, lib.images.length, JSON.stringify(lib.filters)],
+  () => {
+    clearTimeout(waveTimer)
+    waveTimer = setTimeout(replayWave, 120)
+  },
+)
+
 
 /* ---------- 视口与虚拟滚动 ---------- */
 const viewport = ref(null)
@@ -17,7 +29,7 @@ let ro = null, rafPending = false
 onMounted(() => {
   ro = new ResizeObserver((entries) => {
     for (const e of entries) {
-      viewW.value = e.contentRect.width
+      viewW.value = e.contentRect.width - RULER_W // 右缘留出概览滑尺
       viewH.value = e.contentRect.height
     }
   })
@@ -39,6 +51,7 @@ function onScroll() {
     rafPending = false
   })
 }
+
 
 /* 图片拖拽 → 丢到侧栏文件夹 = 移动文件 */
 function onViewportWheel(e) {
@@ -83,10 +96,10 @@ const GAP = 14
 const HEADER_H = 150 // 编辑排印头块实际高度：56 玻璃让位 + 标题 38 + 小标 14 + 间距 + 规则线（不足会压线）
 
 /* ---------- 编辑排印头块（Wenku8 式：衬线大标题 + 英文小标 + 规则线） ---------- */
-const VIEW_EN = { all: 'LIBRARY', recent: 'RECENT', random: 'RANDOM', trash: 'TRASH', search: 'SEARCH' }
+const VIEW_EN = { all: 'LIBRARY', recent: 'RECENT', uncategorized: 'UNSORTED', random: 'RANDOM', trash: 'TRASH', search: 'SEARCH' }
 const header = computed(() => {
   const viewEn = VIEW_EN[lib.view] || 'LIBRARY'
-  if (lib.view !== 'all') return { big: { all: '全部', recent: '最近使用', random: '随机模式', trash: '回收站' }[lib.view], caption: `${(lib.images.length || 0).toLocaleString()} ITEMS / ${viewEn}` }
+  if (lib.view !== 'all') return { big: { all: '全部', recent: '最近使用', uncategorized: '未分类', random: '随机模式', trash: '回收站' }[lib.view], caption: `${(lib.images.length || 0).toLocaleString()} ITEMS / ${viewEn}` }
   if (!lib.currentDirRel) return { big: '全部', caption: `${(lib.images.length || 0).toLocaleString()} IMAGES / ${viewEn}` }
   const parts = lib.currentDirRel.split('/')
   return { big: parts[parts.length - 1], caption: `${(lib.images.length || 0).toLocaleString()} IMAGES / ${viewEn}` }
@@ -175,10 +188,100 @@ const visible = computed(() => {
   const out = []
   for (let i = start; i < it.length; i++) {
     if (it[i].y > bottom) break
-    out.push(it[i])
+    out.push({ ...it[i], gi: i }) // gi = 全局序号：入场波以真实位置排延迟（滚动补挂载不重放）
   }
   return out
 })
+
+/* ---------- ZCode 式概览滑尺（正文右缘、详情左侧）：canvas dash + 视口高亮 + 点击/拖拽跳转 ---------- */
+const RULER_W = 26
+const rulerEl = ref(null)
+let rulerRAF = 0
+
+function drawRuler() {
+  const cv = rulerEl.value
+  if (!cv) return
+  const dpr = window.devicePixelRatio || 1
+  const w = 28
+  const h = cv.clientHeight || viewH.value
+  if (!h) return
+  if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
+    cv.width = Math.round(w * dpr)
+    cv.height = Math.round(h * dpr)
+  }
+  const ctx = cv.getContext('2d')
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+  ctx.clearRect(0, 0, w, h)
+  const it = items.value
+  if (!it.length) return
+  const css = getComputedStyle(document.documentElement)
+  const accent = css.getPropertyValue('--accent').trim() || '#b4884b'
+
+  /* ZCode 波浪式：轨道切 48 槽，槽 dash 宽度 = 该段图片平均宽度的轮廓；
+     视口所在槽为金色指示 dash，邻近槽以 cos² 衰减抬升（波随滚动行进） */
+  const SLOTS = 48
+  const padTop = 66, padBottom = 14
+  const trackH = Math.max(40, h - padTop - padBottom)
+  const total = totalH.value || 1
+  const slotH = trackH / SLOTS
+  const sum = new Array(SLOTS).fill(0)
+  const cnt = new Array(SLOTS).fill(0)
+  for (const im of it) {
+    const s = Math.max(0, Math.min(SLOTS - 1, Math.floor((im.y / total) * SLOTS)))
+    sum[s] += im.w || 120
+    cnt[s]++
+  }
+  const avg = sum.map((v, i) => (cnt[i] ? v / cnt[i] : 0))
+  const maxAvg = Math.max(...avg) || 1
+
+  const viewSlotF = ((scrollTop.value + viewH.value / 2) / total) * SLOTS
+  ctx.lineCap = 'round'
+  for (let i = 0; i < SLOTS; i++) {
+    if (!cnt[i]) continue
+    const dist = Math.abs(i - viewSlotF)
+    const wave = Math.max(0, 1 - dist / 4.2)
+    const lift = wave * wave /* cos² 近似 */
+    const len = 5 + (avg[i] / maxAvg) * 6 + lift * 14
+    const y = padTop + slotH * (i + 0.5)
+    const x0 = (w - len) / 2
+    ctx.strokeStyle = accent
+    ctx.globalAlpha = 0.16 + lift * 0.78
+    ctx.lineWidth = 1.5 + lift * 3.5
+    ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x0 + len, y); ctx.stroke()
+  }
+  ctx.globalAlpha = 1
+  /* 视口指示：单条金色长 dash（ZCode 焦点线语义） */
+  const iy = padTop + (Math.max(0, Math.min((scrollTop.value + viewH.value / 2) / total, 1))) * trackH
+  ctx.strokeStyle = accent
+  ctx.globalAlpha = 0.95
+  ctx.lineWidth = 4
+  ctx.beginPath(); ctx.moveTo(3, iy); ctx.lineTo(w - 3, iy); ctx.stroke()
+  ctx.globalAlpha = 1
+}
+function queueRuler() {
+  if (rulerRAF) return
+  rulerRAF = requestAnimationFrame(() => { rulerRAF = 0; drawRuler() })
+}
+watch([scrollTop, totalH, viewH, viewW, () => items.value.length], queueRuler)
+onMounted(queueRuler)
+
+/* 滑尺交互：按下/拖拽 → 按比例跳转（即时，ZCode 同款） */
+let dragRuler = false
+function rulerJump(e) {
+  const r = e.currentTarget.getBoundingClientRect()
+  const padTop = 66, padBottom = 14
+  const trackH = Math.max(40, r.height - padTop - padBottom)
+  const frac = Math.max(0, Math.min((e.clientY - r.top - padTop) / trackH, 1))
+  const target = frac * totalH.value - viewH.value / 2
+  viewport.value.scrollTop = Math.max(0, Math.min(target, totalH.value - viewH.value))
+}
+function onRulerDown(e) {
+  dragRuler = true
+  try { e.currentTarget.setPointerCapture(e.pointerId) } catch { /* 合成指针无法捕获，跳过 */ }
+  rulerJump(e)
+}
+function onRulerMove(e) { if (dragRuler) rulerJump(e) }
+function onRulerUp() { dragRuler = false }
 
 /* ---------- 缩略图按需补齐（只对可视窗口，带超时兜底防子进程挂起） ---------- */
 const inFlight = new Map() // path -> 时间戳
@@ -225,25 +328,28 @@ const cells = computed(() =>
 </script>
 
 <template>
+  <canvas ref="rulerEl" class="ov-ruler"
+          @pointerdown.prevent="onRulerDown" @pointermove="onRulerMove"
+          @pointerup="onRulerUp" @pointercancel="onRulerUp" />
   <div ref="viewport" class="grid-viewport" @wheel="onViewportWheel">
     <div class="canvas" :style="{ height: totalH + 'px' }">
       <!-- 编辑排印头块：滚动时整体穿入玻璃顶栏（同 Wenku8） -->
-      <header class="page-head" @mousedown="startWindowDrag">
+      <header :key="'head-' + waveSeq" class="page-head wi" style="--d: 0ms" @mousedown="startWindowDrag">
         <h2 class="head-big">{{ header.big }}</h2>
         <div class="head-caption">{{ header.caption }}</div>
         <div class="head-rule"><i /></div>
       </header>
       <div
-        v-for="img in cells" :key="img.id"
+        v-for="img in cells" :key="img.id + '-' + waveSeq"
         class="cell" :class="{ selected: img.file_path === lib.selectedPath }"
-        :style="{ transform: `translate(${img.x}px, ${img.y + 0}px)`, width: img.w + 'px', height: img.h + 'px' }"
+        :style="{ transform: `translate(${img.x}px, ${img.y + 0}px)`, width: img.w + 'px', height: img.h + 'px', '--d': waveDelay(img.gi) + 'ms' }"
         draggable="true"
         @dragstart="onCellDragStart($event, img)"
         @click="lib.select(img.file_path)"
         @dblclick="lib.openLightbox(img.file_path)"
         @contextmenu.prevent="lib.openContextMenu($event, img)"
       >
-        <div class="thumb">
+        <div class="thumb wi" :class="{ nowi: img.gi >= 48 }">
           <img v-if="img.src" :src="img.src" loading="lazy" draggable="false" />
           <div v-else class="noimg">∘</div>
           <!-- PicRand 式悬停信息条：叠在图片内部底部，不占布局 -->
@@ -257,15 +363,23 @@ const cells = computed(() =>
 </template>
 
 <style scoped>
+/* ZCode 式概览滑尺：正文右缘、详情左侧 */
+.ov-ruler {
+  position: fixed; right: 10px; top: 74px; width: 28px; height: calc(100vh - 94px);
+  z-index: 10; /* 钉死窗口右缘不随详情缩放；详情浮岛(12/15)打开时覆盖滑尺 */
+  cursor: pointer; touch-action: none;
+}
 .grid-viewport {
   flex: 1; overflow-y: auto; overflow-x: hidden;
   transition: padding-right 0.2s ease;
   padding: 0 6px 20px 8px;
   position: relative;
 }
-.grid-viewport::-webkit-scrollbar { width: 8px; }
-.grid-viewport::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
-.canvas { position: relative; width: 100%; }
+/* 原生滚动条隐藏：概览滑尺接管其职能（残留即它） */
+.grid-viewport { scrollbar-width: none; }
+.grid-viewport::-webkit-scrollbar { width: 0; height: 0; }
+.grid-viewport::-webkit-scrollbar-thumb { background: transparent; }
+.canvas { position: relative; width: 100%; margin-right: 26px; } /* 右缘让位概览滑尺（详情在其右侧） */
 .cell { position: absolute; top: 0; left: 0; cursor: default; will-change: transform; }
 .thumb {
   position: relative; width: 100%; height: 100%;
@@ -312,7 +426,7 @@ const cells = computed(() =>
   font-size: 11px; letter-spacing: 4px; color: var(--text-2);
   text-transform: uppercase; margin-bottom: 10px;
 }
-.head-rule { display: flex; align-items: center; gap: 8px; }
+.head-rule { display: flex; align-items: center; gap: 8px; margin-right: 36px; } /* 右侧让位概览滑尺 */
 .head-rule i { flex: 1; height: 1px; background: var(--border); }
 .head-rule::after { content: ''; width: 5px; height: 5px; background: var(--accent); }
 </style>

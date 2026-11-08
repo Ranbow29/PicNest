@@ -121,13 +121,13 @@ async function onDrop(e) {
 /* 详情统一 overlay：悬浮于内容之上（滚动条自然到最右），两模式同位同尺寸
    top 64 = 让过 42px 玻璃顶栏 + 20px 拖尾渐隐（顶栏下缘 61，留 3px 呼吸） */
 .browse :deep(.inspector), .insp-overlay :deep(.inspector) {
-  position: absolute; top: 64px; right: 8px; bottom: 8px;
+  position: absolute; top: 64px; right: 8px; bottom: 8px; z-index: 12;
   width: var(--insp-w, 296px); margin: 0; height: auto;
   max-height: none;
   pointer-events: auto;
 }
-.insp-overlay .resize-handle { margin: 64px 0 8px 0; pointer-events: auto; }
-.browse .resize-handle { margin: 64px 0 8px 0; }
+.insp-overlay .resize-handle { margin: 64px 0 8px 0; pointer-events: auto; z-index: 12; }
+.browse .resize-handle { margin: 64px 0 8px 0; z-index: 12; }
 .insp-enter-active, .insp-leave-active { transition: transform 0.24s ease, opacity 0.24s ease; }
 .insp-enter-from, .insp-leave-to { transform: translateX(40px); opacity: 0; }
 /* 大图模式详情容器：必须 inset:0（缺 left 会收缩成手柄宽，overflow:hidden 裁掉整个面板）；

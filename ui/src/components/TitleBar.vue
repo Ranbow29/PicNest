@@ -4,6 +4,8 @@ import { useLibrary } from '../stores/library'
 import FilterBar from './FilterBar.vue'
 import { api } from '../api'
 import { startWindowDrag, onBarDblclick } from '../lib/winDrag'
+import AnimIcon from './AnimIcon.vue'
+import { collectiveShake } from '../lib/iconMotion'
 
 // 主面板顶栏 = 顶部玻璃条（内容从其底下穿过），按模式变形：
 // 浏览模式（面包屑/筛选/布局排列/缩放/搜索） ⇄ 大图模式（返回/序号/缩放）；窗控圆形按钮内联右端
@@ -24,10 +26,11 @@ const LAYOUTS = [
 ]
 const layoutMeta = computed(() => LAYOUTS.find((l) => l.key === lib.layout) || LAYOUTS[0])
 const panelOpen = ref(false)
-function togglePanel() { panelOpen.value = !panelOpen.value; lib.filterBarOpen = false }
-function toggleFilterBar() { lib.filterBarOpen = !lib.filterBarOpen; panelOpen.value = false }
+function togglePanel() { panelOpen.value = !panelOpen.value; lib.filterBarOpen = false; collectiveShake() }
+function toggleFilterBar() { lib.filterBarOpen = !lib.filterBarOpen; panelOpen.value = false; collectiveShake() }
 function closePanel(e) {
   if (!e.target.closest('.vo-wrap') && !e.target.closest('.funnel-pop')) {
+    if (panelOpen.value || lib.filterBarOpen) collectiveShake()
     panelOpen.value = false
     lib.filterBarOpen = false
   }
@@ -107,19 +110,20 @@ function onKey(e) {
       </div>
       <div class="vo-wrap">
         <button class="tool funnel" :class="{ on: lib.filterBarOpen }" title="筛选工具 Ctrl+Shift+F" @click.stop="toggleFilterBar">
-          ⧩<i v-if="lib.activeFilterCount()" class="badge">{{ lib.activeFilterCount() }}</i>
+          <AnimIcon name="filter" :size="15" ambient /><i v-if="lib.activeFilterCount()" class="badge">{{ lib.activeFilterCount() }}</i>
         </button>
         <FilterBar v-if="lib.filterBarOpen" class="funnel-pop" />
       </div>
       <div class="vo-wrap">
         <button class="tool" :class="{ on: panelOpen }" :title="`布局：${layoutMeta.label} · 排列：${sortLabel}`" @click.stop="togglePanel">
-          {{ layoutMeta.icon }}
+          <AnimIcon :name="layoutMeta.key === 'grid' ? 'grid' : layoutMeta.key === 'masonry' ? 'layout' : 'justified'" :size="15" ambient />
         </button>
         <div v-if="panelOpen" class="vo-panel glass-card" @click.stop>
           <div class="vo-cap">布局方式</div>
-          <div class="vo-grid c3">
-            <button v-for="l in LAYOUTS" :key="l.key" class="vo-cell" :class="{ on: lib.layout === l.key }" @click="lib.layout = l.key">
-              <i>{{ l.icon }}</i>{{ l.label }}
+          <div class="seg3" :style="{ '--seg-i': Math.max(0, LAYOUTS.findIndex((l) => l.key === lib.layout)) }">
+            <i class="seg-thumb" />
+            <button v-for="l in LAYOUTS" :key="l.key" class="seg-cell" :class="{ on: lib.layout === l.key }" @click="lib.layout = l.key">
+              <AnimIcon :name="l.key === 'grid' ? 'grid' : l.key === 'masonry' ? 'layout' : 'justified'" :size="15" />{{ l.label }}
             </button>
           </div>
           <div class="vo-cap">
@@ -145,8 +149,8 @@ function onKey(e) {
     <div class="spacer" />
     <!-- 窗控 + 详情开关：圆形亮色，内联右端（与其他窗口右上角对齐） -->
     <div class="bar-controls">
-      <button class="wc" :class="{ on: lib.viewer.showInspector }" title="详情面板（收起/放出）" @click="lib.viewer.showInspector = !lib.viewer.showInspector">◧</button>
-      <button class="wc" title="置顶" @click="api.windowToggleAlwaysOnTop()">✦</button>
+      <button class="wc" :class="{ on: lib.viewer.showInspector }" title="详情面板（收起/放出）" @click="lib.toggleInspector()"><AnimIcon name="contents" :size="14" ambient /></button>
+      <button class="wc" title="置顶" @click="api.windowToggleAlwaysOnTop()"><AnimIcon name="pin" :size="14" ambient /></button>
       <button class="wc" title="最小化" @click="api.windowMinimize()">─</button>
       <button class="wc" title="最大化" @click="api.windowMaximize()">▢</button>
       <button class="wc close" title="关闭" @click="api.windowClose()">✕</button>
@@ -238,8 +242,31 @@ button.tool.funnel .badge {
 .vo-dir { border: none; background: transparent; color: var(--accent); font-size: 11px; cursor: pointer; padding: 0; letter-spacing: 0; }
 .vo-dir:hover { text-decoration: underline; }
 .vo-grid { display: grid; gap: 6px; }
-.vo-grid.c3 { grid-template-columns: repeat(3, 1fr); }
 .vo-grid.c4 { grid-template-columns: repeat(4, 1fr); padding-bottom: 4px; }
+/* 玻璃分段钮（Wenku8 GlassChoiceGroup 语义）：滑动指示器 + 过冲曲线 */
+.seg3 {
+  position: relative; display: grid; grid-template-columns: repeat(3, 1fr);
+  gap: 0; padding: 4px; border: 1px solid var(--border); border-radius: 12px;
+  background: var(--bg-2);
+}
+.seg-thumb {
+  position: absolute; top: 4px; bottom: 4px; left: 4px;
+  width: calc((100% - 8px) / 3);
+  transform: translateX(calc(var(--seg-i, 0) * 100%));
+  transition: transform 280ms var(--ease-overshoot);
+  background: var(--accent-weak); border: 1px solid var(--accent); border-radius: 9px;
+  pointer-events: none;
+}
+.seg-cell {
+  position: relative; z-index: 1;
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  border: none; background: transparent; color: var(--text-2);
+  border-radius: 9px; padding: 7px 4px; font-size: 12px; cursor: pointer;
+  transition: color 0.15s;
+}
+.seg-cell i { font-style: normal; font-size: 15px; line-height: 1; }
+.seg-cell:hover { color: var(--text); }
+.seg-cell.on { color: var(--accent); font-weight: 600; }
 .vo-cell {
   display: flex; flex-direction: column; align-items: center; gap: 3px;
   border: 1px solid var(--border); background: transparent; color: var(--text-2);

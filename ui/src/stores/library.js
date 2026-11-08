@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { deltaE76, deltaE2000, isGrayPalettes } from '../lib/eagleColor'
+import { collectiveShake } from '../lib/iconMotion'
 import { api } from '../api'
 
 // 图巢核心状态：根文件夹（物理目录）→ 派生目录树 → 子目录图片
@@ -33,6 +34,8 @@ export const useLibrary = defineStore('library', {
     activeRootId: null,
     tree: null,           // {rootPath, tree: {name, rel, count, total, children}}
     counts: { all: 0 },
+    dirMemory: {},           // rel -> { color?, expanded? }（refreshTree 时全表缓存）
+    dirMenu: { open: false, x: 0, y: 0, rel: '', node: null },
     view: 'all',          // all | recent | random | trash | search
     searchQuery: '',
     currentDirRel: null,  // null=全部；''=根层；'a/b'=子目录
@@ -96,7 +99,9 @@ export const useLibrary = defineStore('library', {
           if (!this.roots.length) await new Promise((r) => setTimeout(r, 1500))
         }
         if (this.roots.length && this.activeRootId == null) {
-          this.activeRootId = this.roots[0].id
+          /* 记住上次使用的资料库；失效（被移除）则回退第一个 */
+          const saved = Number(localStorage.getItem('picnest.activeRootId'))
+          this.activeRootId = this.roots.some((r) => r.id === saved) ? saved : this.roots[0].id
           await this.refreshTree()
           await this.openDir(null)
         }
@@ -157,11 +162,88 @@ export const useLibrary = defineStore('library', {
       if (this.activeRootId == null) return
       this.tree = await api.dirTree(this.activeRootId)
       this.counts = await window.picrand.picnestViewCounts(this.activeRootId)
+      this.dirMemory = await api.dirMemoryGet('') // 全表缓存：树渲染读颜色/展开态零 IPC
+    },
+
+    /* 资料库切换：同 id 忽略；全链路键 = activeRootId，tree/counts/images 按 folderId 自动重建 */
+    async switchRoot(id) {
+      if (this.activeRootId === id) return
+      if (this.lightbox.open) this.closeLightbox()
+      collectiveShake()
+      this.activeRootId = id
+      this.currentDirRel = null
+      this.view = 'all'
+      this.dirMemory = {}
+      localStorage.setItem('picnest.activeRootId', String(id))
+      await this.refreshTree()
+      await this.loadImages()
+    },
+
+    /* ---- 资料库文件夹管理 ---- */
+    absPathOf(rel) {
+      const root = this.tree?.rootPath
+      if (!root) return ''
+      return rel ? root + '\\' + rel.split('/').join('\\') : root
+    },
+
+    async mkdirIn(parentRel, name) {
+      const parentAbs = this.absPathOf(parentRel)
+      const r = await api.mkdir(parentAbs, name)
+      if (!r?.ok) { if (r?.error) this.error = r.error; return r }
+      const root = this.tree.rootPath
+      const newRel = parentRel ? parentRel + '/' + r.name : r.name
+      const root0 = this.roots.find((x) => x.id === this.activeRootId)
+      if (root0) { try { await api.syncFolderSnapshot(root0.path) } catch { /* 静默 */ } }
+      await this.refreshTree()
+      await this.loadImages()
+      return { ...r, rel: newRel }
+    },
+
+    async renameDir(rel, newName) {
+      const oldAbs = this.absPathOf(rel)
+      const parentRel = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : ''
+      const r = await api.renameDir(oldAbs, newName, rel, parentRel)
+      if (!r?.ok) { if (r?.error) this.error = r.error; return r }
+      const newRel = parentRel ? parentRel + '/' + r.name : r.name
+      const root0 = this.roots.find((x) => x.id === this.activeRootId)
+      if (root0) { try { await api.syncFolderSnapshot(root0.path) } catch { /* 静默 */ } }
+      if (this.currentDirRel === rel || (this.currentDirRel || '').startsWith(rel + '/')) {
+        this.currentDirRel = newRel + this.currentDirRel.slice(rel.length)
+      }
+      await this.refreshTree()
+      await this.loadImages()
+      return { ...r, rel: newRel }
+    },
+
+    async sortDir(rel, mode) {
+      const r = await api.dirSort(rel || '', this.absPathOf(rel), mode)
+      if (r?.ok) await this.refreshTree()
+      else if (r?.error) this.error = r.error
+      return r
+    },
+
+    async sortDirRecursive(rel, mode) {
+      const r = await api.dirSortRecursive(this.absPathOf(rel), rel || '', mode)
+      if (r?.ok) await this.refreshTree()
+      else if (r?.error) this.error = r.error
+      return r
+    },
+
+    async exportDir(rel) {
+      const r = await api.exportDir(this.absPathOf(rel))
+      return r
+    },
+
+    /* 文件夹记忆（颜色/展开态）：乐观更新本地 + 落 config.json */
+    async patchDirMemory(rel, patch) {
+      this.dirMemory = { ...this.dirMemory, [rel]: { ...(this.dirMemory[rel] || {}), ...patch } }
+      try { await api.dirMemorySet(rel, patch) } catch { /* 静默 */ }
     },
 
     async openDir(rel) {
       // 树上点文件夹 = 离开大图模式和特殊视图，跳进该目录浏览
       if (this.lightbox.open) this.closeLightbox()
+      collectiveShake()
       this.view = 'all'
       this.currentDirRel = rel ?? null
       await this.loadImages()
@@ -169,6 +251,7 @@ export const useLibrary = defineStore('library', {
 
     async switchView(v) {
       if (this.lightbox.open) this.closeLightbox()
+      collectiveShake()
       this.view = v
       this.currentDirRel = null
       this.searchQuery = ''
@@ -185,10 +268,16 @@ export const useLibrary = defineStore('library', {
           this.images = await window.picrand.picnestRandom(this.activeRootId, 300)
         } else if (this.view === 'trash') {
           this.images = await window.picrand.picnestTrashList(this.activeRootId)
+        } else if (this.view === 'uncategorized') {
+          /* 未分类 = 库根层散图（不在任何子文件夹），排序面板可用 */
+          this.images = await api.imagesByDir(this.activeRootId, '__loose__', 0, 100000, this.sortMode, this.sortAsc)
         } else if (this.view === 'search') {
           this.images = this.searchQuery ? await window.picrand.picnestSearch(this.activeRootId, this.searchQuery, 300) : []
         } else {
-          this.images = await api.imagesByDir(this.activeRootId, this.currentDirRel, 0, 100000)
+          /* 全部 = 最新入库流（新图置顶，与文件夹视图彻底分开；忽略升降序开关锁死最新在前）
+             文件夹 = 排序器正常排序（sortMode + sortAsc 全生效） */
+          const inAll = this.view === 'all' && !this.currentDirRel
+          this.images = await api.imagesByDir(this.activeRootId, this.currentDirRel, 0, 100000, inAll ? 'added' : this.sortMode, inAll ? false : this.sortAsc)
         }
         this.selectedPath = null
         this.randomNonce++
@@ -229,7 +318,8 @@ export const useLibrary = defineStore('library', {
     },
 
     async removeFromLibrary(path) {
-      try { await window.picrand.picnestRemove(path) } catch { /* 静默 */ }
+      /* 从库中移除 = 只摘索引（DB 行删除），文件原地保留——曾误接软删（会进回收站视图） */
+      try { await window.picrand.dbDeleteImage(path) } catch { /* 静默 */ }
       this.images = this.images.filter((i) => i.file_path !== path)
       if (this.selectedPath === path) this.selectedPath = null
       await this.refreshTree()
@@ -488,6 +578,8 @@ export const useLibrary = defineStore('library', {
       if (this.sortMode === 'random') this.randomNonce++
       localStorage.setItem('picnest.sortMode', this.sortMode)
       localStorage.setItem('picnest.sortAsc', this.sortAsc ? '1' : '0')
+      /* 文件夹视图排序实时生效（SQL 排序需重查）；全部视图固定最新置顶，不受排序影响 */
+      if (this.currentDirRel) this.loadImages()
     },
 
     async importUrls(urls, targetRel) {
@@ -615,6 +707,11 @@ export const useLibrary = defineStore('library', {
     closeLightbox() {
       this.lightbox = { open: false, path: null }
       this.viewer.cropMode = false
+      collectiveShake()
+    },
+    toggleInspector() {
+      this.viewer.showInspector = !this.viewer.showInspector
+      collectiveShake() // 详情展开/褪去 → 集体晃动
     },
     lightboxNav(dir) {
       const i = this.images.findIndex((x) => x.file_path === this.lightbox.path)
@@ -628,6 +725,12 @@ export const useLibrary = defineStore('library', {
       this.contextMenu = { open: true, x: e.clientX, y: e.clientY, image }
       this.selectedPath = image.file_path
     },
+    openDirMenu(e, node) {
+      this.dirMenu = { open: true, x: e.clientX, y: e.clientY, rel: node.rel || '', node }
+    },
+    closeDirMenu() {
+      this.dirMenu = { open: false, x: 0, y: 0, rel: '', node: null }
+    },
     closeContextMenu() {
       this.contextMenu = { open: false, x: 0, y: 0, image: null }
     },
@@ -640,12 +743,15 @@ export const useLibrary = defineStore('library', {
       if (img) img.rating = rating
     },
     async del(path) {
-      try { await window.picrand.deleteImage(path) } catch (e) { this.error = String(e?.message || e) }
+      /* 丢到回收站 = 应用内软删（deleted_at），文件原地保留 → 进回收站视图可还原。
+         曾误接 PicRand delete-image（文件进系统回收站 + DB 行硬删）→ 回收站视图恒空 */
+      try { await window.picrand.picnestRemove(path) } catch (e) { this.error = String(e?.message || e) }
       this.closeContextMenu()
       if (this.lightbox.open && this.lightbox.path === path) this.closeLightbox()
       // watcher unlink → sync-db → 统一刷新；这里先本地摘除保证即时反馈
       this.images = this.images.filter((i) => i.file_path !== path)
       if (this.selectedPath === path) this.selectedPath = null
+      if (this.counts) this.counts.trash = (this.counts.trash ?? 0) + 1
     },
   },
 })

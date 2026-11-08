@@ -1,6 +1,7 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { useLibrary, extractDropUrls } from '../stores/library'
+import FolderIcon from './FolderIcon.vue'
 
 const props = defineProps({ node: { type: Object, required: true }, depth: { type: Number, default: 0 } })
 defineEmits(['open'])
@@ -8,7 +9,27 @@ const lib = useLibrary()
 const expanded = ref(false)
 const dropMark = ref('') // '' | 'before' | 'after' | 'into'
 
+const rel = computed(() => props.node.rel || '')
+const mem = computed(() => lib.dirMemory[rel.value] || {})
+const colorKey = computed(() => mem.value.color || '')
 const isActive = computed(() => lib.currentDirRel === props.node.rel)
+
+/* 展开态持久化（dirMemory[rel].expanded）；顶层默认展开一次 */
+watch(() => props.node, () => {
+  if (mem.value.expanded !== undefined) expanded.value = !!mem.value.expanded
+}, { immediate: true })
+onMounted(() => {
+  if (props.depth === 0 && mem.value.expanded === undefined) expanded.value = true
+})
+
+function toggleExpand() {
+  expanded.value = !expanded.value
+  lib.patchDirMemory(rel.value, { expanded: expanded.value })
+}
+
+function onContextMenu(e) {
+  lib.openDirMenu(e, { rel: rel.value, node: props.node })
+}
 
 function onDragStart(e) {
   e.dataTransfer.setData('application/x-picnest-dir', props.node.rel)
@@ -55,15 +76,16 @@ async function onDrop(e) {
       class="row" :class="{ active: isActive, into: dropMark === 'into' }"
       :style="{ paddingLeft: 6 + depth * 13 + 'px' }"
       draggable="true"
-      @click="$emit('open', node)" @dblclick="expanded = !expanded"
+      @click="$emit('open', node)" @dblclick="toggleExpand"
       @dragstart="onDragStart" @dragover="onDragOver" @dragleave="onDragLeave" @drop.prevent="onDrop"
+      @contextmenu.prevent="onContextMenu"
     >
       <!-- 嵌套参考线：每层一条竖线，落在该层缩进位 -->
       <i v-for="g in depth" :key="g" class="guide" :style="{ left: 13 + (g - 1) * 13 + 'px' }" />
       <i v-if="dropMark === 'before'" class="drop-line top" />
       <i v-if="dropMark === 'after'" class="drop-line bottom" />
-      <span class="caret" :class="{ open: expanded, leaf: !node.children?.length }" @click.stop="expanded = !expanded">▸</span>
-      <span class="icon">▾</span>
+      <span class="caret" :class="{ open: expanded, leaf: !node.children?.length }" @click.stop="toggleExpand">▸</span>
+      <FolderIcon :color="colorKey" :size="17" :open="expanded" />
       <span class="name" :title="node.name">{{ node.name }}</span>
       <span class="count">{{ node.total }}</span>
     </div>
@@ -77,7 +99,7 @@ async function onDrop(e) {
 .row {
   position: relative;
   display: flex; align-items: center; gap: 5px;
-  height: 26px; margin: 0 6px; padding-right: 8px;
+  height: 27px; margin: 0 6px; padding-right: 8px;
   border-radius: 7px; cursor: default; transition: background 0.15s;
 }
 .row:hover { background: var(--accent-weak); }
@@ -85,6 +107,7 @@ async function onDrop(e) {
   background: var(--accent-weak); font-weight: 600;
 }
 .row.active .name { color: var(--accent); }
+.row.active :deep(.folder-ico) { filter: drop-shadow(0 0 3px var(--accent-weak)); }
 .row.into { background: var(--accent-weak); outline: 1.5px dashed var(--accent); outline-offset: -2px; }
 .guide {
   position: absolute; top: -13px; bottom: -13px; width: 1px;
@@ -104,7 +127,6 @@ async function onDrop(e) {
 }
 .caret.open { transform: rotate(90deg); }
 .caret.leaf { visibility: hidden; }
-.icon { flex: none; font-size: 10px; color: var(--accent); }
 .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
 .count { flex: none; font-size: 10.5px; color: var(--text-2); font-variant-numeric: tabular-nums; }
 </style>

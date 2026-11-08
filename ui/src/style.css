@@ -1,4 +1,25 @@
-/* PicNest 设计 tokens —— 奶玻璃（参考 Wenku8_Flutter）+ 跟随系统明暗 */
+/* PicNest 设计 tokens —— 奶玻璃（参考 Wenku8_Flutter）+ 跟随系统明暗
+   动效规格移植自 Wenku8_Flutter (GPL-2.0-or-later) © MewX / mikufoxxx：
+   入场波 520ms easeOutCubic，墨水窗 0.35/步进 1/24，位移 (-8,-6)，过冲 Cubic(.2,1.06,.35,1) */
+
+/* ---- 入场波（wave.js 编排；元素 class="wi"，祖先任意层设 style="--d:延迟ms"） ----
+   注意：不能打在用 transform 定位的元素上（会覆盖定位），打其内层包裹 */
+.wi {
+  animation: wave-in 520ms cubic-bezier(0.18, 0.72, 0.18, 1) both;
+  animation-delay: var(--d, 0ms);
+}
+.wi.nowi { animation: none; }
+@keyframes wave-in {
+  from { opacity: 0; transform: translate(-8px, -6px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wi { animation: none; }
+}
+
+/* ---- Wenku8 过冲曲线 token（切换/吸附类动作） ---- */
+:root { --ease-overshoot: cubic-bezier(0.2, 1.06, 0.35, 1); }
+
 :root {
   --bg: #f4efe7;
   --bg-2: #ece5d8;

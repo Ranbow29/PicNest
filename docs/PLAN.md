@@ -2,6 +2,8 @@
 
 GPL-3.0 fork of PicRand 2.77.0 · 直链索引（不复制文件）+ Eagle 式文件夹树 · UI 设计语言参考 Wenku8_Flutter（奶玻璃/编辑排印/精致动效）
 
+**开源合规**：动效规格（入场波 520ms/墨水渐入/过冲曲线/玻璃分段钮）移植自 [Wenku8_Flutter](https://github.com/mikufoxxx/Wenku8_Flutter)（GPL-2.0-or-later © MewX / mikufoxxx），本项目按 GPL-3.0 继续授权并保留此声明。
+
 ## 目录
 
 ```
@@ -89,3 +91,7 @@ PicNest/
 13. **dev 数据目录 CWD 相对**（踩坑 #10 的完全体）：PowerShell Start-Process 不固定工作目录 → 进程在错误位置新建空 _internal_data →「库空了」。重启必须 `-WorkingDirectory '...\PicNest\app'`；已清两处垃圾目录
 14. **「已完成」≠「接线」**：ensurePalettes 曾全工程零调用（颜色筛选恒空）；循环终止依赖 processed 字段在 DB 全量时恒 0 → 只回填一批（40/6673）。凡是「后台渐进构建」必须有：init 挂载点 + 不依赖单一返回键的终止条件 + 失败位标空防死循环
 15. **Eagle 真源挖掘法**：resources/ 下 i18n/CSS 是散的，主渲染层在 app.asar（头 16 字节 → jsonLen@12 → JSON 树 → data@8+headerSize），filter 指令模板在 app/js/directives/filter-item-*.html（含色板真值 12 色）；色板匹配有两套——主进程 isMatchColorRule（33% 门槛+±96 拒绝）与搜索窗 $scope.colorFilter（25% 门槛+白底特例），用户体感是后者。tools/asar_probe.py、asar_extract.py 可复用
+
+16. **SQLite LIKE + ESCAPE 陷阱**：ESCAPE '' 生效时模式内裸反斜杠非法 → Windows 路径拼 LIKE 必须连分隔符一起 picnestLikeEscape（未分类视图曾因裸 sep 全体失配）
+17. **Vue 模板作用域没有 window/innerWidth**（两次踩中）：模板表达式里引用会变 undefined → NaNpx。一律在 computed 里取 window 尺寸再绑定
+18. **setup 内 TDZ 三连**：watch/computed 的 getter 注册即求值——引用晚声明的 const/let 直接 ReferenceError 白屏（ImageGrid 滑尺块曾三次踩中：lib、scrollTop、totalH）。新块一律放在全部依赖声明之后；大文件搬运禁用 find('}') 式锚点（会切进函数体内）

@@ -112,9 +112,8 @@ function clearSection(kind) {
 <template>
   <div class="fpanel glass-card" @click.stop>
     <!-- 颜色 -->
-    <div class="fsec">
-      <div class="fsec-head">
-        <span>颜色</span>
+    <div class="fsec wi" style="--d: 0ms">
+      <div class="fsec-head"><i class="eyebrow">COLORS</i><span>颜色</span>
         <button v-if="colorState.on || colorState.gray" class="clear" @click="clearColor">清除</button>
       </div>
       <ColorPicker :model-value="colorState.value ? hexText : '#ffffff'" @update:model-value="pickHex" />
@@ -138,9 +137,8 @@ function clearSection(kind) {
     </div>
 
     <!-- 形状 -->
-    <div class="fsec">
-      <div class="fsec-head">
-        <span>形状</span>
+    <div class="fsec wi" style="--d: 80ms">
+      <div class="fsec-head"><i class="eyebrow">SHAPE</i><span>形状</span>
         <button v-if="f.shapes.length" class="clear" @click="clearSection('shape')">清除</button>
       </div>
       <div class="chips">
@@ -156,9 +154,8 @@ function clearSection(kind) {
     </div>
 
     <!-- 评分 -->
-    <div class="fsec">
-      <div class="fsec-head">
-        <span>评分</span>
+    <div class="fsec wi" style="--d: 160ms">
+      <div class="fsec-head"><i class="eyebrow">RATING</i><span>评分</span>
         <button v-if="f.ratings.length" class="clear" @click="clearSection('rating')">清除</button>
       </div>
       <div class="chips">
@@ -169,9 +166,8 @@ function clearSection(kind) {
     </div>
 
     <!-- 格式 -->
-    <div class="fsec">
-      <div class="fsec-head">
-        <span>格式</span>
+    <div class="fsec wi" style="--d: 240ms">
+      <div class="fsec-head"><i class="eyebrow">FORMAT</i><span>格式</span>
         <button v-if="f.formats.length || f.formatEx.length" class="clear" @click="clearSection('format')">清除</button>
       </div>
       <div class="fmt-search">⌕ <input v-model="formatSearch" placeholder="搜索..." spellcheck="false" /></div>
@@ -196,7 +192,11 @@ function clearSection(kind) {
 .fpanel::-webkit-scrollbar { display: none; }
 .fsec { padding: 8px 0 4px; border-bottom: 1px solid var(--border); }
 .fsec:last-child { border-bottom: none; }
-.fsec-head { display: flex; align-items: center; justify-content: space-between; font-size: 11.5px; color: var(--text-2); letter-spacing: 1px; padding-bottom: 6px; }
+.fsec-head { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--text-2); letter-spacing: 1px; padding-bottom: 6px; }
+.fsec-head .eyebrow {
+  font-style: normal; font-size: 9px; letter-spacing: 2px; color: var(--accent);
+  opacity: 0.75; font-family: Consolas, monospace; padding-top: 1px;
+}
 .clear { border: none; background: transparent; color: var(--accent); font-size: 11px; cursor: pointer; }
 .clear:hover { text-decoration: underline; }
 
@@ -219,7 +219,7 @@ function clearSection(kind) {
 .acc-row { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--text-2); padding-bottom: 8px; }
 .acc-row input { flex: 1; accent-color: var(--accent); }
 
-.chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
 .chip {
   display: inline-flex; align-items: center; gap: 5px;
   border: 1px solid var(--border); background: transparent; color: var(--text-2);

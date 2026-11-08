@@ -5,6 +5,12 @@ import { useLibrary } from '../stores/library'
 const lib = useLibrary()
 const menu = computed(() => lib.contextMenu)
 
+/* 视口钳制定位：innerWidth 不是模板作用域标识（曾渲染成 NaNpx → 菜单钉在左上角） */
+const pos = computed(() => ({
+  left: Math.max(4, Math.min(menu.value.x ?? 0, window.innerWidth - 230)) + 'px',
+  top: Math.max(4, Math.min(menu.value.y ?? 0, window.innerHeight - 280)) + 'px',
+}))
+
 const items = computed(() => {
   if (!menu.value.image) return []
   if (lib.view === 'trash') {
@@ -37,7 +43,7 @@ function onLeave() { lib.closeContextMenu() }
 <template>
   <Teleport to="body">
     <div v-if="menu.open" class="menu-layer" @click="onLeave" @contextmenu.prevent="onLeave">
-      <div class="menu glass-card" :style="{ left: Math.min(menu.x, innerWidth - 220) + 'px', top: Math.min(menu.y, innerHeight - 260) + 'px' }">
+      <div class="menu glass-card" :style="pos">
         <button
           v-for="(it, i) in items" :key="i"
           class="mi" :class="{ danger: it.danger, sep: it.sep }"
