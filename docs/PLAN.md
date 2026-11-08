@@ -302,3 +302,7 @@ PicNest/
     回收站非空（软删图片或回收站文件夹条目）时主进程拒绝并给出件数；活动根被移出后切 roots[0]，空则空态。
     watcher 若正监听该根必须 `stopWatching()` 并清 `_addQueue`——worker 的 add 回调会 `getOrCreateFolder` 把根复活；
     渲染层随后对新活动根 `startWatcher`。IPC：`picnest-remove-root`（picnest-handlers.js） + `picnestRemoveRoot`（apply.mjs P4b）。
+48. **主题系统（2026-11-09，Feb 指定）**：顶栏 ☀/☾ 弹板三选一（跟随系统/浅色/深色），持久化 `picnest.theme`。
+    `ui/src/lib/theme.js` 把 auto 解析成 light/dark 写入 `<html data-theme>` + `style.colorScheme`，并监听系统 `prefers-color-scheme` 变化；
+    `style.css` 的暗色 token 块由 `@media (prefers-color-scheme: dark)` 改为 `:root[data-theme="dark"]`；`index.html` 内联脚本首屏定色防闪白。
+    主题弹板与布局/筛选弹板互斥，Esc/外部点击关闭；按钮在图跟随系统时按解析结果显示 ☀/☾，非 auto 高亮。

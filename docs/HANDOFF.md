@@ -112,6 +112,12 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 - 顶栏**不要**改成浮岛：试过（c7b0844），Feb 当场要求回调（f90daf8），保留全宽玻璃+20px 拖尾。
 - 随机自弹已移除；入场波 520ms；滑尺 48 槽 cos² 波峰 + 单条金色 dash。
 
+### 主题
+- 顶栏 **☀/☾ 按钮** → 三选一弹板：**跟随系统 / 浅色 / 深色**；持久化 `localStorage['picnest.theme']`。
+- `ui/src/lib/theme.js`：auto 模式读 `matchMedia('(prefers-color-scheme: dark)')` 并监听变化，解析结果写 `<html data-theme="light|dark">` + `style.colorScheme`；暗色 token 块是 `:root[data-theme="dark"]`（不再用媒体查询）。
+- `ui/index.html` 内联脚本在首屏样式前落定 `data-theme`，防止强制模式闪白；运行期由 theme.js 接管。
+- 新增颜色必须同时补 light `:root` 与 dark 块；组件里不要直接写 `@media (prefers-color-scheme)`。
+
 ## 三、数据模型 / 关键约束
 
 - `images.sort_order`；`images.trash_group`；`picnest_trash_folders(id, folder_id, rel, abs_path, trash_path, name, image_count, size, deleted_at)`。
@@ -130,7 +136,7 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 
 ## 四、未做 / 技术债
 
-- 标签系统（筛选栏已预留标签位）；主题切换按钮（明暗 tokens 已备）；每文件夹独立排序模式。
+- 标签系统（筛选栏已预留标签位）；每文件夹独立排序模式。
 - 尺寸/评分排序 SQL 补全（目前前端排序）；滑尺 hover 预览；既有同名副本「合并到同名文件夹…」。
 - M6 采集（Eagle 兼容 localhost:41595，复用 Eagle for Edge）；M7 Eagle 库迁移（先只读预演）。
 - 目录删除确认细化（是否「删除并清空回收站」）；大图无视频帧步进（Eagle Ctrl+←/→ 未做）。
@@ -144,7 +150,7 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 | 文件 | 职责 |
 |---|---|
 | `ui/src/stores/library.js` | 全部状态/动作：资料库、树、录入、选择、排序/增量、复制粘贴、回收站、浏览历史、详情、查重、简报/灰度/封面/变换 |
-| `ui/src/lib/winDrag.js` · `iconMotion.js` · `wave.js` · `fileKinds.js` · `dnd.js` | 手动拖窗 · 图标弹簧/集体晃动 · 入场波 · 文本/视频后缀 · 拖拽载荷分类 |
+| `ui/src/lib/winDrag.js` · `iconMotion.js` · `wave.js` · `fileKinds.js` · `dnd.js` · `theme.js` | 手动拖窗 · 图标弹簧/集体晃动 · 入场波 · 文本/视频后缀 · 拖拽载荷分类 · 主题解析切换（auto/light/dark → data-theme） |
 | `ui/src/components/TitleBar.vue` | 顶栏：面包屑/历史/筛选/布局/缩放/搜索/窗控；大图模式 `.lb-clear` 透明 |
 | `ui/src/components/SideBar.vue` · `DirTreeItem.vue` | 根文件+视图入口/树行/拖拽落点/右键；未分类/回收站拖入 |
 | `ui/src/components/ImageGrid.vue` | 布局引擎+虚拟滚动+滑尺+子文件夹卡片+选中/框选/拖动排序+卡片封面+拖入落点 |
@@ -189,6 +195,7 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 25. 入场波 `.wi` 的 fill-mode 保持 `backwards`，不要改回 `both`（会永久压住 hover 的 transform）；卡片浮岛靠 `--shadow-tile*` / `--tile-edge` 双主题 token。
 26. 颜色筛选依赖内存 `palettes`：`loadImages` 末尾必须 `ensurePalettes()`（init 只覆盖启动时文件夹，切换后不补建=颜色筛选恒 0）；FilterBar 取色/灰度、详情现算色板都要兜底触发/回写 `lib.palettes`。
 27. 移出根文件 = 只清 DB 索引/排序键/回收站条目，磁盘文件永不动；回收站非空先拒；watcher 命中该根必须停并清 `_addQueue`，否则根会被 add 事件复活。新增根相关 IPC 走 `picnest-handlers.js` + `apply.mjs` 的 P4b preload 列表两处（渲染层直接 `window.picrand.*`）。
+28. 主题只认 `<html data-theme>`：新颜色同时补 `:root` 与 `:root[data-theme="dark"]`，组件里不要写 `prefers-color-scheme`；auto 的系统联动在 `lib/theme.js`，首屏防闪在 `index.html` 内联脚本。
 
 ## 七、验收状态 / 最近提交
 

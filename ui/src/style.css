@@ -58,8 +58,9 @@
   --font-serif: Georgia, 'Times New Roman', 'Source Han Serif SC', 'Noto Serif SC', 'SimSun', serif;
   --font-sans: 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
 }
-@media (prefers-color-scheme: dark) {
-  :root {
+/* ---- 主题：lib/theme.js 在 <html data-theme="light|dark"> 上落值 ----
+   auto 模式由 JS 解析系统偏好后写成 light/dark；index.html 首屏内联脚本防闪白 */
+:root[data-theme="dark"] {
     --bg: #262636;          /* 侧栏底层：暗色里最亮的一层（ZCode 节奏） */
     --bg-2: #1d1d2a;
     --panel: rgba(38, 38, 54, 0.55);
@@ -86,7 +87,6 @@
     --panel-insp-mid: rgba(52, 52, 72, 0.92);
     --panel-insp-low: rgba(52, 52, 72, 0.84);
     --panel-insp-bot: rgba(52, 52, 72, 0.62);
-  }
 }
 
 * { box-sizing: border-box; }

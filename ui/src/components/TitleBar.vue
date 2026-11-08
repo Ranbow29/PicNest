@@ -7,6 +7,15 @@ import { api } from '../api'
 import { startWindowDrag, onBarDblclick } from '../lib/winDrag'
 import AnimIcon from './AnimIcon.vue'
 import { collectiveShake } from '../lib/iconMotion'
+import { useTheme } from '../lib/theme'
+
+// 主题：auto/light/dark（lib/theme.js 驱动 <html data-theme>）
+const theme = useTheme()
+const themeOpen = ref(false)
+const themeLabel = computed(() => {
+  const m = theme.modes.find((x) => x.key === theme.mode.value) || theme.modes[0]
+  return m.key === 'auto' ? `跟随系统（${theme.resolved.value === 'dark' ? '深色' : '浅色'}）` : m.label
+})
 
 // 主面板顶栏 = 顶部玻璃条（内容从其底下穿过），按模式变形：
 // 浏览模式（面包屑/筛选/布局排列/缩放/搜索） ⇄ 大图模式（返回/序号/缩放）；窗控圆形按钮内联右端
@@ -42,13 +51,16 @@ const topPinned = ref(false)
 async function refreshTopPinned() { try { topPinned.value = !!(await window.picrand.windowIsAlwaysOnTop()) } catch { /* 静默 */ } }
 async function toggleTop() { api.windowToggleAlwaysOnTop(); await refreshTopPinned() }
 onMounted(refreshTopPinned)
-function togglePanel() { panelOpen.value = !panelOpen.value; lib.filterBarOpen = false; collectiveShake() }
-function toggleFilterBar() { lib.filterBarOpen = !lib.filterBarOpen; panelOpen.value = false; collectiveShake() }
+function togglePanel() { panelOpen.value = !panelOpen.value; lib.filterBarOpen = false; themeOpen.value = false; collectiveShake() }
+function toggleFilterBar() { lib.filterBarOpen = !lib.filterBarOpen; panelOpen.value = false; themeOpen.value = false; collectiveShake() }
+function toggleThemePanel() { themeOpen.value = !themeOpen.value; panelOpen.value = false; lib.filterBarOpen = false; collectiveShake() }
+function pickTheme(key) { theme.setMode(key); themeOpen.value = false; collectiveShake() }
 function closePanel(e) {
   if (!e.target.closest('.vo-wrap') && !e.target.closest('.funnel-pop')) {
-    if (panelOpen.value || lib.filterBarOpen) collectiveShake()
+    if (panelOpen.value || lib.filterBarOpen || themeOpen.value) collectiveShake()
     panelOpen.value = false
     lib.filterBarOpen = false
+    themeOpen.value = false
   }
 }
 onMounted(() => {
@@ -87,10 +99,11 @@ watch(searchText, (v) => {
 function onKey(e) {
   if (e.key === 'Escape') {
     if (lib.lightbox.open || lib.brief.open) return // 大图/简报模式自己处理 Esc
-    if (panelOpen.value || lib.filterBarOpen) {
+    if (panelOpen.value || lib.filterBarOpen || themeOpen.value) {
       e.preventDefault() // 告诉 App 这一下 Esc 已被消费，不再清空选中
       panelOpen.value = false
       lib.filterBarOpen = false
+      themeOpen.value = false
       collectiveShake()
     }
     return
@@ -99,7 +112,7 @@ function onKey(e) {
     if (lib.lightbox.open) return
     e.preventDefault()
     lib.filterBarOpen = !lib.filterBarOpen
-    if (lib.filterBarOpen) panelOpen.value = false
+    if (lib.filterBarOpen) { panelOpen.value = false; themeOpen.value = false }
   }
 }
 </script>
@@ -169,6 +182,19 @@ function onKey(e) {
           <div class="vo-grid c4">
             <button v-for="o in SORTS" :key="o.key" class="vo-cell sm" :class="{ on: lib.sortMode === o.key }" @click="lib.setSort(o.key)">{{ o.label }}</button>
           </div>
+        </div>
+      </div>
+      <div class="vo-wrap">
+        <button class="tool theme-btn" :class="{ on: themeOpen || theme.mode.value !== 'auto' }" :title="`主题：${themeLabel}`" @click.stop="toggleThemePanel">
+          <span class="theme-glyph">{{ theme.resolved.value === 'dark' ? '☾' : '☀' }}</span>
+        </button>
+        <div v-if="themeOpen" class="vo-panel glass-card theme-panel" @click.stop>
+          <div class="vo-cap">主题</div>
+          <button v-for="m in theme.modes" :key="m.key" class="theme-opt" :class="{ on: theme.mode.value === m.key }"
+                  @click="pickTheme(m.key)">
+            <span>{{ m.label }}</span><i v-if="theme.mode.value === m.key">✓</i>
+          </button>
+          <div class="theme-hint">跟随系统：随 Windows 明暗自动切换</div>
         </div>
       </div>
       <div class="zoom-slider">
@@ -280,6 +306,19 @@ function onKey(e) {
   box-shadow: inset 0 0 0 1px var(--accent);
 }
 .vo-wrap { position: relative; }
+/* ---- 主题选择 ---- */
+.theme-btn { padding: 0 6px; }
+.theme-glyph { font-family: 'Segoe UI Symbol', var(--font-sans); font-size: 15px; line-height: 1; }
+.theme-panel { width: 196px; padding: 4px 8px 8px; }
+.theme-opt {
+  display: flex; align-items: center; justify-content: space-between; width: 100%;
+  border: none; background: transparent; color: var(--text);
+  padding: 8px 10px; border-radius: 8px; font-size: 12.5px; cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.theme-opt:hover { background: var(--accent-weak); }
+.theme-opt.on { color: var(--accent); font-weight: 600; }
+.theme-hint { padding: 6px 10px 2px; font-size: 10.5px; line-height: 1.5; color: var(--text-2); opacity: 0.8; }
 button.tool.funnel { position: relative; }
 button.tool.funnel .badge {
   position: absolute; top: -3px; right: -3px;

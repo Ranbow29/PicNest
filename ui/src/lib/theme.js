@@ -1,0 +1,43 @@
+// 主题系统：auto（跟随系统）/ light / dark
+// - 持久化 localStorage: picnest.theme
+// - <html data-theme="light|dark"> 驱动 style.css 的 token 块
+// - 首屏防闪白由 index.html 内联脚本处理，这里负责运行期切换与系统联动
+import { ref, computed, watch } from 'vue'
+
+const MODES = [
+  { key: 'auto', label: '跟随系统' },
+  { key: 'light', label: '浅色' },
+  { key: 'dark', label: '深色' },
+]
+const KEY = 'picnest.theme'
+const saved = localStorage.getItem(KEY)
+const mode = ref(MODES.some((m) => m.key === saved) ? saved : 'auto')
+
+const mq = window.matchMedia?.('(prefers-color-scheme: dark)')
+const systemDark = ref(!!mq?.matches)
+if (mq) {
+  const onChange = (e) => { systemDark.value = !!e.matches }
+  if (mq.addEventListener) mq.addEventListener('change', onChange)
+  else if (mq.addListener) mq.addListener(onChange)
+}
+
+const resolved = computed(() => (mode.value === 'auto' ? (systemDark.value ? 'dark' : 'light') : mode.value))
+
+function apply(v) {
+  document.documentElement.dataset.theme = v
+  document.documentElement.style.colorScheme = v
+}
+watch(resolved, apply, { immediate: true })
+
+export function useTheme() {
+  return {
+    modes: MODES,
+    mode,
+    resolved,
+    setMode(key) {
+      if (!MODES.some((m) => m.key === key)) return
+      mode.value = key
+      localStorage.setItem(KEY, key)
+    },
+  }
+}
