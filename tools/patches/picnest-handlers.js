@@ -20,6 +20,22 @@ function picnestMigrate() {
   try {
     getDb().exec("ALTER TABLE images ADD COLUMN palettes TEXT DEFAULT NULL");
   } catch (e) {}
+  try {
+    getDb().exec("ALTER TABLE images ADD COLUMN trash_group INTEGER DEFAULT NULL");
+  } catch (e) {}
+  try {
+    getDb().exec(`CREATE TABLE IF NOT EXISTS picnest_trash_folders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      folder_id INTEGER NOT NULL,
+      rel TEXT NOT NULL,
+      abs_path TEXT NOT NULL,
+      trash_path TEXT NOT NULL,
+      name TEXT NOT NULL,
+      image_count INTEGER DEFAULT 0,
+      size INTEGER DEFAULT 0,
+      deleted_at INTEGER NOT NULL
+    )`);
+  } catch (e) {}
   _picnestMigrated = true;
 }
 
@@ -635,48 +651,169 @@ electron.ipcMain.handle("picnest-mkdir", (_event, parentPath, name) => {
   }
 });
 
-/* 删除文件夹：整包移入 Windows 回收站（可还原），同时清 DB 索引与 dirMemory/排序残留；库根禁止 */
-electron.ipcMain.handle("picnest-delete-dir", async (_event, dirPath, rel) => {
+/* ==== 图巢内部回收站：文件夹软删除（移动进 AppData 回收区，记录原路径，可原位还原） ==== */
+function picnestMoveAny(src, dst) {
+  try { fs.renameSync(src, dst); return; } catch (e) {
+    if (e && e.code === "EXDEV") {
+      fs.cpSync(src, dst, { recursive: true });
+      fs.rmSync(src, { recursive: true, force: true });
+      return;
+    }
+    throw e;
+  }
+}
+function picnestTrashFolder(abs, rel, rootId) {
+  picnestMigrate();
+  const db = getDb();
+  const prefix = abs.replace(/[\\/]+$/, "") + path.sep;
+  const pattern = picnestLikeEscape(prefix) + "%";
+  const stat = db.prepare("SELECT COUNT(*) c, COALESCE(SUM(file_size),0) s FROM images WHERE file_path LIKE ? ESCAPE '\\'").get(pattern);
+  const base = path.basename(abs);
+  const trashRoot = path.join(dataDir, "picnest-trash", String(rootId));
+  fs.mkdirSync(trashRoot, { recursive: true });
+  const now = Date.now();
+  const info = db.prepare(
+    "INSERT INTO picnest_trash_folders (folder_id, rel, abs_path, trash_path, name, image_count, size, deleted_at) VALUES (?,?,?,?,?,?,?,?)"
+  ).run(rootId, rel || "", abs, "", base, stat?.c || 0, stat?.s || 0, now);
+  const id = info.lastInsertRowid;
+  const trashPath = path.join(trashRoot, id + "-" + base);
+  try {
+    picnestMoveAny(abs, trashPath);
+  } catch (e) {
+    db.prepare("DELETE FROM picnest_trash_folders WHERE id = ?").run(id);
+    throw e;
+  }
+  db.prepare("UPDATE picnest_trash_folders SET trash_path = ? WHERE id = ?").run(trashPath, id);
+  const rows = db.prepare("SELECT file_path FROM images WHERE file_path LIKE ? ESCAPE '\\'").all(pattern);
+  const upd = db.prepare("UPDATE images SET file_path = ?, file_name = ?, deleted_at = ?, trash_group = ? WHERE file_path = ?");
+  for (const r of rows) {
+    const np = trashPath + r.file_path.slice(abs.length);
+    upd.run(np, path.basename(np), now, id, r.file_path);
+  }
+  return { ok: true, id, name: base, count: stat?.c || 0, size: stat?.s || 0, soft: true };
+}
+function picnestRestoreFolderRow(row) {
+  if (!row) return { ok: false, error: "记录不存在" };
+  if (!fs.existsSync(row.trash_path)) return { ok: false, error: "回收站中的文件夹已丢失" };
+  let dest = row.abs_path;
+  if (fs.existsSync(dest)) {
+    const parent = path.dirname(dest), base = path.basename(dest);
+    for (let n = 2; fs.existsSync(dest); n++) dest = path.join(parent, base + " (" + n + ")");
+  }
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  picnestMoveAny(row.trash_path, dest);
+  const oldPrefix = row.trash_path.replace(/[\\/]+$/, "");
+  const db = getDb();
+  const rows = db.prepare("SELECT file_path FROM images WHERE trash_group = ?").all(row.id);
+  const upd = db.prepare("UPDATE images SET file_path = ?, file_name = ?, deleted_at = NULL, trash_group = NULL WHERE file_path = ?");
+  for (const r of rows) {
+    const np = dest + r.file_path.slice(oldPrefix.length);
+    upd.run(np, path.basename(np), r.file_path);
+  }
+  db.prepare("DELETE FROM picnest_trash_folders WHERE id = ?").run(row.id);
+  const root = db.prepare("SELECT path FROM folders WHERE id = ?").get(row.folder_id);
+  const sep = root && root.path.includes("\\") ? "\\" : "/";
+  const rel = root && dest.toLowerCase().startsWith((root.path + sep).toLowerCase())
+    ? dest.slice(root.path.length + 1).split(sep).join("/")
+    : row.rel;
+  return { ok: true, path: dest, rel, name: path.basename(dest), count: rows.length };
+}
+async function picnestPurgeFolderRow(row) {
+  if (!row) return { ok: false, error: "记录不存在" };
+  try {
+    await electron.shell.trashItem(row.trash_path);
+  } catch (e) {
+    try { fs.rmSync(row.trash_path, { recursive: true, force: true }); } catch (e2) { /* 静默 */ }
+  }
+  const db = getDb();
+  db.prepare("DELETE FROM images WHERE trash_group = ?").run(row.id);
+  db.prepare("DELETE FROM picnest_trash_folders WHERE id = ?").run(row.id);
+  return { ok: true, count: row.image_count || 0 };
+}
+
+/* 删除文件夹：软删进图巢回收站（文件夹形式），不物理丢 Windows 回收站；库根禁止 */
+electron.ipcMain.handle("picnest-delete-dir", async (_event, dirPath, rel, rootId) => {
   try {
     if (!dirPath) return { ok: false, error: "路径为空" };
     const abs = path.resolve(dirPath);
     if (!fs.existsSync(abs)) return { ok: false, error: "目录不存在" };
     if (!fs.statSync(abs).isDirectory()) return { ok: false, error: "不是文件夹" };
     if (path.dirname(abs) === abs) return { ok: false, error: "不能删除盘符根目录" };
-    if (getDb().prepare("SELECT id FROM folders WHERE path = ?").get(abs)) {
+    const db = getDb();
+    if (db.prepare("SELECT id FROM folders WHERE path = ?").get(abs)) {
       return { ok: false, error: "资料库根不能在文件夹区删除" };
     }
-    const prefix = abs.replace(/[\\/]+$/, "") + path.sep;
-    const pattern = picnestLikeEscape(prefix) + "%";
-    const cnt = getDb().prepare("SELECT COUNT(*) AS c FROM images WHERE file_path LIKE ? ESCAPE '\\'").get(pattern).c;
-    await electron.shell.trashItem(abs);
-    getDb().prepare("DELETE FROM images WHERE file_path LIKE ? ESCAPE '\\'").run(pattern);
-    /* 清理 dirMemory 键与父级排序中的名字 */
-    if (rel) {
-      const cleanRel = String(rel).replace(/^\/+|\/+$/g, "");
-      const parentRel = cleanRel.includes("/") ? cleanRel.slice(0, cleanRel.lastIndexOf("/")) : "";
-      const name = cleanRel.split("/").pop();
-      let c = {};
-      try { c = JSON.parse(fs.readFileSync(configPath, "utf-8")); } catch (e) {}
-      let changed = false;
-      const mem = c.picnestDirMemory || {};
-      for (const key of Object.keys(mem)) {
-        if (key === cleanRel || key.startsWith(cleanRel + "/")) { delete mem[key]; changed = true; }
-      }
-      if (changed) c.picnestDirMemory = mem;
-      const order = c.picnestDirOrder || {};
-      const pkey = parentRel || "__root__";
-      if (Array.isArray(order[pkey]) && order[pkey].includes(name)) {
-        order[pkey] = order[pkey].filter((n) => n !== name);
-        c.picnestDirOrder = order;
-        changed = true;
-      }
-      if (changed) fs.writeFileSync(configPath, JSON.stringify(c, null, 2));
+    let rid = rootId;
+    if (!rid) {
+      const sep0 = abs.includes("\\") ? "\\" : "/";
+      const roots = db.prepare("SELECT id, path FROM folders").all();
+      const hit = roots.filter((f) => abs.toLowerCase().startsWith((f.path + sep0).toLowerCase()))
+        .sort((a, b) => b.path.length - a.path.length)[0];
+      rid = hit?.id;
     }
-    return { ok: true, count: cnt, path: abs };
+    if (!rid) return { ok: false, error: "找不到所属资料库" };
+    return picnestTrashFolder(abs, rel || "", rid);
   } catch (e) {
     return { ok: false, error: String(e?.message || e) };
   }
+});
+
+/* 回收站文件夹：列表 / 还原 / 彻底删除 / 全部还原 / 清空 */
+electron.ipcMain.handle("picnest-trash-folders", (_event, folderId) => {
+  picnestMigrate();
+  return getDb().prepare(
+    "SELECT id, rel, abs_path, name, image_count, size, deleted_at FROM picnest_trash_folders WHERE folder_id = ? ORDER BY deleted_at DESC"
+  ).all(folderId);
+});
+electron.ipcMain.handle("picnest-trash-restore-folder", (_event, id) => {
+  picnestMigrate();
+  const row = getDb().prepare("SELECT * FROM picnest_trash_folders WHERE id = ?").get(id);
+  try { return picnestRestoreFolderRow(row); } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+});
+electron.ipcMain.handle("picnest-trash-purge-folder", async (_event, id) => {
+  picnestMigrate();
+  const row = getDb().prepare("SELECT * FROM picnest_trash_folders WHERE id = ?").get(id);
+  try { return await picnestPurgeFolderRow(row); } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+});
+electron.ipcMain.handle("picnest-trash-restore-all", async (_event, folderId) => {
+  picnestMigrate();
+  const db = getDb();
+  const folders = db.prepare("SELECT * FROM picnest_trash_folders WHERE folder_id = ?").all(folderId);
+  let restoredFolders = 0, restoredImages = 0, failed = 0;
+  for (const row of folders) {
+    try {
+      const r = picnestRestoreFolderRow(row);
+      if (r.ok) { restoredFolders++; restoredImages += r.count || 0; } else failed++;
+    } catch (e) { failed++; }
+  }
+  const imgs = db.prepare("SELECT file_path FROM images WHERE folder_id = ? AND deleted_at IS NOT NULL AND trash_group IS NULL").all(folderId);
+  const upd = db.prepare("UPDATE images SET deleted_at = NULL, trash_group = NULL WHERE file_path = ?");
+  for (const r of imgs) { upd.run(r.file_path); restoredImages++; }
+  return { ok: failed === 0, restoredFolders, restoredImages, failed };
+});
+electron.ipcMain.handle("picnest-trash-purge-all", async (_event, folderId) => {
+  picnestMigrate();
+  const db = getDb();
+  const folders = db.prepare("SELECT * FROM picnest_trash_folders WHERE folder_id = ?").all(folderId);
+  let purgedFolders = 0, purgedImages = 0, failed = 0;
+  for (const row of folders) {
+    try {
+      const r = await picnestPurgeFolderRow(row);
+      if (r.ok) { purgedFolders++; purgedImages += r.count || 0; } else failed++;
+    } catch (e) { failed++; }
+  }
+  const imgs = db.prepare("SELECT file_path FROM images WHERE folder_id = ? AND deleted_at IS NOT NULL AND trash_group IS NULL").all(folderId);
+  if (imgs.length) {
+    try {
+      const trash = await import("trash");
+      await trash.default(imgs.map((r) => r.file_path), { glob: false });
+    } catch (e) {
+      for (const r of imgs) { try { fs.unlinkSync(r.file_path); } catch (e2) { /* 静默 */ } }
+    }
+    purgedImages += imgs.length;
+  }
+  db.prepare("DELETE FROM images WHERE folder_id = ? AND deleted_at IS NOT NULL AND trash_group IS NULL").run(folderId);
+  return { ok: failed === 0, purgedFolders, purgedImages, failed };
 });
 
 /* 资料库重命名：只改显示名，不动物理目录（资料库区的编辑入口） */
@@ -816,11 +953,14 @@ electron.ipcMain.handle("picnest-export-dir", async (_event, dirPath) => {
 
 /* ---- M4 四视图：软删列 + 计数 + 随机 + 回收站 + 搜索 ---- */
 electron.ipcMain.handle("picnest-view-counts", (_event, folderId) => {
+  picnestMigrate();
   const db = getDb();
+  const trashImages = db.prepare("SELECT COUNT(*) c FROM images WHERE folder_id = ? AND deleted_at IS NOT NULL AND trash_group IS NULL").get(folderId).c;
+  const trashFolders = db.prepare("SELECT COUNT(*) c FROM picnest_trash_folders WHERE folder_id = ?").get(folderId).c;
   return {
     all: db.prepare("SELECT COUNT(*) c FROM images WHERE folder_id = ? AND deleted_at IS NULL").get(folderId).c,
     recent: db.prepare("SELECT COUNT(*) c FROM images WHERE folder_id = ? AND deleted_at IS NULL AND last_opened_at > 0").get(folderId).c,
-    trash: db.prepare("SELECT COUNT(*) c FROM images WHERE folder_id = ? AND deleted_at IS NOT NULL").get(folderId).c,
+    trash: trashImages + trashFolders,
     uncategorized: (() => {
       const root = db.prepare("SELECT path FROM folders WHERE id = ?").get(folderId);
       if (!root) return 0;
@@ -836,9 +976,10 @@ electron.ipcMain.handle("picnest-random", (_event, folderId, limit) => {
   ).all(folderId, limit);
 });
 electron.ipcMain.handle("picnest-trash-list", async (_event, folderId) => {
+  picnestMigrate();
   const rows = getDb().prepare(
     `SELECT id, file_path, file_name, file_size, modify_time, width, height, thumbnail_path, is_favorite, deleted_at
-     FROM images WHERE folder_id = ? AND deleted_at IS NOT NULL ORDER BY deleted_at DESC`
+     FROM images WHERE folder_id = ? AND deleted_at IS NOT NULL AND trash_group IS NULL ORDER BY deleted_at DESC`
   ).all(folderId);
   const valid = [];
   for (const img of rows) {
@@ -850,14 +991,19 @@ electron.ipcMain.handle("picnest-trash-list", async (_event, folderId) => {
   return valid;
 });
 electron.ipcMain.handle("picnest-trash-restore", (_event, filePath) => {
-  getDb().prepare("UPDATE images SET deleted_at = NULL WHERE file_path = ?").run(filePath);
+  picnestMigrate();
+  getDb().prepare("UPDATE images SET deleted_at = NULL, trash_group = NULL WHERE file_path = ? AND trash_group IS NULL").run(filePath);
   return true;
 });
 electron.ipcMain.handle("picnest-remove", (_event, filePath) => {
-  getDb().prepare("UPDATE images SET deleted_at = ? WHERE file_path = ?").run(Date.now(), filePath);
+  picnestMigrate();
+  getDb().prepare("UPDATE images SET deleted_at = ?, trash_group = NULL WHERE file_path = ?").run(Date.now(), filePath);
   return true;
 });
 electron.ipcMain.handle("picnest-trash-purge", async (_event, filePath) => {
+  picnestMigrate();
+  const row = getDb().prepare("SELECT trash_group FROM images WHERE file_path = ?").get(filePath);
+  if (row && row.trash_group != null) return false; // 属于文件夹回收条目：走文件夹删除
   try {
     const trash = await import("trash");
     await trash.default([filePath], { glob: false });

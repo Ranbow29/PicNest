@@ -145,7 +145,7 @@ function deleteDir() {
       details: [
         stats?.ok ? `${stats.count} 个文件 · ${fmtSize(stats.size)}` : '无法读取文件夹统计',
         rels.length > 1 ? `包含：${names.join('、')}` : '',
-        '整个文件夹会移入 Windows 回收站（可还原），并从资料库移除索引。',
+        '整个文件夹会移入图巢回收站（可在回收站视图还原）。',
       ].filter(Boolean),
       confirmText: '移入回收站',
       danger: true,

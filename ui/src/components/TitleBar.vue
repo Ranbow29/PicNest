@@ -115,6 +115,7 @@ function onKey(e) {
           </template>
         </template>
         <span v-if="lib.activeFilterCount()" class="count">筛选结果 ({{ lib.filteredImages.length.toLocaleString() }})</span>
+        <span v-else-if="lib.view === 'trash' && (lib.images.length + lib.trashFolders.length)" class="count">{{ (lib.images.length + lib.trashFolders.length).toLocaleString() }} 项</span>
         <span v-else-if="lib.images.length" class="count">{{ lib.images.length.toLocaleString() }} 张</span>
       </div>
       <div class="vo-wrap">

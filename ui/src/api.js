@@ -35,7 +35,12 @@ export const api = {
   dirMemorySet: (key, patch) => invoke('picnestDirMemorySet', key, patch),
   // 资料库文件夹管理
   mkdir: (parentPath, name) => invoke('picnestMkdir', parentPath, name),
-  deleteDir: (dirPath, rel) => invoke('picnestDeleteDir', dirPath, rel),
+  deleteDir: (dirPath, rel, rootId) => invoke('picnestDeleteDir', dirPath, rel, rootId),
+  trashFolders: (folderId) => invoke('picnestTrashFolders', folderId),
+  trashRestoreFolder: (id) => invoke('picnestTrashRestoreFolder', id),
+  trashPurgeFolder: (id) => invoke('picnestTrashPurgeFolder', id),
+  trashRestoreAll: (folderId) => invoke('picnestTrashRestoreAll', folderId),
+  trashPurgeAll: (folderId) => invoke('picnestTrashPurgeAll', folderId),
   renameLibrary: (id, name) => invoke('picnestRenameLibrary', id, name),
   renameDir: (oldPath, newName, oldRel, parentRel) => invoke('picnestRenameDir', oldPath, newName, oldRel, parentRel),
   dirSort: (parentRel, parentAbsPath, mode) => invoke('picnestDirSort', parentRel, parentAbsPath, mode),

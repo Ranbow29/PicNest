@@ -99,15 +99,29 @@ const sortedImages = computed(() => {
 /* ---------- 布局引擎：grid（等格）/ justified（自适应行高） ---------- */
 const GAP = 14
 const HEADER_H = 150 // 编辑排印头块实际高度：56 玻璃让位 + 标题 38 + 小标 14 + 间距 + 规则线（不足会压线）
-const SUBFOLDER_STRIP_H = 172 // 文件夹视图顶部的子文件夹卡片条
 
-/* 当前文件夹的直属子文件夹（Eagle 式卡片条；合并视图/非文件夹视图不显示） */
-const currentFolderNode = computed(() => (lib.view === 'all' && lib.currentDirRel && !lib.selectionView
-  ? lib.findNode(lib.tree?.tree, lib.currentDirRel)
-  : null))
+/* 当前层子文件夹（Eagle 式卡片条；合并视图不显示；全部视图显示库根顶层） */
+const currentFolderNode = computed(() => {
+  if (lib.view !== 'all' || lib.selectionView) return null
+  if (lib.currentDirRel) return lib.findNode(lib.tree?.tree, lib.currentDirRel)
+  return lib.tree?.tree || null
+})
 const subfolders = computed(() => currentFolderNode.value?.children || [])
-const stripH = computed(() => (subfolders.value.length ? SUBFOLDER_STRIP_H : 0))
+const trashFolders = computed(() => (lib.view === 'trash' ? lib.trashFolders : []))
+const STRIP_H_SUB = 172
+const STRIP_H_TRASH = 198
+const stripMode = computed(() => {
+  if (lib.view === 'trash') return trashFolders.value.length ? 'trash' : ''
+  return subfolders.value.length ? 'sub' : ''
+})
+const stripH = computed(() => (stripMode.value === 'trash' ? STRIP_H_TRASH : (stripMode.value === 'sub' ? STRIP_H_SUB : 0)))
 const contentTop = computed(() => HEADER_H + stripH.value + 10)
+const fmtTrashDate = (ms) => {
+  if (!ms) return ''
+  const d = new Date(ms > 1e12 ? ms : ms * 1000)
+  const p = (x) => String(x).padStart(2, '0')
+  return `${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
 
 /* 卡片封面：每个子文件夹取一张图（缩略图优先） */
 const covers = ref({})
@@ -144,7 +158,10 @@ const header = computed(() => {
     const n = lib.selectedDirs.length
     return { big: `已选定 ${n} 个文件夹`, caption: `${(lib.images.length || 0).toLocaleString()} IMAGES / ${n} FOLDERS` }
   }
-  if (lib.view !== 'all') return { big: { all: '全部', recent: '最近使用', uncategorized: '未分类', random: '随机模式', trash: '回收站' }[lib.view], caption: `${(lib.images.length || 0).toLocaleString()} ITEMS / ${viewEn}` }
+  if (lib.view !== 'all') {
+    const n = lib.view === 'trash' ? (lib.images.length + (lib.trashFolders?.length || 0)) : lib.images.length
+    return { big: { all: '全部', recent: '最近使用', uncategorized: '未分类', random: '随机模式', trash: '回收站' }[lib.view], caption: `${n.toLocaleString()} ITEMS / ${viewEn}` }
+  }
   if (!lib.currentDirRel) return { big: '全部', caption: `${(lib.images.length || 0).toLocaleString()} IMAGES / ${viewEn}` }
   const parts = lib.currentDirRel.split('/')
   return { big: parts[parts.length - 1], caption: `${(lib.images.length || 0).toLocaleString()} IMAGES / ${viewEn}` }
@@ -392,30 +409,50 @@ function onCellClick(e, img) {
         <div class="head-rule"><i /></div>
       </header>
 
-      <!-- 子文件夹卡片条（Eagle 式）：随内容滚动，位于头部与图片之间 -->
-      <div v-if="subfolders.length" class="subfolders" :style="{ top: HEADER_H + 'px', height: stripH + 'px', right: lib.viewer.showInspector ? '312px' : '4px' }">
-        <div class="sf-head">
-          <span class="sf-title">子文件夹 <b>({{ subfolders.length }})</b></span>
-          <label class="sf-toggle">
-            <input type="checkbox" :checked="lib.showSubfolderContent" @change="lib.setShowSubfolderContent($event.target.checked)" />
-            <span>显示子文件夹内容</span>
-          </label>
-        </div>
-        <div class="sf-row">
-          <div
-            v-for="f in subfolders" :key="f.rel" class="sf-card"
-            :class="{ sel: lib.selectedDirs.includes(f.rel) }"
-            @click="onSubClick($event, f)"
-            @contextmenu.prevent="lib.openDirMenu($event, { rel: f.rel, node: f })"
-          >
-            <div class="sf-cover">
-              <img v-if="covers[f.rel]" :src="covers[f.rel]" draggable="false" loading="lazy" />
-              <FolderIcon v-else :color="lib.dirMemory[f.rel]?.color || ''" :size="30" />
-            </div>
-            <div class="sf-name" :title="f.name">{{ f.name }}</div>
-            <div class="sf-count">{{ f.total }} 个文件</div>
+      <!-- 子文件夹 / 已删除文件夹卡片条：随内容滚动，位于头部与图片之间 -->
+      <div v-if="stripMode" class="subfolders" :style="{ top: HEADER_H + 'px', height: stripH + 'px', right: lib.viewer.showInspector ? '312px' : '4px' }">
+        <template v-if="stripMode === 'sub'">
+          <div class="sf-head">
+            <span class="sf-title">子文件夹 <b>({{ subfolders.length }})</b></span>
+            <label v-if="lib.currentDirRel" class="sf-toggle">
+              <input type="checkbox" :checked="lib.showSubfolderContent" @change="lib.setShowSubfolderContent($event.target.checked)" />
+              <span>显示子文件夹内容</span>
+            </label>
           </div>
-        </div>
+          <div class="sf-row">
+            <div
+              v-for="f in subfolders" :key="f.rel" class="sf-card"
+              :class="{ sel: lib.selectedDirs.includes(f.rel) }"
+              @click="onSubClick($event, f)"
+              @contextmenu.prevent="lib.openDirMenu($event, { rel: f.rel, node: f })"
+            >
+              <div class="sf-cover">
+                <img v-if="covers[f.rel]" :src="covers[f.rel]" draggable="false" loading="lazy" />
+                <FolderIcon v-else :color="lib.dirMemory[f.rel]?.color || ''" :size="30" />
+              </div>
+              <div class="sf-name" :title="f.name">{{ f.name }}</div>
+              <div class="sf-count">{{ f.total }} 个文件</div>
+            </div>
+          </div>
+        </template>
+        <template v-else>
+          <div class="sf-head">
+            <span class="sf-title">已删除文件夹 <b>({{ trashFolders.length }})</b></span>
+          </div>
+          <div class="sf-row trash-row">
+            <div v-for="tf in trashFolders" :key="tf.id" class="sf-card trash-card">
+              <div class="sf-cover trash-cover">
+                <FolderIcon :color="lib.dirMemory[tf.rel]?.color || ''" :size="28" />
+              </div>
+              <div class="sf-name" :title="tf.rel">{{ tf.name }}</div>
+              <div class="sf-count">{{ tf.image_count }} 个文件 · {{ fmtTrashDate(tf.deleted_at) }}</div>
+              <div class="tf-actions">
+                <button class="tf-btn" @click="lib.restoreTrashFolder(tf.id)">还原</button>
+                <button class="tf-btn danger" @click="lib.purgeTrashFolder(tf.id, tf.name)">彻底删除</button>
+              </div>
+            </div>
+          </div>
+        </template>
       </div>
 
       <div
@@ -437,7 +474,9 @@ function onCellClick(e, img) {
       </div>
     </div>
     <div v-if="lib.loading" class="state overlay-state">载入中…</div>
-    <div v-else-if="!lib.images.length" class="state overlay-state">{{ subfolders.length ? '此文件夹暂无直属图片' : '此文件夹暂无图片' }}</div>
+    <div v-else-if="!lib.images.length && !(lib.view === 'trash' && trashFolders.length)" class="state overlay-state">
+      {{ lib.view === 'trash' ? '回收站是空的' : (subfolders.length ? '此文件夹暂无直属图片' : '此文件夹暂无图片') }}
+    </div>
   </div>
 </template>
 
@@ -535,4 +574,19 @@ function onCellClick(e, img) {
 .sf-card.sel .sf-cover { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-weak); }
 .sf-name { margin-top: 7px; font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sf-count { margin-top: 2px; font-size: 11px; color: var(--text-2); }
+
+/* 回收站文件夹卡片 */
+.trash-row { height: 158px; }
+.trash-card { width: 184px; }
+.trash-cover { height: 62px; }
+.trash-card .sf-name { margin-top: 5px; }
+.tf-actions { display: flex; gap: 6px; margin-top: 6px; }
+.tf-btn {
+  flex: 1; border: 1px solid var(--border); background: transparent; color: var(--text-2);
+  border-radius: 7px; font-size: 11px; padding: 4px 0; cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.tf-btn:hover { background: var(--accent-weak); color: var(--accent); border-color: var(--accent); }
+.tf-btn.danger { color: #c25a4d; }
+.tf-btn.danger:hover { background: rgba(194, 90, 77, 0.12); border-color: #c25a4d; }
 </style>

@@ -51,6 +51,26 @@ const patches = [
     from: 'if (isDev) mainWindow.loadURL("http://localhost:5173");',
     to: 'if (isDev) mainWindow.loadURL("http://127.0.0.1:5173"); /* PicNest:P3c */',
   },
+  {
+    id: 'P8a', desc: 'scan/sync 读取 deleted_at（软删除行不参与 removed）',
+    from: 'const dbRows = getDb().prepare("SELECT file_path FROM images WHERE folder_id = ?").all(folderId);',
+    to: 'const dbRows = getDb().prepare("SELECT file_path, deleted_at FROM images WHERE folder_id = ?").all(folderId); /* PicNest:P8a */',
+  },
+  {
+    id: 'P8b', desc: 'scan-folder 不删除软删除行（回收站）',
+    from: 'for (const dp of dbPathSet) {\n      if (!scannedPaths.has(dp)) removed.push(dp);\n    }',
+    to: 'for (const dr of dbRows) {\n      if (dr.deleted_at == null && !scannedPaths.has(dr.file_path)) removed.push(dr.file_path);\n    } /* PicNest:P8b */',
+  },
+  {
+    id: 'P8c', desc: 'sync-folder-snapshot 读取 deleted_at（软删除行不参与 removed）',
+    from: 'const dbRows = getDb().prepare("SELECT file_path FROM images WHERE folder_id = ?").all(folderId);',
+    to: 'const dbRows = getDb().prepare("SELECT file_path, deleted_at FROM images WHERE folder_id = ?").all(folderId); /* PicNest:P8c */',
+  },
+  {
+    id: 'P8d', desc: 'sync-folder-snapshot 不删除软删除行（回收站/文件夹回收条目）',
+    from: 'for (const dp of dbPathSet) {\n      if (!currentPaths.has(dp)) {\n        removed.push(dp);\n      }\n    }',
+    to: 'for (const dr of dbRows) {\n      if (dr.deleted_at == null && !currentPaths.has(dr.file_path)) {\n        removed.push(dr.file_path);\n      }\n    } /* PicNest:P8d */',
+  },
 ]
 
 let ok = 0, skip = 0, fail = 0
@@ -127,7 +147,12 @@ const bridge = [
   '  picnestCrop: (filePath, opts) => electron.ipcRenderer.invoke("picnest-crop", filePath, opts),',
   '  picnestCropAs: (filePath, opts) => electron.ipcRenderer.invoke("picnest-crop-as", filePath, opts),',
   '  picnestMkdir: (parentPath, name) => electron.ipcRenderer.invoke("picnest-mkdir", parentPath, name),',
-  '  picnestDeleteDir: (dirPath, rel) => electron.ipcRenderer.invoke("picnest-delete-dir", dirPath, rel),',
+  '  picnestDeleteDir: (dirPath, rel, rootId) => electron.ipcRenderer.invoke("picnest-delete-dir", dirPath, rel, rootId),',
+  '  picnestTrashFolders: (folderId) => electron.ipcRenderer.invoke("picnest-trash-folders", folderId),',
+  '  picnestTrashRestoreFolder: (id) => electron.ipcRenderer.invoke("picnest-trash-restore-folder", id),',
+  '  picnestTrashPurgeFolder: (id) => electron.ipcRenderer.invoke("picnest-trash-purge-folder", id),',
+  '  picnestTrashRestoreAll: (folderId) => electron.ipcRenderer.invoke("picnest-trash-restore-all", folderId),',
+  '  picnestTrashPurgeAll: (folderId) => electron.ipcRenderer.invoke("picnest-trash-purge-all", folderId),',
   '  picnestRenameLibrary: (id, name) => electron.ipcRenderer.invoke("picnest-rename-library", id, name),',
   '  picnestRenameDir: (oldPath, newName, oldRel, parentRel) => electron.ipcRenderer.invoke("picnest-rename-dir", oldPath, newName, oldRel, parentRel),',
   '  picnestDirSort: (parentRel, parentAbsPath, mode) => electron.ipcRenderer.invoke("picnest-dir-sort", parentRel, parentAbsPath, mode),',

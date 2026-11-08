@@ -42,6 +42,12 @@ async function pickFolder() {
 function openNode(node) {
   lib.openDir(node.rel || null) // 树根 → null(全部)；子目录 → rel
 }
+function onViewMenu(e, entry) {
+  if (entry.key !== 'trash') return
+  e.preventDefault()
+  e.stopPropagation()
+  lib.openTrashMenu(e)
+}
 
 /* 拖到侧栏空白 = 外部文件录进当前库根 / 内部目录移回根 */
 async function dropToRoot(e) {
@@ -127,6 +133,7 @@ async function dropOnLib(e, l) {
         v-for="e in entries" :key="e.key"
         class="view-item" :class="{ active: !lib.selectionView && lib.view === e.key && (e.key !== 'all' || !lib.currentDirRel), disabled: !e.enabled }"
         @click="e.enabled && lib.view !== e.key && lib.switchView(e.key)"
+        @contextmenu="onViewMenu($event, e)"
       >
         <span class="label">{{ e.label }}</span>
         <span v-if="e.count != null" class="count">{{ e.count.toLocaleString() }}</span>

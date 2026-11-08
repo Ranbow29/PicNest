@@ -67,6 +67,8 @@ export const useLibrary = defineStore('library', {
     confirmDialog: { open: false, title: '', message: '', details: [], confirmText: '确定', danger: false, resolve: null },
     importResult: { open: false, nonce: 0, summary: '', details: [], tone: 'ok' }, // 录入汇总结果卡
     clipboard: { kind: '', paths: [], count: 0, root: false }, // 应用内复制剪贴板（kind: dirs | files）
+    trashFolders: [],       // 回收站里的文件夹条目（文件夹形式软删）
+    trashMenu: { open: false, x: 0, y: 0 },
     dropHint: { active: false, zone: '', label: '', x: 0, y: 0, key: null }, // 外部拖入落点提示（分区高亮 + 跟随光标）
     viewer: { scale: 1, tx: 0, ty: 0, rot: 0, flopX: false, showInspector: false, /* 初始收起：让用户先看图，详情随点随开 */ cropMode: false, fitNonce: 0 },
     filterBarOpen: false,
@@ -251,7 +253,7 @@ export const useLibrary = defineStore('library', {
       let deleted = 0, failed = 0, files = 0
       for (const rel of list) {
         try {
-          const r = await api.deleteDir(this.absPathOf(rel), rel)
+          const r = await api.deleteDir(this.absPathOf(rel), rel, this.activeRootId)
           if (r?.ok) { deleted++; files += r.count || 0 } else failed++
         } catch (e) { failed++ }
       }
@@ -265,7 +267,7 @@ export const useLibrary = defineStore('library', {
       if (this.selectionView && this.selectedDirs.length < 2) this.selectionView = false
       await this.refreshTree()
       await this.loadImages()
-      this.showNote(`已删除 ${deleted} 个文件夹${failed ? ` · 失败 ${failed}` : ''}（回收站可还原）`, [], failed ? 'error' : 'ok')
+      this.showNote(`已删除 ${deleted} 个文件夹${failed ? ` · 失败 ${failed}` : ''}（图巢回收站可还原）`, [], failed ? 'error' : 'ok')
       return { ok: failed === 0, deleted, failed, files }
     },
     async deleteDir(rel) { return this.deleteDirs([rel]) },
@@ -501,6 +503,7 @@ export const useLibrary = defineStore('library', {
       this.loading = true
       try {
         let next = []
+        if (this.view !== 'trash' && this.trashFolders.length) this.trashFolders = []
         if (this.selectionView && this.selectedDirs.length > 1) {
           /* 多选文件夹 = 合并内容视图（union 去重，全局排序） */
           next = await this.imagesInDirs(this.selectedDirs)
@@ -509,6 +512,8 @@ export const useLibrary = defineStore('library', {
         } else if (this.view === 'random') {
           next = await window.picrand.picnestRandom(this.activeRootId, 300)
         } else if (this.view === 'trash') {
+          this.trashFolders = await api.trashFolders(this.activeRootId)
+          this.counts = await window.picrand.picnestViewCounts(this.activeRootId)
           next = await window.picrand.picnestTrashList(this.activeRootId)
         } else if (this.view === 'uncategorized') {
           /* 未分类 = 库根层散图（不在任何子文件夹），排序面板可用 */
@@ -571,6 +576,77 @@ export const useLibrary = defineStore('library', {
     async rerollRandom() {
       await this.loadImages()
     },
+
+    /* ---- 回收站：文件夹条目（图巢内部，文件夹形式）/ 一键还原 / 清空 ---- */
+    async restoreTrashFolder(id) {
+      const r = await api.trashRestoreFolder(id)
+      if (r?.ok) {
+        await this.refreshTree()
+        await this.loadImages()
+        this.showNote(`已还原文件夹「${r.name || ''}」`)
+      } else if (r?.error) this.error = r.error
+      return r
+    },
+    async purgeTrashFolder(id, name) {
+      const ok = await this.askConfirm({
+        title: '彻底删除文件夹',
+        message: `确定彻底删除「${name || '该文件夹'}」？`,
+        details: ['文件夹会移入 Windows 回收站作为最后保险，并从图巢回收站移除。'],
+        confirmText: '彻底删除',
+        danger: true,
+      })
+      if (!ok) return { ok: false, canceled: true }
+      const r = await api.trashPurgeFolder(id)
+      if (r?.ok) {
+        await this.refreshTree()
+        await this.loadImages()
+        this.showNote('已彻底删除文件夹')
+      } else if (r?.error) this.error = r.error
+      return r
+    },
+    async restoreAllTrash() {
+      if (!this.activeRootId) return
+      await this.refreshTree()
+      const n = this.counts?.trash || 0
+      if (!n) { this.showNote('回收站是空的'); return }
+      const ok = await this.askConfirm({
+        title: '一键还原回收站',
+        message: `确定还原回收站中的全部 ${n} 项？`,
+        details: ['文件夹会回到原来的位置（重名时自动加序号），图片会回到原文件夹。'],
+        confirmText: '全部还原',
+      })
+      if (!ok) return
+      const r = await api.trashRestoreAll(this.activeRootId)
+      if (r?.ok) {
+        await this.refreshTree()
+        await this.loadImages()
+        this.showNote(`已还原 ${r.restoredFolders} 个文件夹 · ${r.restoredImages} 张图片`)
+      } else this.error = '部分还原失败'
+      return r
+    },
+    async purgeAllTrash() {
+      if (!this.activeRootId) return
+      await this.refreshTree()
+      const n = this.counts?.trash || 0
+      if (!n) { this.showNote('回收站是空的'); return }
+      const ok = await this.askConfirm({
+        title: '清空回收站',
+        message: `确定清空回收站中的全部 ${n} 项？`,
+        details: ['文件夹与图片会移入 Windows 回收站作为最后保险，并从图巢索引移除。'],
+        confirmText: '清空回收站',
+        danger: true,
+      })
+      if (!ok) return
+      const r = await api.trashPurgeAll(this.activeRootId)
+      if (r?.ok) {
+        await this.refreshTree()
+        await this.loadImages()
+        this.showNote(`已清空：文件夹 ${r.purgedFolders} 个 · 图片 ${r.purgedImages} 张`)
+      } else this.error = '部分删除失败'
+      return r
+    },
+    openTrashMenu(e) { this.trashMenu = { open: true, x: e.clientX, y: e.clientY } },
+    closeTrashMenu() { this.trashMenu = { open: false, x: 0, y: 0 } },
 
     async restoreFromTrash(path) {
       try { await window.picrand.picnestTrashRestore(path) } catch { /* 静默 */ }

@@ -136,3 +136,8 @@ PicNest/
     且要排除**自身路径**与**目标同名位置**（`destRoot/相对路径`）：目标同位已有同内容 = 天然合并，不应弹重复提示。
     三策略 skip / keep-both / replace；replace 在复制成功后把旧文件 `shell.trashItem` + 删 DB 行。
     外部拖入文件夹与内部分支粘贴共用 store.mergeDirWithDupes。
+31. **文件夹回收站（软删）**：文件夹删除不丢 Windows 回收站，而是整包移到 `AppData/PicNest/picnest-trash/<rootId>/<id>-<name>`，
+    `picnest_trash_folders` 记原 abs_path/rel，图片行 file_path 改到回收区并标 `deleted_at + trash_group`。
+    **sync/scan 的 diff 必须跳过 `deleted_at` 非空行**（P8a-P8d 已修）——回收区路径不在 root 扫描结果里，
+    否则整行被当 removed 删除，还原时丢图（本轮实测踩中）。还原移回原路径（重名 `(2)`）并恢复行路径/标记；
+    彻底删除才 `shell.trashItem`。回收站列表过滤 `trash_group IS NULL`；`counts.trash` = 独立软删图片 + 文件夹条目数。
