@@ -621,7 +621,7 @@ function onKey(e) {
     </div>
 
     <!-- 底部悬浮工具条（ZCode 输入口风格） -->
-    <div v-if="kind === 'image'" class="dock glass-pill">
+    <div v-if="kind === 'image'" class="dock glass-pill dock-clear">
       <button class="dock-btn" title="上一张（←）" @click="lib.lightboxNav(-1)">‹</button>
       <button class="dock-btn" title="下一张（→）" @click="lib.lightboxNav(1)">›</button>
       <i class="vsep" />
@@ -635,7 +635,7 @@ function onKey(e) {
       <button class="dock-btn wide" title="缩放到窗口大小" @click="fitToWindow">⤢ 适应</button>
     </div>
     <!-- 视频工具条：播放/进度/音量/循环/全屏 -->
-    <div v-else-if="kind === 'video'" class="dock glass-pill video-dock">
+    <div v-else-if="kind === 'video'" class="dock glass-pill video-dock dock-clear">
       <button class="dock-btn play" :title="vid.playing ? '暂停（空格）' : '播放（空格）'" @click="togglePlay">{{ vid.playing ? '❚❚' : '▶' }}</button>
       <span class="vtime">{{ fmtTime(vid.time) }}</span>
       <div class="vtrack" @pointerdown.prevent="onSeekDown" @pointermove="onSeekMove" @pointerup="onSeekUp" @pointercancel="onSeekUp">
@@ -691,6 +691,16 @@ function onKey(e) {
   background: var(--panel); backdrop-filter: blur(var(--blur)) saturate(1.2);
   border: 1px solid var(--border); box-shadow: var(--shadow);
 }
+/* 大图底部工具条：全透明（与透明顶栏同一层级观感），只留按钮 */
+.dock.dock-clear {
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  border-color: transparent;
+  box-shadow: none;
+}
+/* 透明底上按钮靠自身色块辨识：悬停仍给 accent 底 */
+.dock.dock-clear .dock-btn:hover { background: var(--accent-weak); }
 .dock-btn {
   height: 32px; min-width: 32px; border: none; border-radius: 999px;
   background: transparent; color: var(--text-2); font-size: 13px;
