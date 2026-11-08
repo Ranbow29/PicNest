@@ -89,7 +89,7 @@ PicNest/
 11. **-webkit-app-region: drag 四种结构全灭**（2026-11-08）：①drag+backdrop-filter 同体 ②pointer-events:none 兄弟层 ③干净拖拽面+控件亲儿子 no-drag ④部分 setBounds——物理鼠标下 no-drag 全部失效（浏览器进程拖拽位图无视 no-drag，CDP 注入检测不出=假阳性）。→ 已弃用 app-region，改 winDrag.js 手动拖窗（mousedown + screenX/Y 增量 + IPC setBounds）
 12. **Win 非 100% DPI 拖窗三连坑**：a) 位置一变系统强制重算尺寸（±2px 非幂等）→ 尺寸一变 Web 内容整帧重排=抖动 → 手势期 setResizable(false) 冻结；b) 尺寸断言与补偿逐帧打架 → 主进程持「规范尺寸」+resize 防抖回读时 ≤4px 抖动丢弃（棘轮断根）；c) DIP×1.25 非整（901→1126.25）永动舍入 → 尺寸/位置吸附物理网格。验证看 clientWidth（40/40 恒定）而非 outerWidth（报告噪声）
 13. **dev 数据目录 CWD 相对**（踩坑 #10 的完全体）：PowerShell Start-Process 不固定工作目录 → 进程在错误位置新建空 _internal_data →「库空了」。重启必须 `-WorkingDirectory '...\PicNest\app'`；已清两处垃圾目录
-14. **「已完成」≠「接线」**：ensurePalettes 曾全工程零调用（颜色筛选恒空）；循环终止依赖 processed 字段在 DB 全量时恒 0 → 只回填一批（40/6673）。凡是「后台渐进构建」必须有：init 挂载点 + 不依赖单一返回键的终止条件 + 失败位标空防死循环
+14. **「已完成」≠「接线」**：ensurePalettes 曾全工程零调用（颜色筛选恒空）；循环终止依赖 processed 字段在 DB 全量时恒 0 → 只回填一批（40/6673）。凡是「后台渐进构建」必须有：init 挂载点 + **loadImages 挂载点（切文件夹/根/视图后补建，否则内存索引只覆盖启动时的文件夹、颜色筛选恒 0）** + 不依赖单一返回键的终止条件 + 失败位标空防死循环。详情现算的色板也要回写 `lib.palettes`（否则「点自身色板必保原图」查不到自己）
 15. **Eagle 真源挖掘法**：resources/ 下 i18n/CSS 是散的，主渲染层在 app.asar（头 16 字节 → jsonLen@12 → JSON 树 → data@8+headerSize），filter 指令模板在 app/js/directives/filter-item-*.html（含色板真值 12 色）；色板匹配有两套——主进程 isMatchColorRule（33% 门槛+±96 拒绝）与搜索窗 $scope.colorFilter（25% 门槛+白底特例），用户体感是后者。tools/asar_probe.py、asar_extract.py 可复用
 
 16. **SQLite LIKE + ESCAPE 陷阱**：ESCAPE '' 生效时模式内裸反斜杠非法 → Windows 路径拼 LIKE 必须连分隔符一起 picnestLikeEscape（未分类视图曾因裸 sep 全体失配）

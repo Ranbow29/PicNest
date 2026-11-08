@@ -84,11 +84,13 @@ function pickHex(hex) {
   if (!rgb) return
   colorState.value.value = rgb
   colorState.value.on = true
+  lib.ensurePalettes().catch(() => {}) // 新入库/刚切换视图时兜底补齐，否则颜色筛选恒 0
   lib.layoutTick++
 }
 function pickPreset(hex) { pickHex(hex) }
 function toggleGray() {
   colorState.value.gray = !colorState.value.gray
+  if (colorState.value.gray) lib.ensurePalettes().catch(() => {})
   lib.layoutTick++
 }
 function clearColor() {

@@ -185,6 +185,7 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 23. 旋转/翻转写回：flop 后 rotate；同路径刷新靠 `?v=modify_time`；封面若引用该图要更新 coverThumb。
 24. 封面菜单是文件夹级开关（有手动封面即显示 ✓，再按清除），换新封面两次操作是预期。
 25. 入场波 `.wi` 的 fill-mode 保持 `backwards`，不要改回 `both`（会永久压住 hover 的 transform）；卡片浮岛靠 `--shadow-tile*` / `--tile-edge` 双主题 token。
+26. 颜色筛选依赖内存 `palettes`：`loadImages` 末尾必须 `ensurePalettes()`（init 只覆盖启动时文件夹，切换后不补建=颜色筛选恒 0）；FilterBar 取色/灰度、详情现算色板都要兜底触发/回写 `lib.palettes`。
 
 ## 七、验收状态 / 最近提交
 

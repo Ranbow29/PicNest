@@ -664,6 +664,8 @@ export const useLibrary = defineStore('library', {
         this.selectionAnchor = null
         this.randomNonce++
         this.fillDimsInBackground()
+        /* 色板索引跟随当前视图：切换文件夹/根/视图后必须补建，否则颜色筛选恒空（init 只覆盖启动时的文件夹） */
+        this.ensurePalettes().catch(() => {})
         this.harvestThumbs().then(() => this.fillAllThumbsInBackground()) // 先收割存量，再单张串行补缺
       } catch (e) {
         if (gen === this._loadGen) this.error = String(e?.message || e)

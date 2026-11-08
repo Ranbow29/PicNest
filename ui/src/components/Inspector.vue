@@ -107,6 +107,8 @@ watch(() => lib.selectedPath, async (p) => {
   try {
     const r = await window.picrand.computeColorAnalysis(p)
     const dom = r?.dominantColors || []
+    /* 回写 store：详情现算的色板也要进索引，否则点这里色板做「精确命中保原图」时查不到自己 */
+    if (dom.length) lib.palettes[p] = dom.map((c) => ({ r: c.r, g: c.g, b: c.b, percent: c.percent }))
     palette.value = dom.slice(0, 9).map((c) => ({ color: [c.r, c.g, c.b], ratio: c.percent }))
   } catch { palette.value = [] } finally { paletteLoading.value = false }
 })
