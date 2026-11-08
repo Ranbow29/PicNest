@@ -982,6 +982,40 @@ export const useLibrary = defineStore('library', {
       /* 文件夹视图/多选合并视图排序实时生效（SQL 排序需重查）；全部视图固定最新置顶，不受排序影响 */
       if (this.currentDirRel || this.selectionView) this.loadImages()
     },
+    /* 图片拖动排序：仅文件夹视图；写入 sort_order 并切到手动排序 */
+    canReorder() {
+      return !this.selectionView && this.view === 'all' && !!this.currentDirRel && !this.lightbox.open
+    },
+    async reorderImages(srcPaths, targetPath) {
+      if (!this.canReorder()) return { ok: false, error: '仅在文件夹视图内可拖动排序' }
+      const set = new Set(srcPaths || [])
+      if (!targetPath || set.has(targetPath)) return { ok: true, moved: false }
+      const list = this.images.map((i) => i.file_path)
+      const moving = list.filter((p) => set.has(p))
+      if (!moving.length) return { ok: false }
+      const rest = list.filter((p) => !set.has(p))
+      let idx = rest.indexOf(targetPath)
+      if (idx < 0) idx = rest.length
+      rest.splice(idx, 0, ...moving)
+      const keep = this.selectedPaths.slice()
+      try {
+        const r = await api.imagesReorder(this.activeRootId, this.currentDirRel, rest)
+        if (!r?.ok) { if (r?.error) this.error = r.error; return r }
+        this.sortMode = 'manual'
+        localStorage.setItem('picnest.sortMode', 'manual')
+        await this.loadImages()
+        const exist = new Set(this.images.map((i) => i.file_path))
+        this.selectedPaths = keep.filter((p) => exist.has(p))
+        this.selectedPath = this.selectedPaths[this.selectedPaths.length - 1] || null
+        this.selectionAnchor = this.selectedPath
+        this.showNote('已调整顺序（手动排序）')
+        return r
+      } catch (e) {
+        const err = { ok: false, error: String(e?.message || e) }
+        this.error = err.error
+        return err
+      }
+    },
     setLayout(key) {
       this.layout = key
       localStorage.setItem('picnest.layout', key)

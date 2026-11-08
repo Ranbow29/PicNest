@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
-import { useLibrary } from '../stores/library'
+import { useLibrary, extractDropUrls } from '../stores/library'
 import { api, fileUrl } from '../api'
 import { startWindowDrag } from '../lib/winDrag'
 import { waveSeq, waveDelay, replayWave } from '../lib/wave'
@@ -67,6 +67,7 @@ function onCellDragStart(e, img) {
     ? lib.selectedPaths.slice()
     : []
   e.dataTransfer.setData('application/x-picnest-file', img.file_path)
+  e.dataTransfer.setData('text/plain', img.file_path)
   if (group.length > 1) e.dataTransfer.setData('application/x-picnest-files', JSON.stringify(group))
   e.dataTransfer.effectAllowed = 'move'
 }
@@ -394,6 +395,88 @@ const selectedSet = computed(() => new Set(lib.selectedPaths))
 function onCellClick(e, img) {
   lib.selectImage(img.file_path, { shift: e.shiftKey, add: e.altKey || e.ctrlKey || e.metaKey })
 }
+
+/* ---------- 拖动：格内排序 / 拖进子文件夹卡片 ---------- */
+const dragOverPath = ref(null)
+const subDropRel = ref(null)
+function dtTypes(e) { return [...(e.dataTransfer?.types || [])] }
+function isExternalDT(e) { const t = dtTypes(e); return t.includes('Files') || t.includes('text/uri-list') }
+function isInternalImageDT(e) { const t = dtTypes(e); return t.includes('application/x-picnest-file') || t.includes('application/x-picnest-files') }
+function isInternalDirDT(e) { const t = dtTypes(e); return t.includes('application/x-picnest-dir') || t.includes('application/x-picnest-dirs') }
+function dtList(dt, key) {
+  try {
+    const v = JSON.parse(dt.getData(key) || '[]')
+    return Array.isArray(v) ? v.filter(Boolean) : []
+  } catch { return [] }
+}
+function internalImages(e) {
+  const multi = dtList(e.dataTransfer, 'application/x-picnest-files')
+  if (multi.length) return multi
+  const single = e.dataTransfer.getData('application/x-picnest-file')
+  return single ? [single] : []
+}
+function internalDirs(e) {
+  const multi = dtList(e.dataTransfer, 'application/x-picnest-dirs')
+  if (multi.length) return multi
+  const single = e.dataTransfer.getData('application/x-picnest-dir')
+  return single ? [single] : []
+}
+function onCellDragOver(e, img) {
+  if (!isInternalImageDT(e) || !lib.canReorder()) return
+  e.preventDefault()
+  e.stopPropagation()
+  e.dataTransfer.dropEffect = 'move'
+  dragOverPath.value = img.file_path
+}
+function onCellDragLeave(img) {
+  if (dragOverPath.value === img.file_path) dragOverPath.value = null
+}
+async function onCellDrop(e, img) {
+  if (!isInternalImageDT(e)) return // 外部拖入交给全窗 shell
+  e.preventDefault()
+  e.stopPropagation()
+  const paths = internalImages(e)
+  dragOverPath.value = null
+  if (paths.length) await lib.reorderImages(paths, img.file_path)
+}
+function onSubDragOver(e, f) {
+  if (!isExternalDT(e) && !isInternalImageDT(e) && !isInternalDirDT(e)) return
+  e.preventDefault()
+  e.stopPropagation()
+  e.dataTransfer.dropEffect = isExternalDT(e) ? 'copy' : 'move'
+  subDropRel.value = f.rel
+  if (isExternalDT(e)) lib.setDropHint('dir', `录入到「${f.name}」`, e.clientX, e.clientY)
+}
+function onSubDragLeave(f) {
+  if (subDropRel.value === f.rel) subDropRel.value = null
+}
+async function onSubDrop(e, f) {
+  e.preventDefault()
+  e.stopPropagation()
+  const rel = f.rel
+  subDropRel.value = null
+  if (isExternalDT(e)) {
+    lib.clearDropHint()
+    const paths = [...(e.dataTransfer.files || [])].map((x) => window.picrand.getFilePath?.(x)).filter(Boolean)
+    const urls = extractDropUrls(e.dataTransfer)
+    const target = { rootId: lib.activeRootId, rel }
+    if (paths.length) await lib.importDrop(paths, target)
+    else if (urls.length) await lib.importUrls(urls, target)
+    return
+  }
+  if (isInternalImageDT(e)) {
+    const files = internalImages(e)
+    if (files.length) await lib.moveImages(files, rel)
+    return
+  }
+  if (isInternalDirDT(e)) {
+    const dirs = internalDirs(e)
+    if (dirs.length) await lib.dropOnDirs(dirs, rel, 'into')
+  }
+}
+function clearDragUi() { dragOverPath.value = null; subDropRel.value = null }
+onMounted(() => window.addEventListener('dragend', clearDragUi))
+onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
 </script>
 
 <template>
@@ -422,8 +505,9 @@ function onCellClick(e, img) {
           <div class="sf-row">
             <div
               v-for="f in subfolders" :key="f.rel" class="sf-card"
-              :class="{ sel: lib.selectedDirs.includes(f.rel) }"
+              :class="{ sel: lib.selectedDirs.includes(f.rel), 'drop-into': subDropRel === f.rel }"
               @click="onSubClick($event, f)"
+              @dragover="onSubDragOver($event, f)" @dragleave="onSubDragLeave(f)" @drop="onSubDrop($event, f)"
               @contextmenu.prevent="lib.openDirMenu($event, { rel: f.rel, node: f })"
             >
               <div class="sf-cover">
@@ -457,10 +541,11 @@ function onCellClick(e, img) {
 
       <div
         v-for="img in cells" :key="img.id + '-' + waveSeq"
-        class="cell" :class="{ selected: selectedSet.has(img.file_path) }"
+        class="cell" :class="{ selected: selectedSet.has(img.file_path), 'drop-target': dragOverPath === img.file_path }"
         :style="{ transform: `translate(${img.x}px, ${img.y + 0}px)`, width: img.w + 'px', height: img.h + 'px', '--d': waveDelay(img.gi) + 'ms' }"
         draggable="true"
         @dragstart="onCellDragStart($event, img)"
+        @dragover="onCellDragOver($event, img)" @dragleave="onCellDragLeave(img)" @drop="onCellDrop($event, img)"
         @click="onCellClick($event, img)"
         @dblclick="lib.openLightbox(img.file_path)"
         @contextmenu.prevent="lib.openContextMenu($event, img)"
@@ -471,6 +556,7 @@ function onCellClick(e, img) {
           <!-- PicRand 式悬停信息条：叠在图片内部底部，不占布局 -->
           <div v-if="showLabels" class="hover-overlay" :data-info="img.info" />
         </div>
+        <span v-if="selectedSet.has(img.file_path)" class="sel-badge">✓</span>
       </div>
     </div>
     <div v-if="lib.loading" class="state overlay-state">载入中…</div>
@@ -506,7 +592,19 @@ function onCellClick(e, img) {
   transition: box-shadow 0.18s, border-color 0.18s, transform 0.18s;
 }
 .cell:hover .thumb { transform: translateY(-2px); box-shadow: var(--shadow); }
-.cell.selected .thumb { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-weak); }
+.cell.selected .thumb { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent), 0 0 0 6px var(--accent-weak); }
+.sel-badge {
+  position: absolute; top: 8px; right: 8px; z-index: 3;
+  width: 21px; height: 21px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--accent); color: #fff; font-size: 12px; font-weight: 700;
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.35); pointer-events: none;
+}
+.cell.drop-target .thumb { box-shadow: 0 0 0 3px var(--accent), 0 0 0 8px var(--accent-weak); }
+.cell.drop-target::before {
+  content: ''; position: absolute; left: -6px; top: 2px; bottom: 2px; width: 3px;
+  border-radius: 2px; background: var(--accent); z-index: 4; pointer-events: none;
+}
 .thumb img { width: 100%; height: 100%; object-fit: cover; }
 .noimg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--text-2); font-size: 22px; }
 
@@ -572,6 +670,7 @@ function onCellClick(e, img) {
 .sf-cover img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .sf-card:hover .sf-cover { border-color: var(--accent); transform: translateY(-2px); box-shadow: var(--shadow); }
 .sf-card.sel .sf-cover { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-weak); }
+.sf-card.drop-into .sf-cover { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-weak); background: var(--accent-weak); }
 .sf-name { margin-top: 7px; font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sf-count { margin-top: 2px; font-size: 11px; color: var(--text-2); }
 

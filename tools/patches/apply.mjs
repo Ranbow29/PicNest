@@ -114,6 +114,7 @@ const bridge = [
   '  picnestDirTree: (folderId) => electron.ipcRenderer.invoke("picnest-dir-tree", folderId),',
   '  picnestDirStats: (folderId, rels) => electron.ipcRenderer.invoke("picnest-dir-stats", folderId, rels),',
   '  picnestImagesByDir: (folderId, dirRel, offset, limit, sortMode, sortAsc, recursive) => electron.ipcRenderer.invoke("picnest-images-by-dir", folderId, dirRel, offset, limit, sortMode, sortAsc, recursive),',
+  '  picnestImagesReorder: (folderId, dirRel, orderedPaths) => electron.ipcRenderer.invoke("picnest-images-reorder", folderId, dirRel, orderedPaths),',
   '  picnestCountAll: (folderId) => electron.ipcRenderer.invoke("picnest-count-all", folderId),',
   '  picnestRecent: (folderId, limit) => electron.ipcRenderer.invoke("picnest-recent", folderId, limit),',
   '  picnestImageOpened: (filePath) => electron.ipcRenderer.invoke("picnest-image-opened", filePath),',

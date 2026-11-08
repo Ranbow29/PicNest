@@ -141,3 +141,7 @@ PicNest/
     **sync/scan 的 diff 必须跳过 `deleted_at` 非空行**（P8a-P8d 已修）——回收区路径不在 root 扫描结果里，
     否则整行被当 removed 删除，还原时丢图（本轮实测踩中）。还原移回原路径（重名 `(2)`）并恢复行路径/标记；
     彻底删除才 `shell.trashItem`。回收站列表过滤 `trash_group IS NULL`；`counts.trash` = 独立软删图片 + 文件夹条目数。
+32. **图片手动排序**：`images.sort_order`（0 = 未排序）；manual 排序 SQL `(sort_order = 0) ASC, sort_order ASC, id ASC`，
+    未排序的新图/移入图排在最后。拖动排序 IPC 写 1..n 并自动切 manual；移动图片时 `sort_order = 0`。
+    格内拖动排序只在文件夹视图允许（全部视图是跨文件夹的入库流）；拖到子文件夹卡片/树行走 moveImages。
+    多选组拖动载荷 `x-picnest-files`；网格 dragover/drop 对内部图片 stopPropagation，外部拖入仍冒泡给 shell 录入当前目录。

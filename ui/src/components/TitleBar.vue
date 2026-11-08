@@ -55,6 +55,7 @@ const SORTS = [
   { key: 'size', label: '文件大小' },
   { key: 'dims', label: '尺寸' },
   { key: 'rating', label: '评分' },
+  { key: 'manual', label: '手动排序' },
   { key: 'random', label: '随机模式' },
 ]
 const sortLabel = computed(() => (SORTS.find((x) => x.key === lib.sortMode) || SORTS[0]).label)
@@ -138,7 +139,7 @@ function onKey(e) {
           </div>
           <div class="vo-cap">
             <span>排列方式</span>
-            <button class="vo-dir" @click="lib.setSort(undefined, !lib.sortAsc)">{{ lib.sortAsc ? '↑ 升序' : '↓ 降序' }}</button>
+            <button v-if="lib.sortMode !== 'random' && lib.sortMode !== 'manual'" class="vo-dir" @click="lib.setSort(undefined, !lib.sortAsc)">{{ lib.sortAsc ? '↑ 升序' : '↓ 降序' }}</button>
           </div>
           <div class="vo-grid c4">
             <button v-for="o in SORTS" :key="o.key" class="vo-cell sm" :class="{ on: lib.sortMode === o.key }" @click="lib.setSort(o.key)">{{ o.label }}</button>

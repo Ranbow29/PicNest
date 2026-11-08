@@ -28,6 +28,7 @@ export const api = {
   dirStats: (folderId, rels) => invoke('picnestDirStats', folderId, rels),
   imagesByDir: (folderId, dirRel, offset, limit, sortMode = 'id', sortAsc, recursive = true) =>
     invoke('picnestImagesByDir', folderId, dirRel, offset, limit, sortMode, sortAsc, recursive),
+  imagesReorder: (folderId, dirRel, orderedPaths) => invoke('picnestImagesReorder', folderId, dirRel, orderedPaths),
   countAll: (folderId) => invoke('picnestCountAll', folderId),
   recent: (folderId, limit) => invoke('picnestRecent', folderId, limit),
   imageOpened: (filePath) => invoke('picnestImageOpened', filePath),

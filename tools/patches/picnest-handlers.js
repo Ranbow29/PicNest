@@ -162,7 +162,8 @@ electron.ipcMain.handle("picnest-images-by-dir", (_event, folderId, dirRel, offs
   /* 排序：name/added/mtime/size 走 SQL（sortAsc 控制方向），dims/rating 等暂回退 id ASC。
      全部视图（dirRel 空）由渲染层强制传 added → id DESC = 最新入库置顶 */
   const dirWord = (ascDefault) => (sortAsc === undefined || sortAsc === null ? ascDefault : sortAsc) ? "ASC" : "DESC";
-  const order = sortMode === "name" ? `file_name COLLATE NOCASE ${dirWord(true)}`
+  const order = sortMode === "manual" ? "(sort_order = 0) ASC, sort_order ASC, id ASC"
+    : sortMode === "name" ? `file_name COLLATE NOCASE ${dirWord(true)}`
     : sortMode === "added" ? `id ${dirWord(false)}`
     : sortMode === "mtime" ? `modify_time ${dirWord(false)}`
     : sortMode === "size" ? `file_size ${dirWord(false)}`
@@ -485,6 +486,22 @@ electron.ipcMain.handle("picnest-copy-images", async (_event, paths, targetDir) 
     return { ok: failed === 0, copied, failed };
   } catch (e) {
     return { ok: false, error: String(e?.message || e), copied, failed };
+  }
+});
+
+/* 手动排序：把当前文件夹的可见顺序写进 images.sort_order（未排序=0 的排最后） */
+electron.ipcMain.handle("picnest-images-reorder", (_event, folderId, dirRel, orderedPaths) => {
+  try {
+    const db = getDb();
+    const upd = db.prepare("UPDATE images SET sort_order = ? WHERE file_path = ? AND folder_id = ?");
+    const list = Array.isArray(orderedPaths) ? orderedPaths : [];
+    const tx = db.transaction(() => {
+      list.forEach((p, i) => upd.run(i + 1, p, folderId));
+    });
+    tx();
+    return { ok: true, count: list.length };
+  } catch (e) {
+    return { ok: false, error: String(e?.message || e) };
   }
 });
 
@@ -1139,7 +1156,7 @@ electron.ipcMain.handle("picnest-move-image", async (_event, filePath, targetDir
       n++;
     }
     fs.renameSync(filePath, target);
-    getDb().prepare("UPDATE images SET file_path = ?, file_name = ? WHERE file_path = ?").run(target, path.basename(target), filePath);
+    getDb().prepare("UPDATE images SET file_path = ?, file_name = ?, sort_order = 0 WHERE file_path = ?").run(target, path.basename(target), filePath);
     return { ok: true, file_path: target, moved: true };
   } catch (e) {
     return { ok: false, error: String(e?.message || e) };
