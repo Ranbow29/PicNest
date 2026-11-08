@@ -228,6 +228,8 @@ async function dropOnLib(e, l) {
   /* 左侧栏 = 底层（不是浮岛卡）：主面板浮在它上面，ZCode 同构；宽度可拖 */
   flex: none; display: flex; flex-direction: column;
   padding: 14px 8px 10px; overflow: hidden;
+  /* 底子顶部白色渐变：从栏顶亮起，150px 内渐隐回 --bg（范围对齐品牌区+「全部」行） */
+  background: linear-gradient(180deg, var(--sidebar-glow) 0, rgba(255, 255, 255, 0) 150px);
 }
 .brand { display: flex; align-items: baseline; gap: 10px; padding: 2px 10px 12px; border-bottom: 1px solid var(--border); }
 .brand h1 { font-family: var(--font-serif); font-size: 21px; margin: 0; letter-spacing: 6px; }
