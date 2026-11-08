@@ -161,8 +161,8 @@ watch(
 )
 function onSubClick(e, f) {
   const add = e.altKey || e.ctrlKey || e.metaKey
-  /* 正文卡片：单击只选中（详情看文件夹），双击才进入，防误入 */
-  lib.selectDir(f.rel, { shift: e.shiftKey, add })
+  /* 正文卡片：单击/Shift/Alt 只选中并更新详情，不切中央网格；双击才进入 */
+  lib.selectDir(f.rel, { shift: e.shiftKey, add, preview: false })
 }
 function onSubDblClick(e, f) {
   if (e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return

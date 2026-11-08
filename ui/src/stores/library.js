@@ -1537,7 +1537,9 @@ export const useLibrary = defineStore('library', {
         this.selectedDirs = [rel]
         this.dirAnchor = rel
       } while (false)
-      /* 多选文件夹 → 网格合并内容视图；降到 1 个 → 退出并回到原浏览 */
+      /* 多选文件夹 → 网格合并内容视图；降到 1 个 → 退出并回到原浏览
+         正文卡片传 preview:false：只选中并让详情显示，不切中央网格 */
+      if (opts.preview === false) return
       const multi = this.selectedDirs.length > 1
       if (multi) {
         this.selectionView = true

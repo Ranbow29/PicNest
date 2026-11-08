@@ -160,7 +160,7 @@ PicNest/
     「显示子文件夹内容」开关：关 = `recursive=false` 且 `dirRel=""`，**directOnly 判断不能依赖 dirRel 真值**
     （空 rel 也要排除更深层，否则会返回全库）。图片拖到侧栏「回收站」入口 = `picnestRemove` 软删 + 本地过滤。
     主面板整圈 `drop-main` 虚线已移除（无实际作用，只剩卡片/树行/浮签反馈）。
-    卡片交互：**单击只 `selectDir`（右侧详情看文件夹），双击才 `openDir`**；Shift/Alt 仍多选，带修饰键的双击不进入（防误入）。
+    卡片交互：**单击只 `selectDir`（右侧详情看文件夹），双击才 `openDir`**；Shift/Alt 仍多选，带修饰键的双击不进入（防误入）。正文卡片传 `preview:false`：多选只更新选中/详情，不触发 selectionView、不切中央网格；树内多选仍走合并视图。
 36. **浏览历史 / 面包屑**：store 里 `navHistory/navIndex`，位置 = `{rootId, view, rel}`；`openDir/switchView/switchRoot`
     末尾 `recordNav`（`opts.record===false` 时跳过，供 goBack/goForward 用）；新导航截断前进栈，上限 100。
     `goBack/goForward` 改 navIndex 后走 `applyNav`：跨库先 `switchRoot`（不记录）再 openDir/switchView。面包屑用
