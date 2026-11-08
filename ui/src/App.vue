@@ -97,7 +97,7 @@ const chipStyle = computed(() => {
   >
     <SideBar />
     <ResizeHandle store="sidebar" />
-    <section class="main-panel" :class="{ 'drop-main': lib.dropHint.active && lib.dropHint.zone === 'main' }">
+    <section class="main-panel">
       <TitleBar />
       <div class="main-inner">
         <!-- 浏览模式：网格 + 详情浮岛（v-show 保滚动位置） -->
@@ -133,8 +133,6 @@ const chipStyle = computed(() => {
 
 <style scoped>
 .shell { display: flex; height: 100%; position: relative; }
-/* 主展示区落点：整块主面板虚线内框（不再全窗遮罩） */
-.main-panel.drop-main { outline: 2px dashed var(--accent); outline-offset: -4px; }
 .drop-chip {
   position: fixed; z-index: 760; pointer-events: none;
   display: flex; align-items: center; gap: 8px;

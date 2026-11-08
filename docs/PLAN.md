@@ -141,11 +141,11 @@ PicNest/
     **sync/scan 的 diff 必须跳过 `deleted_at` 非空行**（P8a-P8d 已修）——回收区路径不在 root 扫描结果里，
     否则整行被当 removed 删除，还原时丢图（本轮实测踩中）。还原移回原路径（重名 `(2)`）并恢复行路径/标记；
     彻底删除才 `shell.trashItem`。回收站列表过滤 `trash_group IS NULL`；`counts.trash` = 独立软删图片 + 文件夹条目数。
-32. **图片手动排序**：`images.sort_order`（0 = 未排序）；manual 排序 SQL `(sort_order = 0) ASC, sort_order ASC, id ASC`，
-    未排序的新图/移入图排在最后。拖动排序 IPC 写 1..n 并自动切 manual；移动图片时 `sort_order = 0`。
+32. **图片手动排序**：`images.sort_order`（0 = 未排序）；manual 排序 SQL `(sort_order = 0) DESC, sort_order ASC, id DESC`，
+    **新录入/移入的 0 值排最前**（id 新的在前）。拖动排序 IPC 写 1..n 并自动切 manual；移动图片时 `sort_order = 0`。
     **画布级拖动**：按光标最近图片中心算目标与 before/after（光标在目标左半=前、右半=后），画布任意缝隙都能命中；
-    插入线用画布绝对坐标绘制（会随滚动），不依赖落点在单元格上。只在文件夹视图允许（全部是跨文件夹入库流）。
-    多选组拖动载荷 `x-picnest-files`；外部拖入不拦截，继续冒泡给 shell 录入当前目录。
+    插入线用画布绝对坐标绘制（会随滚动），不依赖落点在单元格上。**全部视图也允许拖动排序**：非 manual 时强制 added，
+    manual 时按 sort_order 显示并可拖。多选组拖动载荷 `x-picnest-files`；外部拖入不拦截，继续冒泡给 shell 录入当前目录。
     点正文空白 = 清图选 + 选中当前文件夹（库根→资料库根）；侧栏空白不接收内部图片（防误落未分类）。
 33. **树联动与增量更新**：`openDir(rel)` 调 `revealDir` 展开祖先（**库根被收起时也要展开**）。`DirTreeItem` 必须
     watch `dirMemory.expanded` 同步本地 `expanded` ref——只 watch `props.node` 时，补丁展开了 memory 但树行不展开。
@@ -153,3 +153,8 @@ PicNest/
     拖动排序/移动图片**不要整表 `loadImages`**：排序写库后直接重排 `this.images`（对象与选中保留，不重放入场波）；
     `moveImages` 过滤本地数组 + `refreshTree` 计数即可。内部操作设 `suppressSyncUntil`（默认 2-5s）屏蔽
     watcher 的 `add/unlink → 600ms 全量刷新`；`suppressWaveUntil` 抑制 sortMode/images.length 变化触发的入场波。
+34. **子文件夹卡片条换行 + 全部视图开关**：`.sf-row` 用 `flex-wrap`，卡片固定 168×136；`sfColumns` 由
+    `viewW - (inspector?312:4) - 28` 算出，`stripH = 30 + rows*(136+14) + 4` 参与 `contentTop`。全部视图卡片条也显示
+    「显示子文件夹内容」开关：关 = `recursive=false` 且 `dirRel=""`，**directOnly 判断不能依赖 dirRel 真值**
+    （空 rel 也要排除更深层，否则会返回全库）。图片拖到侧栏「回收站」入口 = `picnestRemove` 软删 + 本地过滤。
+    主面板整圈 `drop-main` 虚线已移除（无实际作用，只剩卡片/树行/浮签反馈）。

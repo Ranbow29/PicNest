@@ -154,15 +154,16 @@ electron.ipcMain.handle("picnest-images-by-dir", (_event, folderId, dirRel, offs
   let pattern = picnestLikeEscape(root.path + sep + (dirRel && dirRel !== "__loose__" ? dirRel.split("/").join(sep) + sep : "")) + "%";
   const looseOnly = dirRel === "__loose__";
   if (looseOnly) pattern = rootEsc + "%";
-  /* recursive=false：只要该层直属图片（排除更深层带分隔符的路径） */
-  const directOnly = recursive === false && dirRel && dirRel !== "__loose__";
+  /* recursive=false：只要该层直属图片（空 dirRel = 库根直属） */
+  const directOnly = recursive === false && dirRel !== "__loose__";
+  const directBase = root.path + sep + (dirRel ? dirRel.split("/").join(sep) + sep : "");
   const deeperPattern = directOnly
-    ? picnestLikeEscape(root.path + sep + dirRel.split("/").join(sep) + sep) + "%" + picnestLikeEscape(sep) + "%"
+    ? picnestLikeEscape(directBase) + "%" + picnestLikeEscape(sep) + "%"
     : null;
   /* 排序：name/added/mtime/size 走 SQL（sortAsc 控制方向），dims/rating 等暂回退 id ASC。
      全部视图（dirRel 空）由渲染层强制传 added → id DESC = 最新入库置顶 */
   const dirWord = (ascDefault) => (sortAsc === undefined || sortAsc === null ? ascDefault : sortAsc) ? "ASC" : "DESC";
-  const order = sortMode === "manual" ? "(sort_order = 0) ASC, sort_order ASC, id ASC"
+  const order = sortMode === "manual" ? "(sort_order = 0) DESC, sort_order ASC, id DESC"
     : sortMode === "name" ? `file_name COLLATE NOCASE ${dirWord(true)}`
     : sortMode === "added" ? `id ${dirWord(false)}`
     : sortMode === "mtime" ? `modify_time ${dirWord(false)}`

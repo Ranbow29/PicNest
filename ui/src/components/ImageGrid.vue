@@ -110,13 +110,26 @@ const currentFolderNode = computed(() => {
 })
 const subfolders = computed(() => currentFolderNode.value?.children || [])
 const trashFolders = computed(() => (lib.view === 'trash' ? lib.trashFolders : []))
-const STRIP_H_SUB = 172
-const STRIP_H_TRASH = 198
+const SF_CARD_W = 168
+const SF_CARD_H = 136
+const SF_GAP = 14
+const SF_HEAD_H = 30
 const stripMode = computed(() => {
   if (lib.view === 'trash') return trashFolders.value.length ? 'trash' : ''
   return subfolders.value.length ? 'sub' : ''
 })
-const stripH = computed(() => (stripMode.value === 'trash' ? STRIP_H_TRASH : (stripMode.value === 'sub' ? STRIP_H_SUB : 0)))
+/* 卡片按可用宽度换行铺满（全部视图 32 个也能全部看到，不靠横向滚动） */
+const sfColumns = computed(() => {
+  const reserve = lib.viewer.showInspector ? 312 : 4
+  const avail = Math.max(SF_CARD_W, (viewW.value || 0) - reserve - 28)
+  return Math.max(1, Math.floor((avail + SF_GAP) / (SF_CARD_W + SF_GAP)))
+})
+const stripH = computed(() => {
+  if (!stripMode.value) return 0
+  const n = stripMode.value === 'trash' ? trashFolders.value.length : subfolders.value.length
+  const rows = Math.max(1, Math.ceil(n / sfColumns.value))
+  return SF_HEAD_H + rows * (SF_CARD_H + SF_GAP) + 4
+})
 const contentTop = computed(() => HEADER_H + stripH.value + 10)
 const fmtTrashDate = (ms) => {
   if (!ms) return ''
@@ -530,7 +543,7 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
         <template v-if="stripMode === 'sub'">
           <div class="sf-head">
             <span class="sf-title">子文件夹 <b>({{ subfolders.length }})</b></span>
-            <label v-if="lib.currentDirRel" class="sf-toggle">
+            <label class="sf-toggle">
               <input type="checkbox" :checked="lib.showSubfolderContent" @change="lib.setShowSubfolderContent($event.target.checked)" />
               <span>显示子文件夹内容</span>
             </label>
@@ -686,9 +699,8 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
 }
 .sf-toggle:hover { background: var(--accent-weak); color: var(--text); }
 .sf-toggle input { accent-color: var(--accent); cursor: pointer; }
-.sf-row { display: flex; gap: 14px; height: 130px; overflow-x: auto; overflow-y: hidden; padding: 4px 2px 0; scrollbar-width: none; }
-.sf-row::-webkit-scrollbar { display: none; }
-.sf-card { flex: none; width: 168px; cursor: pointer; }
+.sf-row { display: flex; flex-wrap: wrap; gap: 14px; padding: 4px 2px 0; align-content: flex-start; }
+.sf-card { flex: none; width: 168px; height: 136px; cursor: pointer; }
 .sf-cover {
   height: 92px; border-radius: 10px; overflow: hidden;
   background: var(--bg-2); border: 1px solid var(--border);
@@ -703,8 +715,7 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
 .sf-count { margin-top: 2px; font-size: 11px; color: var(--text-2); }
 
 /* 回收站文件夹卡片 */
-.trash-row { height: 158px; }
-.trash-card { width: 184px; }
+.trash-card { width: 168px; }
 .trash-cover { height: 62px; }
 .trash-card .sf-name { margin-top: 5px; }
 .tf-actions { display: flex; gap: 6px; margin-top: 6px; }

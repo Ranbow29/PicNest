@@ -535,10 +535,12 @@ export const useLibrary = defineStore('library', {
         } else if (this.view === 'search') {
           next = this.searchQuery ? await window.picrand.picnestSearch(this.activeRootId, this.searchQuery, 300) : []
         } else {
-          /* 全部 = 最新入库流（新图置顶，与文件夹视图彻底分开；忽略升降序开关锁死最新在前）
-             文件夹 = 排序器正常排序（sortMode + sortAsc 全生效） */
+          /* 全部 = 非手动时锁最新入库；手动排序允许在全部视图换位（新图 0 置前） */
           const inAll = this.view === 'all' && !this.currentDirRel
-          next = await api.imagesByDir(this.activeRootId, this.currentDirRel, 0, 100000, inAll ? 'added' : this.sortMode, inAll ? false : this.sortAsc, inAll ? true : this.showSubfolderContent)
+          const manualAll = inAll && this.sortMode === 'manual'
+          const mode = manualAll ? 'manual' : (inAll ? 'added' : this.sortMode)
+          const asc = manualAll ? this.sortAsc : (inAll ? false : this.sortAsc)
+          next = await api.imagesByDir(this.activeRootId, this.currentDirRel, 0, 100000, mode, asc, this.showSubfolderContent)
         }
         if (gen !== this._loadGen) return // 快速切换时丢弃过期结果
         this.images = next || []
@@ -944,6 +946,30 @@ export const useLibrary = defineStore('library', {
       return { ok: failed === 0, moved, failed }
     },
 
+    /* 拖到回收站：软删（文件原地保留），本地增量移除，不整表刷新 */
+    async trashImages(paths) {
+      if (this.view === 'trash') return { ok: false, error: '已在回收站' }
+      const list = [...new Set((paths || []).filter(Boolean))]
+      if (!list.length) return { ok: false }
+      const set = new Set(list)
+      let ok = 0, failed = 0
+      for (const p of list) {
+        try {
+          await window.picrand.picnestRemove(p)
+          ok++
+        } catch (e) { failed++ }
+      }
+      if (ok) {
+        this.suppressWaveUntil = Date.now() + 800
+        this.images = this.images.filter((i) => !set.has(i.file_path))
+        for (const p of list) this.pruneImageSelection(p)
+        if (this.lightbox.open && set.has(this.lightbox.path)) this.closeLightbox()
+        await this.refreshTree()
+        this.showNote(`已移入回收站 ${ok} 张${failed ? ` · 失败 ${failed}` : ''}`)
+      }
+      return { ok: failed === 0, moved: ok, failed }
+    },
+
     // 目录树的扁平清单（移动目标选择器用）
     flatDirs() {
       const out = []
@@ -996,17 +1022,20 @@ export const useLibrary = defineStore('library', {
     },
 
     setSort(mode, asc) {
+      const prev = this.sortMode
       if (mode !== undefined) this.sortMode = mode
       if (asc !== undefined) this.sortAsc = asc
       if (this.sortMode === 'random') this.randomNonce++
       localStorage.setItem('picnest.sortMode', this.sortMode)
       localStorage.setItem('picnest.sortAsc', this.sortAsc ? '1' : '0')
-      /* 文件夹视图/多选合并视图排序实时生效（SQL 排序需重查）；全部视图固定最新置顶，不受排序影响 */
-      if (this.currentDirRel || this.selectionView) this.loadImages()
+      /* 文件夹/合并视图实时重查；全部视图只有 manual 参与排序，切进/切出 manual 时重查 */
+      if (this.currentDirRel || this.selectionView || this.view === 'all') {
+        if (this.currentDirRel || this.selectionView || this.sortMode === 'manual' || prev === 'manual') this.loadImages()
+      }
     },
     /* 图片拖动排序：仅文件夹视图；写入 sort_order 并切到手动排序 */
     canReorder() {
-      return !this.selectionView && this.view === 'all' && !!this.currentDirRel && !this.lightbox.open
+      return !this.selectionView && this.view === 'all' && !this.lightbox.open
     },
     async reorderImages(srcPaths, targetPath, before = true) {
       if (!this.canReorder()) return { ok: false, error: '仅在文件夹视图内可拖动排序' }
@@ -1051,7 +1080,7 @@ export const useLibrary = defineStore('library', {
     setShowSubfolderContent(v) {
       this.showSubfolderContent = !!v
       localStorage.setItem('picnest.showSubfolderContent', v ? '1' : '0')
-      if (this.view === 'all' && this.currentDirRel && !this.selectionView) this.loadImages()
+      if (this.view === 'all' && !this.selectionView) this.loadImages()
     },
     setZoom(z) {
       this.zoom = z
