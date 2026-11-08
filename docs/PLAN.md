@@ -225,3 +225,24 @@ PicNest/
     `.glass` 背景置透明并去掉 `backdrop-filter`，`::after` 拖尾 `display:none`；底部 dock 加 `dock-clear` 类，
     关闭玻璃底/边框/阴影/模糊（裁剪条 crop-bar 仍是玻璃底）。浏览模式不受影响。
     注意大图「适应」仍按 70px 上留白算（顶栏变透明但控件仍占 42px 高），dock 也仍占 46+16，不要误以为可以去掉安全区。
+41. **优化批次（2026-11-09）**：
+    ①**详情让位**：`.insp-open` 类必须放在 `.browse` 容器上（ImageGrid 是 fragment 根，App 传 class 会被丢，之前规则一直没生效）；
+    `.browse.insp-open { --insp-reserve: calc(var(--insp-w) + 16px) }`，ImageGrid `.grid-viewport` 的 `padding-right` 消费它；
+    子文件夹卡片条 right 用 `inspectorWidth + 20`。实测内容右缘 1029 < 浮岛左缘 1041。
+    ②**verify_counts.py 多库**：逐库报 active/原地软删/回收区/文件系统 + 顶层目录 diff；**旧脚本 `rel == '.'` 直接 continue，
+    根目录直属文件从来没被统计**（素材库 42 张全在根层 → 误报 12），现在 root_files 单独计入。
+    ③**文本缩略图外部修改失效**：在 `picnest-images-by-dir` 行富化时比 `stat(源).mtimeMs > stat(缩略图).mtimeMs + 1500`，
+    命中就删缓存文件并清 DB thumbnail_path（容差避开保存后重画的竞态）；文本不再走 `discoverThumbnailPath`（避免复活 v1 残留）。
+    ④**目录排序键隔离**：key 改为 `${folderId}|${rel || "__root__"}`；picnest-dir-tree / dir-order-set / dir-sort /
+    dir-sort-recursive / rename 全部改用它；rename/sort 通过 `picnestRootIdByPath(absPath)` 反查库 id。
+    启动时 `picnestMigrateDirOrderKeys` 把旧全局键复制到每个库的新键（旧键保留可回滚）。
+    **preload 的 `picnestDirOrderSet(folderId, parentKey, names)` 多了首参**，store 4 处调用要同步传 `activeRootId`。
+42. **重复文件查找（2026-11-09，Feb 指定）**：入口=文件夹右键「查找重复…」（子树）/ 资料库右键（全库）；
+    资料库根在文件夹树里没有右键菜单，所以全库入口必须挂在资料库行。
+    扫描：`folder_id` 精确限定（不跨库）→ 取 active 行 → `stat` 实际 size → **按 size 分桶，只有同尺寸才读盘** →
+    流式 MD5（`createReadStream`，并发 4）→ `size:md5` 分组，≥2 成组。进度用 `event.sender.send("picnest-dup-progress")`
+    （preload `onPicnestDupProgress`，store init 注册一次）；6.7k 文件实测 258ms（27 个候选）。
+    **同内容文件必然同 size，所以快捷钮没有「保留最大」，用「保留第一/最新/最旧」**；默认一个都不勾，删前 confirm。
+    删除只走 `trashImages`（图巢回收站软删）；删完在本地重算 groups（<2 丢弃）与 stats，不重新扫盘。
+    面板 `DupFinder.vue`：z-index 940（confirm 950 在其上），Esc 在 App 里优先关闭；每个文件卡必须显示 `rel || '库根'`。
+    已知：没有取消扫描的 IPC（关窗后主进程扫完丢弃结果）；超大库首次扫描可能慢。

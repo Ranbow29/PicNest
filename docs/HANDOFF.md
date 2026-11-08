@@ -126,6 +126,18 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。
   滚轮缩放/←→翻页照旧；裁切/旋转/翻转对视频隐藏；`loadedmetadata` 回填宽高
 - 详情面板：文本显示「尺寸：文本」、隐藏色板；视频预览用海报缩略图（不再直链 mp4 裂图）
 
+### 查重 / 数据一致性
+- **查找重复**：入口 = 文件夹右键「查找重复…」（查该子树） / 资料库右键（查全库）；严格按 `folder_id` 查，**不跨资料库**
+- 扫描：全部图片+视频+文本 → 按 `file_size` 分桶（只有同尺寸才读盘）→ 流式 MD5（并发 4）→ 同 hash 且 ≥2 成组；
+  进度经 `picnest-dup-progress` 推给渲染层；6.7k 库实测 258ms（27 个同尺寸候选，9 组/19 文件/13.1MB）
+- 结果面板：组按可省空间排序；每个文件显示缩略图/文件名/**所在文件夹**（库根显示「库根」）/大小/修改时间；
+  每组快捷「保留第一张 / 保留最新 / 保留最旧」只勾掉其余（同内容尺寸相同，"最大"无意义），也可手动勾选；默认不勾任何文件
+- 删除：只走图巢回收站（软删可还原）；确认卡列前 5 个文件名；删后组内不足 2 个自动消失，统计实时更新
+- 优化批次：①详情打开时正文网格真正让位（`--insp-reserve` 设 `.browse`，ImageGrid 用 padding-right；不再依赖无效的 `.insp-open`）
+  ②`verify_counts.py` 多库对账（每库 active / 原地软删 / 回收区 / 文件系统 + 顶层目录 diff；修了根目录直属文件漏数）
+  ③文本缩略图外部修改懒失效（`imagesByDir` 里源 mtime > 缩略图 mtime+1.5s 即删缓存/清 DB）
+  ④目录排序键按库隔离 `${folderId}|${rel}`，旧全局键启动时复制到每个库（保留旧键可回滚）
+
 ### 动效 / 滑尺 / 其它
 - 入场波 520ms（1/24 墨水步进）；AnimIcon 六字形；集体晃动总线（切视图/换文件夹/切库/关大图/漏斗与布局弹板/详情开合）
 - **随机自弹已彻底移除**（Feb 明确要求，勿复活）
@@ -169,10 +181,14 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。
 - `picnest-read-text` 返回 `{content, encoding, eol, size, mtimeMs, truncated}`；`picnest-save-text(filePath, content, expectedMtimeMs)`
   原子写（`.picnest-tmp` + rename）且**始终写 UTF-8**（GBK 原文会转码，UI 已提示）；`expectedMtimeMs` 差值 >1.5s 判冲突；保存会失效旧缩略图
 - 视频不写 width/height 的兜底：`loadedmetadata` 时回填 store（并 `layoutTick++`）；海报缩略图生成时主进程也会 updateImageDimensions
+- **dirOrder 键 = `${folderId}|${rel || "__root__"}`**（多库隔离）；旧全局键在启动迁移时复制到每个库，读取只认新键
+- **查重 IPC**：`picnest-find-duplicates(folderId, rel)` → `{groups, stats}`；进度事件 `picnest-dup-progress`；只查当前 `folder_id`，不跨库
+- **详情让位**：`.browse.insp-open` 提供 `--insp-reserve`（= 详情宽 + 16），ImageGrid `.grid-viewport` padding-right 使用；不要再给 ImageGrid 传 class（fragment 根会丢）
 
 ## 五、议题 / 下一步
 
-已闭环：录入细分（位置即意图）、文件夹删除/图巢回收站、子文件夹卡片、图片拖动排序、浏览历史、复制粘贴、详情三态。
+已闭环：录入细分（位置即意图）、文件夹删除/图巢回收站、子文件夹卡片、图片拖动排序、浏览历史、复制粘贴、详情三态、
+**重复文件查找（右键子树/全库）**、详情让位/多库对账/文本缩略图失效/排序键隔离。
 
 待做（优先级可再对）：
 - [ ] 标签系统（筛选栏已预留标签位）
@@ -184,16 +200,14 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。
 - [ ] 既有同名副本（如 `风景 (1)`）的「合并到同名文件夹…」动作
 - [ ] M6 采集：Eagle 兼容 localhost:41595 API（复用 Eagle for Edge）
 - [ ] M7 Eagle 库迁移（先只读预演）
-- [ ] `tools/verify_counts.py` 升级为多资料库
 
 ## 六、技术债
 
-- `verify_counts.py` 单库时代脚本，多库账目混乱
-- `picnestDirOrder` / `sortMode` 的全局性（见上）
+- `picnestDirOrder` 的「排序」仍按当前层写回名字列表；跨库已隔离，但每个库的文件夹顺序模式（名称/时间）本身没有记忆
 - 文件夹整包 MD5 查重在主进程同步执行；超大文件夹首次放入会卡一下
 - 同名副本 `风景 (1)` 不会自动合并；删除多余副本或做「合并到…」
-- `.insp-open` 对 grid 的右边距不生效（fragment 根），图片可能滑到详情浮岛下面；卡片条已手动避让
 - 大图无帧步进（Eagle Ctrl+←/→ 未做）；标签/框选外的批量编辑未做
+- 查重扫描没有取消按钮（关窗后主进程会继续扫完，结果丢弃）；同尺寸候选极多的大库第一次扫可能慢
 
 ## 七、关键文件地图
 
@@ -205,11 +219,11 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。
 | `ui/src/components/TitleBar.vue` | 顶栏：面包屑/历史箭头/筛选/布局/缩放/搜索/窗控 |
 | `ui/src/components/SideBar.vue` · `DirTreeItem.vue` | 资料库+视图入口/树行/拖拽落点/右键 |
 | `ui/src/components/ImageGrid.vue` | 布局引擎+虚拟滚动+滑尺+子文件夹卡片+选中/拖动排序/拖回收站 |
-| `ui/src/components/Inspector.vue` | 图片单选/多选、文件夹单选/多选四态 |
-| `ui/src/components/DirContextMenu.vue` · `NamePromptDialog.vue` · `ConfirmDialog.vue` | 文件夹菜单/命名/通用确认 |
-| `ui/src/components/ContextMenu.vue` · `DuplicateDialog.vue` · `ImportResultCard.vue` · `TrashMenu.vue` | 图片菜单/重复三选一/录入结果卡/回收站右键菜单 |
+| `ui/src/components/Inspector.vue` · `InspResize.vue` | 图片/文件夹详情四态 · 详情三向尺寸拖拽（左/顶/左上角，支点右下） |
+| `ui/src/components/DirContextMenu.vue` · `NamePromptDialog.vue` · `ConfirmDialog.vue` · `DupFinder.vue` | 文件夹菜单（含查找重复）/命名/通用确认/重复结果面板 |
+| `ui/src/components/ContextMenu.vue` · `DuplicateDialog.vue` · `ImportResultCard.vue` · `TrashMenu.vue` | 图片菜单/录入重复三选一/录入结果卡/回收站右键菜单 |
 | `ui/src/components/FilterBar.vue` · `ColorPicker.vue` | 筛选 · HSV 取色 |
-| `tools/patches/apply.mjs` · `picnest-handlers.js` | 补丁 P1-P6/P8/P9 + 文件夹/录入/回收站/统计/排序/文本 IPC |
+| `tools/patches/apply.mjs` · `picnest-handlers.js` | 补丁 P1-P6/P8/P9 + 文件夹/录入/回收站/统计/排序/文本/查重 IPC |
 | `tools/cdp-*.mjs` · `shot-prod.ps1` | CDP 探针/截屏 |
 | `docs/MOTION.md` | 动效规格与调参速查 |
 
@@ -236,9 +250,16 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。
 
 ## 九、本轮验收状态 / 最近提交
 
-- 当前 dev 实例运行中，浏览位置已还原到「粥」；回收站中 1 项为用户数据（验证批量还原时真实还原了 2 张，已回原文件夹）
-- 本轮（多选收尾 + 回收站批量还原）CDP 逻辑验收已过：Ctrl+A 计数=可见数、Esc 分层、框选命中实时更新、Shift 并集、批量删除确认卡可取消且不动数据；回收站多选菜单文案「还原（N 张）/彻底删除（N 张）」、逐张调用、确认卡可取消
-- **文本 / 视频批次验收**：临时文件夹入库 3 个文本 + 忽略 `.js`；SVG 纸面缩略图 3/3 生成、网格无占位卡；编辑器载入 UTF-8/6 行/101 字符、自动保存、Ctrl+S、关闭前 flush 全部回读通过；GB18030 探针正确解码、3MB 文件截断只读；mp4 720×960/16.57s 自动播放、自绘 dock 播放/暂停/拖进度到 8.28s 正常；测试目录已删、DB 行已清、浏览位置还原
-- 最近提交（从旧到新）：`e4e21d0` 第七版交接 → `927e102` 多选收尾 → `6e4cc65` 回收站批量还原 → 本轮文本/视频（见 git log 顶部）
-- 仍需 Feb **物理鼠标**验收：文本编辑器手感（自动保存/字号/换行）、文字缩略图观感、视频自绘控制条（拖动进度/音量/全屏）、以及此前遗留的框选/批量删除/拖动排序/历史箭头
+- 当前 dev 实例运行中，浏览位置在「红油奇亚籽/新_2025-2026」；详情面板尺寸为用户当前手动值（localStorage 持久化）
+- **优化批次 CDP 验收**：详情打开时网格让位（内容右缘 1029 < 浮岛左缘 1041，不再压图）；
+  `verify_counts.py` 两库均一致（好图 6718/6718、素材 42/42，修了根目录直属文件漏数）；
+  文本缩略图被外部改后 mtime 判定失效并清空重画；dirOrder 旧键已迁移成 164 个 `${folderId}|rel` 隔离键，树顺序不变
+- **查重批次验收**：临时目录 9 个文件 → 视频 2、图片 3（含 sub/ 子目录）、文本 2 正确成组，同尺寸不同内容未误报；
+  快捷「保留第一/最新」勾选正确、确认卡 3 张、软删后组内不足 2 个自动消失；全库 6724 文件扫描 258ms
+  （27 个同尺寸候选）→ 9 组 / 19 文件 / 可省 13.1MB；测试文件已从磁盘/回收站/索引全部清理
+- 最近提交：`927e102` 多选收尾 → `6e4cc65` 回收站批量还原 → `f358e2f` 文本/视频 → `d1ebf3e` 缩略图 2x →
+  `9309a67`/`64c70c6` 文本编辑层 → `e1d6d28`/`fb75cce`/`af4f999`/`f90daf8` 视觉分层（顶栏浮岛已回调）→
+  `a93544c` 详情自由缩放 → `f168293` 大图安全区 → `4d036d6` 去 URL → `1a28e7f`/`b328019` 大图透明栏 → 本轮查重（见 git log 顶部）
+- 仍需 Feb **物理鼠标**验收：查重面板（右键入口、快捷保留、逐张勾选、确认删除）、详情网格让位观感、
+  此前遗留的详情三向缩放、大图透明顶栏/底栏、框选/批量删除/拖动排序/历史箭头
 - dist 已构建；文档三件套已同步（HANDOFF/PLAN/MOTION）

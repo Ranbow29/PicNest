@@ -9,6 +9,7 @@ import Lightbox from './components/Lightbox.vue'
 import ContextMenu from './components/ContextMenu.vue'
 import DuplicateDialog from './components/DuplicateDialog.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
+import DupFinder from './components/DupFinder.vue'
 import TrashMenu from './components/TrashMenu.vue'
 import ImportResultCard from './components/ImportResultCard.vue'
 import ResizeHandle from './components/ResizeHandle.vue'
@@ -31,6 +32,7 @@ function onKeydown(e) {
     if (isTypingTarget(e.target)) return
     if (lib.lightbox.open) return // Lightbox 自己处理（含裁剪态）
     if (lib.confirmDialog.open) { lib.resolveConfirm(false); return }
+    if (lib.dupFinder.open) { lib.closeDupFinder(); return }
     if (lib.dupDialog.open) return // 重复三选一必须显式选择
     if (lib.dirMenu.open) { lib.closeDirMenu(); return }
     if (lib.contextMenu.open) { lib.closeContextMenu(); return }
@@ -121,9 +123,10 @@ const chipStyle = computed(() => {
       <TitleBar />
       <div class="main-inner">
         <!-- 浏览模式：网格 + 详情浮岛（v-show 保滚动位置） -->
-        <div v-show="!lib.lightbox.open" class="browse" :class="{ 'insp-h-fixed': lib.inspectorHeight > 0 }"
+        <div v-show="!lib.lightbox.open" class="browse"
+             :class="{ 'insp-h-fixed': lib.inspectorHeight > 0, 'insp-open': lib.viewer.showInspector }"
              :style="{ '--insp-w': lib.inspectorWidth + 'px', '--insp-h': lib.inspectorHeight + 'px' }">
-          <ImageGrid :class="{ 'insp-open': lib.viewer.showInspector }" />
+          <ImageGrid />
           <Transition name="insp">
             <Inspector v-if="lib.viewer.showInspector" :style="{ '--insp-w': lib.inspectorWidth + 'px' }" />
           </Transition>
@@ -149,6 +152,7 @@ const chipStyle = computed(() => {
   <ContextMenu />
   <DuplicateDialog />
   <ConfirmDialog />
+  <DupFinder />
   <TrashMenu />
   <ImportResultCard />
 </template>
@@ -176,7 +180,8 @@ const chipStyle = computed(() => {
   overflow: hidden;
 }
 .main-inner { flex: 1; display: flex; min-height: 0; position: relative; } /* 头块自己让位玻璃顶栏 */
-.browse { flex: 1; display: flex; min-height: 0; position: relative; }
+.browse { flex: 1; display: flex; min-height: 0; position: relative; --insp-reserve: 0px; }
+.browse.insp-open { --insp-reserve: calc(var(--insp-w, 296px) + 16px); }
 /* 详情统一 overlay：悬浮于内容之上（滚动条自然到最右），两模式同位同尺寸
    top 64 = 让过 42px 玻璃顶栏 + 20px 拖尾渐隐（顶栏下缘 61，留 3px 呼吸） */
 .browse :deep(.inspector), .insp-overlay :deep(.inspector) {

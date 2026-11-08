@@ -37,6 +37,7 @@ function picnestMigrate() {
     )`);
   } catch (e) {}
   try { picnestMigrateTextThumbs() } catch (e) {}
+  try { picnestMigrateDirOrderKeys() } catch (e) {}
   _picnestMigrated = true;
 }
 /* 一次性（幂等）清掉旧版文本缩略图：v1 是 400px 直出，大格子下糊；v2 改 800px 重画 */
@@ -115,7 +116,7 @@ electron.ipcMain.handle("picnest-dir-tree", (_event, folderId) => {
   walkFs(root.path, rootDir);
   function toNode(n, rel) {
     const children = Object.values(n.children).map((c) => toNode(c, rel ? rel + "/" + c.name : c.name));
-    const order = (picnestDirOrderRead()[rel || "__root__"]) || [];
+    const order = (picnestDirOrderRead()[picnestOrderKey(folderId, rel)]) || [];
     const rank = (name) => { const i = order.indexOf(name); return i < 0 ? 1e9 + name.length : i; };
     children.sort((a, b) => rank(a.name) - rank(b.name) || a.name.localeCompare(b.name, "zh"));
     let total = n.direct;
@@ -200,8 +201,23 @@ electron.ipcMain.handle("picnest-images-by-dir", (_event, folderId, dirRel, offs
       ).all(folderId, pattern, limit, offset);
   const valid = [];
   for (const img of rows) {
+    const ext = path.extname(img.file_path).toLowerCase();
+    const isText = PICNEST_TEXT_EXTS.has(ext);
+    /* 文本被外部改过：源文件 mtime 晚于纸面缩略图 → 判失效，删缓存等渲染层重画 */
+    if (isText && img.thumbnail_path) {
+      try {
+        const srcMs = fs.statSync(img.file_path).mtimeMs;
+        const thumbMs = fs.statSync(img.thumbnail_path).mtimeMs;
+        if (srcMs > thumbMs + 1500) {
+          try { fs.unlinkSync(img.thumbnail_path) } catch (e) {}
+          try { getDb().prepare("UPDATE images SET thumbnail_path = '' WHERE id = ?").run(img.id) } catch (e) {}
+          img.thumbnail_path = "";
+        }
+      } catch (e) { /* 文件/缩略图缺失下面统一处理 */ }
+    }
     if (img.thumbnail_path && !fs.existsSync(img.thumbnail_path)) img.thumbnail_path = "";
-    if (!img.thumbnail_path) img.thumbnail_path = discoverThumbnailPath(img.file_path) || "";
+    /* 文本不走 discover：旧版 md5.webp 可能是 v1 残留，交给 v2 生成器重画 */
+    if (!img.thumbnail_path && !isText) img.thumbnail_path = discoverThumbnailPath(img.file_path) || "";
     if (!fs.existsSync(img.file_path)) { deleteImageByPath(img.file_path); continue; }
     valid.push(img);
   }
@@ -764,12 +780,46 @@ electron.ipcMain.handle("picnest-crop-as", async (_event, filePath, opts) => {
 function picnestDirOrderRead() {
   try { return JSON.parse(fs.readFileSync(configPath, "utf-8")).picnestDirOrder || {} } catch (e) { return {} }
 }
+/* 目录排序键按资料库隔离：`<folderId>|<rel>`（旧版只有 rel，会跨库串味） */
+function picnestOrderKey(folderId, rel) { return `${folderId}|${rel || "__root__"}`; }
+function picnestRootIdByPath(absPath) {
+  try {
+    const p = String(absPath || "").replace(/\//g, "\\").toLowerCase();
+    const rows = getDb().prepare("SELECT id, path FROM folders").all();
+    let best = null;
+    for (const r of rows) {
+      const rp = String(r.path || "").replace(/\//g, "\\").toLowerCase().replace(/\\+$/, "");
+      if (!rp) continue;
+      if (p === rp || p.startsWith(rp + "\\")) {
+        if (!best || rp.length > best.rp.length) best = { id: r.id, rp };
+      }
+    }
+    return best ? best.id : null;
+  } catch (e) { return null; }
+}
+/* 旧版全局排序键一次性迁移：复制到每个资料库的隔离键（不动旧键，便于回滚） */
+function picnestMigrateDirOrderKeys() {
+  try {
+    const c = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+    const map = c.picnestDirOrder || {};
+    const roots = getDb().prepare("SELECT id FROM folders").all();
+    let changed = false;
+    for (const r of roots) {
+      for (const [k, v] of Object.entries(map)) {
+        if (k.includes("|")) continue;
+        const nk = picnestOrderKey(r.id, k === "__root__" ? "" : k);
+        if (!(nk in map)) { map[nk] = v; changed = true; }
+      }
+    }
+    if (changed) { c.picnestDirOrder = map; fs.writeFileSync(configPath, JSON.stringify(c, null, 2)); }
+  } catch (e) {}
+}
 electron.ipcMain.handle("picnest-dir-order-get", () => picnestDirOrderRead());
-electron.ipcMain.handle("picnest-dir-order-set", (_event, parentKey, names) => {
+electron.ipcMain.handle("picnest-dir-order-set", (_event, folderId, parentKey, names) => {
   let c = {};
   try { c = JSON.parse(fs.readFileSync(configPath, "utf-8")); } catch (e) {}
   c.picnestDirOrder = c.picnestDirOrder || {};
-  c.picnestDirOrder[parentKey] = names;
+  c.picnestDirOrder[picnestOrderKey(folderId, parentKey === "__root__" ? "" : parentKey)] = names;
   fs.writeFileSync(configPath, JSON.stringify(c, null, 2));
   return true;
 });
@@ -979,7 +1029,10 @@ electron.ipcMain.handle("picnest-rename-dir", (_event, oldPath, newName, oldRel,
     fs.renameSync(oldPath, newPath);
     const oldName = path.basename(oldPath);
     const order = picnestDirOrderRead();
+    const rid = picnestRootIdByPath(oldPath);
+    const keyPrefix = rid != null ? rid + "|" : null;
     for (const key of Object.keys(order)) {
+      if (keyPrefix ? !key.startsWith(keyPrefix) : key.includes("|")) continue; // 只迁移本库的排序键
       const arr = order[key];
       const idx = arr.indexOf(oldName);
       if (idx >= 0) arr[idx] = clean;
@@ -1029,7 +1082,8 @@ electron.ipcMain.handle("picnest-dir-sort", (_event, parentRel, parentAbsPath, m
     let c = {};
     try { c = JSON.parse(fs.readFileSync(configPath, "utf-8")); } catch (e) {}
     c.picnestDirOrder = c.picnestDirOrder || {};
-    c.picnestDirOrder[parentRel || "__root__"] = names;
+    const rid = picnestRootIdByPath(parentAbsPath);
+    c.picnestDirOrder[rid != null ? picnestOrderKey(rid, parentRel) : (parentRel || "__root__")] = names;
     fs.writeFileSync(configPath, JSON.stringify(c, null, 2));
     return { ok: true, names };
   } catch (e) {
@@ -1043,10 +1097,11 @@ electron.ipcMain.handle("picnest-dir-sort-recursive", (_event, rootAbsPath, root
     let c = {};
     try { c = JSON.parse(fs.readFileSync(configPath, "utf-8")); } catch (e) {}
     c.picnestDirOrder = c.picnestDirOrder || {};
+    const rid = picnestRootIdByPath(rootAbsPath);
     let levels = 0;
     const walk = (abs, rel) => {
       const names = picnestSortDirLevel(rel, abs, mode);
-      c.picnestDirOrder[rel || "__root__"] = names;
+      c.picnestDirOrder[rid != null ? picnestOrderKey(rid, rel) : (rel || "__root__")] = names;
       levels++;
       for (const name of names) walk(path.join(abs, name), rel ? rel + "/" + name : name);
     };
@@ -1406,5 +1461,108 @@ electron.app.whenReady().then(() => {
 /* 诊断探针：主进程视角的窗口 bounds（查 DPI 舍入漂移用） */
 electron.ipcMain.handle("picnest-window-bounds", () => {
   try { return mainWindow && !mainWindow.isDestroyed() ? mainWindow.getBounds() : null; } catch (e) { return null; }
+});
+/* ---- 重复文件扫描（仅当前资料库；size 预筛 → MD5；图片/视频/文本） ---- */
+function picnestMd5Stream(fp) {
+  return new Promise((resolve) => {
+    let h;
+    try { h = crypto.createHash("md5"); } catch (e) { resolve(null); return; }
+    let s;
+    try { s = fs.createReadStream(fp); } catch (e) { resolve(null); return; }
+    s.on("data", (d) => { try { h.update(d); } catch (e) {} });
+    s.on("end", () => { try { resolve(h.digest("hex")); } catch (e) { resolve(null); } });
+    s.on("error", () => resolve(null));
+  });
+}
+async function picnestMapLimit(items, limit, fn) {
+  let i = 0;
+  const n = Math.max(1, Math.min(limit, items.length));
+  await Promise.all(Array.from({ length: n }, async () => {
+    while (i < items.length) { const cur = items[i++]; await fn(cur); }
+  }));
+}
+electron.ipcMain.handle("picnest-find-duplicates", async (event, folderId, rel) => {
+  try {
+    picnestMigrate();
+    const t0 = Date.now();
+    const root = getDb().prepare("SELECT path FROM folders WHERE id = ?").get(folderId);
+    if (!root) return { ok: false, error: "资料库不存在" };
+    const sep = root.path.includes("\\") ? "\\" : "/";
+    const scopeRel = String(rel || "").replace(/^\/+|\/+$/g, "");
+    let rows;
+    if (scopeRel) {
+      const pat = picnestLikeEscape(root.path + sep + scopeRel.split("/").join(sep) + sep) + "%";
+      rows = getDb().prepare(
+        `SELECT id, file_path, file_name, file_size, modify_time, width, height, thumbnail_path
+         FROM images WHERE folder_id = ? AND deleted_at IS NULL AND file_path LIKE ? ESCAPE '\\'`
+      ).all(folderId, pat);
+    } else {
+      rows = getDb().prepare(
+        `SELECT id, file_path, file_name, file_size, modify_time, width, height, thumbnail_path
+         FROM images WHERE folder_id = ? AND deleted_at IS NULL`
+      ).all(folderId);
+    }
+    const files = [];
+    for (const r of rows) {
+      let st;
+      try { st = fs.statSync(r.file_path); } catch (e) { continue; }
+      if (!st.isFile() || st.size <= 0) continue;
+      files.push({ ...r, size: st.size });
+    }
+    /* 只有同尺寸才可能同内容：先按 size 分桶，unique 尺寸不读盘 */
+    const bySize = new Map();
+    for (const f of files) {
+      if (!bySize.has(f.size)) bySize.set(f.size, []);
+      bySize.get(f.size).push(f);
+    }
+    const candidates = [];
+    for (const arr of bySize.values()) if (arr.length > 1) candidates.push(...arr);
+    const total = candidates.length;
+    let done = 0, last = 0;
+    await picnestMapLimit(candidates, 4, async (f) => {
+      f.md5 = await picnestMd5Stream(f.file_path);
+      done++;
+      if (done - last >= 3 || done === total) {
+        last = done;
+        try { event.sender.send("picnest-dup-progress", { done, total }); } catch (e) {}
+      }
+    });
+    const byHash = new Map();
+    for (const f of candidates) {
+      if (!f.md5) continue;
+      const key = f.size + ":" + f.md5;
+      if (!byHash.has(key)) byHash.set(key, []);
+      byHash.get(key).push(f);
+    }
+    const relOf = (fp) => path.relative(root.path, path.dirname(fp)).replace(/[\\/]+/g, "/");
+    const groups = [];
+    for (const arr of byHash.values()) {
+      if (arr.length < 2) continue;
+      const filesOut = arr.map((f) => ({
+        path: f.file_path,
+        name: f.file_name,
+        size: f.size,
+        mtime: f.modify_time,
+        width: f.width,
+        height: f.height,
+        thumb: f.thumbnail_path || "",
+        rel: relOf(f.file_path),
+      }));
+      filesOut.sort((a, b) => (a.rel || "").localeCompare(b.rel || "", "zh") || String(a.name).localeCompare(String(b.name), "zh"));
+      groups.push({ hash: arr[0].md5, size: arr[0].size, count: filesOut.length, wasted: arr[0].size * (filesOut.length - 1), files: filesOut });
+    }
+    groups.sort((a, b) => b.wasted - a.wasted || b.count - a.count);
+    const stats = {
+      scopes: files.length,
+      candidates: total,
+      groups: groups.length,
+      files: groups.reduce((s, g) => s + g.count, 0),
+      wasted: groups.reduce((s, g) => s + g.wasted, 0),
+      ms: Date.now() - t0,
+    };
+    return { ok: true, rootId: folderId, rel: scopeRel, groups, stats };
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
+  }
 });
 /* ==== /PicNest:P4 ==== */

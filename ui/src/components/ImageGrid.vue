@@ -653,7 +653,7 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
       </header>
 
       <!-- 子文件夹 / 已删除文件夹卡片条：随内容滚动，位于头部与图片之间 -->
-      <div v-if="stripMode" class="subfolders" :style="{ top: HEADER_H + 'px', height: stripH + 'px', right: lib.viewer.showInspector ? '312px' : '4px' }">
+      <div v-if="stripMode" class="subfolders" :style="{ top: HEADER_H + 'px', height: stripH + 'px', right: lib.viewer.showInspector ? (lib.inspectorWidth + 20) + 'px' : '4px' }">
         <template v-if="stripMode === 'sub'">
           <div class="sf-head">
             <span class="sf-title">子文件夹 <b>({{ subfolders.length }})</b></span>
@@ -747,7 +747,7 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
 .grid-viewport {
   flex: 1; overflow-y: auto; overflow-x: hidden;
   transition: padding-right 0.2s ease;
-  padding: 0 6px 20px 26px; /* 左缘与右缘滑尺留白对齐，避免首图贴边 */
+  padding: 0 calc(6px + var(--insp-reserve, 0px)) 20px 26px; /* 右缘：滑尺 6 + 详情浮岛让位 */
   position: relative;
 }
 /* 原生滚动条隐藏：概览滑尺接管其职能（残留即它） */
@@ -812,7 +812,6 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
   max-width: 100%;
 }
 
-.insp-open { padding-right: 304px; }
 .state { padding: 40px; text-align: center; color: var(--text-2); font-size: 13px; }
 .overlay-state { position: absolute; inset: 60px 0 auto 0; }
 

@@ -107,6 +107,13 @@ function exportDir() {
     }
   })
 }
+/* 查重：文件夹行 = 查该子树；资料库行 = 查全库（始终不跨资料库） */
+function findDupes() {
+  const isLibrary = isLib.value
+  const rel = isLibrary ? '' : relOf(menu.value.rel)
+  const rootId = isLibrary ? menu.value.node?.id : lib.activeRootId
+  run(() => lib.openDupFinder(rootId, rel))
+}
 function sortLevel(mode) {
   const rel = relOf(menu.value.rel)
   const isLibrary = isLib.value
@@ -208,6 +215,7 @@ const sortItems = [
 
         <button v-if="!isLib" class="mi" @click="moveTo">移动到…</button>
         <button class="mi" @click="exportDir">导出（含子文件夹）</button>
+        <button class="mi" @click="findDupes">查找重复…</button>
 
         <div class="mi group" @click.stop="toggle('color')">
           <span>图标颜色</span><i class="caret" :class="{ on: colorOpen }">▸</i>

@@ -67,6 +67,7 @@ export const useLibrary = defineStore('library', {
     contextMenu: { open: false, x: 0, y: 0, image: null },
     renaming: false,
     dupDialog: { open: false, items: [], targetRel: undefined, mode: 'files', count: 0, resolve: null },
+    dupFinder: { open: false, rootId: null, rel: '', loading: false, progress: { done: 0, total: 0 }, groups: [], stats: null, error: '', selected: [] },
     confirmDialog: { open: false, title: '', message: '', details: [], confirmText: '确定', danger: false, resolve: null },
     importResult: { open: false, nonce: 0, summary: '', details: [], tone: 'ok' }, // 录入汇总结果卡
     clipboard: { kind: '', paths: [], count: 0, root: false }, // 应用内复制剪贴板（kind: dirs | files）
@@ -164,6 +165,10 @@ export const useLibrary = defineStore('library', {
             clearTimeout(this._deb)
             this._deb = setTimeout(() => { this.refreshTree(); this.loadImages() }, 600)
           }
+        })
+        // 查重扫描进度（主进程逐文件 MD5）
+        window.picrand?.onPicnestDupProgress?.((d) => {
+          if (this.dupFinder.open) this.dupFinder.progress = { done: d?.done || 0, total: d?.total || 0 }
         })
         // 色板后台构建/回填（颜色筛选与详情色板共用；此前无调用点=颜色筛选恒空，已修）
         this.ensurePalettes().catch(() => {})
@@ -809,6 +814,77 @@ export const useLibrary = defineStore('library', {
       this.confirmDialog = { open: false, title: '', message: '', details: [], confirmText: '确定', danger: false, resolve: null }
     },
 
+    /* ---- 重复文件查找（仅当前资料库；右键入口） ---- */
+    openDupFinder(rootId, rel) {
+      const rid = rootId ?? this.activeRootId
+      this.closeDirMenu()
+      this.dupFinder = { open: true, rootId: rid, rel: rel || '', loading: true, progress: { done: 0, total: 0 }, groups: [], stats: null, error: '', selected: [] }
+      this.runDupScan()
+    },
+    async runDupScan() {
+      const f = this.dupFinder
+      const rid = f.rootId, rel = f.rel
+      try {
+        const r = await window.picrand.picnestFindDuplicates(rid, rel)
+        if (!this.dupFinder.open || this.dupFinder.rootId !== rid || this.dupFinder.rel !== rel) return
+        if (!r?.ok) { this.dupFinder.loading = false; this.dupFinder.error = r?.error || '扫描失败'; return }
+        this.dupFinder.groups = r.groups || []
+        this.dupFinder.stats = r.stats || null
+        this.dupFinder.loading = false
+      } catch (e) {
+        if (this.dupFinder.open) { this.dupFinder.loading = false; this.dupFinder.error = String(e?.message || e) }
+      }
+    },
+    closeDupFinder() {
+      this.dupFinder = { open: false, rootId: null, rel: '', loading: false, progress: { done: 0, total: 0 }, groups: [], stats: null, error: '', selected: [] }
+    },
+    toggleDupSelected(path) {
+      const i = this.dupFinder.selected.indexOf(path)
+      if (i >= 0) this.dupFinder.selected.splice(i, 1)
+      else this.dupFinder.selected.push(path)
+    },
+    /* 快捷保留：first | newest | oldest（同组尺寸相同，"最大"没有区分度） */
+    dupKeep(gi, mode) {
+      const g = this.dupFinder.groups[gi]
+      if (!g?.files?.length) return
+      const files = g.files
+      let keep = files[0]
+      if (mode === 'newest') keep = files.reduce((a, b) => ((b.mtime || 0) > (a.mtime || 0) ? b : a), files[0])
+      else if (mode === 'oldest') keep = files.reduce((a, b) => ((b.mtime || 0) < (a.mtime || 0) ? b : a), files[0])
+      const inGroup = new Set(files.map((f) => f.path))
+      this.dupFinder.selected = this.dupFinder.selected.filter((p) => !inGroup.has(p))
+        .concat(files.filter((f) => f.path !== keep.path).map((f) => f.path))
+    },
+    async applyDupTrash() {
+      const paths = [...this.dupFinder.selected]
+      if (!paths.length) return
+      const n = paths.length
+      const names = paths.slice(0, 5).map((p) => p.split(/[\\/]/).pop())
+      const ok = await this.askConfirm({
+        title: `移入回收站 ${n} 张？`,
+        message: '重复文件会移入图巢回收站，可随时还原；磁盘上的原文件保留。',
+        details: [...names, ...(n > 5 ? [`…等 ${n} 张`] : [])],
+        confirmText: '移入回收站',
+        danger: true,
+      })
+      if (!ok) return
+      const r = await this.trashImages(paths)
+      if (!r?.moved) return
+      const gone = new Set(paths)
+      const groups = this.dupFinder.groups
+        .map((g) => ({ ...g, files: g.files.filter((f) => !gone.has(f.path)) }))
+        .filter((g) => g.files.length > 1)
+        .map((g) => ({ ...g, count: g.files.length, wasted: g.size * (g.files.length - 1) }))
+        .sort((a, b) => b.wasted - a.wasted || b.count - a.count)
+      this.dupFinder.groups = groups
+      this.dupFinder.selected = []
+      const stats = { ...(this.dupFinder.stats || {}) }
+      stats.groups = groups.length
+      stats.files = groups.reduce((s, g) => s + g.count, 0)
+      stats.wasted = groups.reduce((s, g) => s + g.wasted, 0)
+      this.dupFinder.stats = stats
+    },
+
     async removeFromLibrary(path) {
       /* 从库中移除 = 只摘索引（DB 行删除），文件原地保留——曾误接软删（会进回收站视图） */
       try { await window.picrand.dbDeleteImage(path) } catch { /* 静默 */ }
@@ -1303,7 +1379,7 @@ export const useLibrary = defineStore('library', {
       const names = (node?.children || []).map((c) => c.name).filter((n) => n !== name)
       const at = index == null ? names.length : Math.max(0, Math.min(index, names.length))
       names.splice(at, 0, name)
-      await window.picrand.picnestDirOrderSet(parentRel || '__root__', names)
+      await window.picrand.picnestDirOrderSet(this.activeRootId, parentRel || '__root__', names)
       await this.refreshTree()
     },
 
@@ -1466,7 +1542,7 @@ export const useLibrary = defineStore('library', {
         const names = (node?.children || []).map((c) => c.name).filter((n) => n !== srcName)
         const at = names.indexOf(targetName)
         names.splice(at < 0 ? names.length : at + (pos === 'after' ? 1 : 0), 0, srcName)
-        await window.picrand.picnestDirOrderSet(destParent || '__root__', names)
+        await window.picrand.picnestDirOrderSet(this.activeRootId, destParent || '__root__', names)
         await this.refreshTree()
       }
     },
@@ -1507,7 +1583,7 @@ export const useLibrary = defineStore('library', {
         .filter((n) => n !== targetName && !movedNames.includes(n))
       const at = names.indexOf(targetName)
       names.splice(at < 0 ? names.length : at + (pos === 'after' ? 1 : 0), 0, ...movedNames)
-      await window.picrand.picnestDirOrderSet(destParent || '__root__', names)
+      await window.picrand.picnestDirOrderSet(this.activeRootId, destParent || '__root__', names)
       await this.refreshTree()
       return { ok: true, moved: movedNames.length }
     },
@@ -1517,7 +1593,7 @@ export const useLibrary = defineStore('library', {
       const node = parentRel ? this.findNode(this.tree?.tree, parentRel) : this.tree?.tree
       const names = (node?.children || []).map((c) => c.name).filter((n) => n !== name)
       names.push(name)
-      await window.picrand.picnestDirOrderSet(parentRel || '__root__', names)
+      await window.picrand.picnestDirOrderSet(this.activeRootId, parentRel || '__root__', names)
       await this.refreshTree()
     },
 
