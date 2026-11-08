@@ -265,3 +265,12 @@ PicNest/
     网格 `.thumb.gray img`、大图 `.stage.gray`、详情预览/堆叠、简报统一 `filter: grayscale(1)`；右键菜单文案前加 ✓。
     ⑥**Vite dev 假象**：往 App.vue 新增组件后 Page.reload 也可能不挂载——Vite 的 App 模板缓存没失效（脚本 import 在、组件树里没有）。
     必须重启 Vite（占 5173 的 node）+ 重启应用；排查直接 fetch `/src/App.vue` 看编译出的 render。
+44. **卡片条让位 / 内部拖拽分类（2026-11-09，Feb 反馈）**：
+    ①详情打开后正文让位是通过 `.grid-viewport` 的 `padding-right` 实现的，**canvas 宽度已经变窄**；
+    `.subfolders` 如果还按 `inspectorWidth + 20` 设 right，等于二次扣宽，卡片只剩 2 列、右侧一片空白。
+    `sfColumns` 同理不能再次扣 `--insp-reserve`（viewW 是 contentRect，padding 已排除）。修复后详情宽 289 时 strip 845 / 4 列。
+    ②**内部拖拽误判**：Chromium 给 draggable 元素自动附加 `text/uri-list`，旧判断 `Files || text/uri-list` 会把内部图片
+    当成外部文件走“录入”分支（浮签「录入到」、drop 不移动）。统一 `ui/src/lib/dnd.js`：先检测
+    `application/x-picnest-file/files/dir/dirs`，命中即 internal，external 必须 `!internal && (Files||uri-list)`。
+    App / ImageGrid / DirTreeItem / SideBar 全部落点统一使用；合成验证：内部载荷 + uri-list 拖到树行 → 正确移动、无录入提示。
+    ③空白处右键当前文件夹菜单尝试过，Feb 明确不要，已撤（保留图片/文件夹卡片/文件夹行/资料库行入口）。

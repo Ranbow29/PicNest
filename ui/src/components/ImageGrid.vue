@@ -4,6 +4,7 @@ import { useLibrary, extractDropUrls } from '../stores/library'
 import { api, fileUrl } from '../api'
 import { startWindowDrag } from '../lib/winDrag'
 import { waveSeq, waveDelay, replayWave } from '../lib/wave'
+import { isExternalDT as isDnDExternal } from '../lib/dnd'
 import { isVideoPath, isTextPath, extOf } from '../lib/fileKinds'
 import FolderIcon from './FolderIcon.vue'
 
@@ -119,10 +120,10 @@ const stripMode = computed(() => {
   if (lib.view === 'trash') return trashFolders.value.length ? 'trash' : ''
   return subfolders.value.length ? 'sub' : ''
 })
-/* 卡片按可用宽度换行铺满（全部视图 32 个也能全部看到，不靠横向滚动） */
+/* 卡片按可用宽度换行铺满（全部视图 32 个也能全部看到，不靠横向滚动）
+   viewW 已扣掉 grid-viewport 的 padding（含详情让位与本列自身右边距），这里不再重复扣详情宽度 */
 const sfColumns = computed(() => {
-  const reserve = lib.viewer.showInspector ? 312 : 4
-  const avail = Math.max(SF_CARD_W, (viewW.value || 0) - reserve - 28)
+  const avail = Math.max(SF_CARD_W, (viewW.value || 0) - 28)
   return Math.max(1, Math.floor((avail + SF_GAP) / (SF_CARD_W + SF_GAP)))
 })
 const stripH = computed(() => {
@@ -520,7 +521,7 @@ onBeforeUnmount(onMarqueeUp)
 const reorderCtx = ref(null) // { path, before, x, y, h }：插入线跟随最近的图
 const subDropRel = ref(null)
 function dtTypes(e) { return [...(e.dataTransfer?.types || [])] }
-function isExternalDT(e) { const t = dtTypes(e); return t.includes('Files') || t.includes('text/uri-list') }
+function isExternalDT(e) { return isDnDExternal(e) }
 function isInternalImageDT(e) { const t = dtTypes(e); return t.includes('application/x-picnest-file') || t.includes('application/x-picnest-files') }
 function isInternalDirDT(e) { const t = dtTypes(e); return t.includes('application/x-picnest-dir') || t.includes('application/x-picnest-dirs') }
 function dtList(dt, key) {
@@ -653,7 +654,7 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
       </header>
 
       <!-- 子文件夹 / 已删除文件夹卡片条：随内容滚动，位于头部与图片之间 -->
-      <div v-if="stripMode" class="subfolders" :style="{ top: HEADER_H + 'px', height: stripH + 'px', right: lib.viewer.showInspector ? (lib.inspectorWidth + 20) + 'px' : '4px' }">
+      <div v-if="stripMode" class="subfolders" :style="{ top: HEADER_H + 'px', height: stripH + 'px' }">
         <template v-if="stripMode === 'sub'">
           <div class="sf-head">
             <span class="sf-title">子文件夹 <b>({{ subfolders.length }})</b></span>

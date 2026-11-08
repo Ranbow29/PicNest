@@ -69,6 +69,9 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。
 - **放入前全库查重**（size 筛候选 → MD5，排除自身与目标同位）：重复弹三选一 —— 只保留旧位置（跳过新图）/ 覆盖到新文件夹（旧图移 Windows 回收站 + 删索引）/ 两个文件夹都保留
 - 汇总结果卡：录入/文件夹/跳过/不支持/替换/失败 + 明细，6.5s 收起；跨库标 `→ 资料库名`
 - 拖入反馈：资料库行/树行虚线、缝隙插入线、光标浮签「录入到「x」/插入到「x」第 n 位」；按住显示、松开/离开 450ms 内消失（window capture drop/dragend/dragleave + 心跳）
+- **内部拖拽优先判定**：Chromium 会给拖拽元素自动附带 `text/uri-list`，导致图片拖到树行被当外部文件、只弹「录入到」且不移动。
+  统一用 `ui/src/lib/dnd.js` 的 `isExternalDT`：先看 `application/x-picnest-file/files/dir/dirs`，有内部标记就绝不按外部导入；
+  所有落点（App shell / ImageGrid 卡片 / DirTreeItem 树行 / SideBar 库行与空白）都走这个判断
 
 ### 选择 / 拖动 / 排序
 - 图片：单击单选；`Shift` 按 `filteredImages` 可见顺序范围选；`Alt/Ctrl` 加选、再点减选；`Shift+Alt` 范围并入
@@ -107,6 +110,7 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。
 
 ### 视图 / 子文件夹卡片
 - **全部视图显示库根顶层文件夹**；文件夹视图显示直属子文件夹卡片（封面/名称/递归文件数）；卡片按可用宽度 **flex-wrap 铺满**（32 个全部可见）
+  详情打开时卡片条也只按内容区铺满：**不要再给 `.subfolders` 叠加 `right=详情宽`，`sfColumns` 也不要二次扣 `--insp-reserve`**（grid-viewport 的 padding 已经让过位，二次扣会让卡片只剩 2 列、右侧大片空白）
 - **「显示子文件夹内容」开关**：全部/文件夹都显示；开=递归，关=只直属（全部视图关 = 只显示库根散图）；localStorage 持久化
 - 网格视口左内边距 26px（与右缘滑尺留白对齐）
 - 全部 = 非手动时最新入库置顶；文件夹 = 排序面板（name/added/mtime/size/手动 × 升降序）
@@ -266,6 +270,8 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。
 19. **Vite dev 会出现“新组件不挂载”的假象**：往 App.vue 新增 `<Xxx />` 后，即使 Page.reload，编译出的 render 里可能根本没有它（其它组件靠 HMR 更新了，App 模板仍是旧缓存；症状：脚本里 import 在、组件树里没有、DOM 也没有）。
     处理：重启 Vite dev server（占 5173 的 node 进程）+ 重启应用；排查时直接 fetch `http://127.0.0.1:5173/src/App.vue` 搜组件名，比盯着 DOM 快
 20. **简报模式的“全屏”是 `document.documentElement.requestFullscreen()`**（页面级），不是 Electron 窗口 fullscreen；Esc 会先退 fullscreen 再触发 fullscreenchange，组件里监听并关掉简报，App 里也兜底处理 Esc
+21. **内部拖拽会被 Chromium 自动附带 `text/uri-list`**：判断外部拖入必须先看自定义 `x-picnest-*` 标记（`lib/dnd.js`）；
+    否则图片拖到树行会走进“录入”分支、表现为拖不进文件夹。所有 dragover/drop 落点统一用它
 
 ## 九、本轮验收状态 / 最近提交
 
@@ -281,6 +287,9 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。
   黑白开关后网格缩略图 `filter:grayscale(1)`；简报全屏黑底、1/370 计数、灰度图、←→ 切换、Esc 关闭；
   灯箱右键菜单可开；简报滚轮 1→1.12、拖拽 50/30 平移、未拖动单击切图；简报里右键菜单 z900 > 简报 z890（可操作）；Esc 关闭；
   灯箱/简报 A/D 翻页实测通过；图片右键「查找重复…」打开扫描，scope 正确落在图片所在文件夹（`红油奇亚籽/新_2025-2026`，0 组）；
+  **卡片条让位**：详情宽 289 时 strip 宽 845、卡片 4 列（修复前 2 列）；
+  **拖拽分类**：合成 dragstart（内部标记 + 手动加 text/uri-list）拖到树行，图片正确移动到目标文件夹、无“录入”提示；
+  空白处右键已按 Feb 要求撤掉；测试目录/行已清，浏览位置还原
   移入未分类实测：`_picnest_move_test/sub/moveme.jpg` → 库根 `好图/moveme.jpg`，DB 行路径同步、旧路径不再索引、当前文件夹视图变空；
   测试文件/目录已清理，浏览位置还原「红油奇亚籽/新_2025-2026」，灰度开关已关
 - 最近提交：`927e102` 多选收尾 → `6e4cc65` 回收站批量还原 → `f358e2f` 文本/视频 → `d1ebf3e` 缩略图 2x →

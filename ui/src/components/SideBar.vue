@@ -1,6 +1,7 @@
 <script setup>
 import { computed, nextTick, ref, watch } from 'vue'
 import { useLibrary, extractDropUrls } from '../stores/library'
+import { isExternalDT as isDnDExternal } from '../lib/dnd'
 import DirTreeItem from './DirTreeItem.vue'
 import FolderIcon from './FolderIcon.vue'
 import NamePromptDialog from './NamePromptDialog.vue'
@@ -90,8 +91,7 @@ async function onViewDrop(e, entry) {
 async function dropToRoot(e) {
   e.stopPropagation()
   lib.clearDropHint()
-  const types = [...(e.dataTransfer?.types || [])]
-  if (types.includes('Files') || types.includes('text/uri-list')) {
+  if (isDnDExternal(e)) {
     const paths = [...(e.dataTransfer.files || [])].map((f) => window.picrand.getFilePath?.(f)).filter(Boolean)
     const urls = extractDropUrls(e.dataTransfer)
     const target = { rootId: lib.activeRootId, rel: '' }
@@ -120,8 +120,7 @@ function clearTreeSelection() {
 
 /* 拖到资料库行 = 录进对应资料库的库根（全部/未分类） */
 function isExternalDT(e) {
-  const types = [...(e.dataTransfer?.types || [])]
-  return types.includes('Files') || types.includes('text/uri-list')
+  return isDnDExternal(e)
 }
 /* 侧栏空白：落当前库根（高亮当前资料库行） */
 function onSidebarDragOver(e) {

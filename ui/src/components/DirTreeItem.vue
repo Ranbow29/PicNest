@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, watch, onMounted } from 'vue'
 import { useLibrary, extractDropUrls } from '../stores/library'
+import { isExternalDT } from '../lib/dnd'
 import FolderIcon from './FolderIcon.vue'
 
 const props = defineProps({ node: { type: Object, required: true }, depth: { type: Number, default: 0 } })
@@ -61,8 +62,7 @@ function onDragStart(e) {
 }
 function onDragOver(e) {
   e.preventDefault()
-  const types = [...(e.dataTransfer?.types || [])]
-  const external = types.includes('Files') || types.includes('text/uri-list')
+  const external = isExternalDT(e) // 内部拖拽优先：text/uri-list 是浏览器自动附带的，不能当外部文件
   e.dataTransfer.dropEffect = external ? 'copy' : 'move'
   const r = e.currentTarget.getBoundingClientRect()
   const y = e.clientY - r.top
@@ -97,9 +97,8 @@ async function onDrop(e) {
   lib.clearDropHint()
   const mark = dropMark.value
   dropMark.value = ''
-  const types = [...(e.dataTransfer?.types || [])]
   // 外部拖入（Eagle 式）：文件/文件夹 → 按落点录入
-  if (types.includes('Files') || types.includes('text/uri-list')) {
+  if (isExternalDT(e)) {
     const paths = [...(e.dataTransfer.files || [])].map((f) => window.picrand.getFilePath?.(f)).filter(Boolean)
     const urls = extractDropUrls(e.dataTransfer)
     const target = (mark === 'before' || mark === 'after')

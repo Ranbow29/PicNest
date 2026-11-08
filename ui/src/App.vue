@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted } from 'vue'
 import { useLibrary, extractDropUrls } from './stores/library'
+import { isExternalDT } from './lib/dnd'
 import TitleBar from './components/TitleBar.vue'
 import SideBar from './components/SideBar.vue'
 import ImageGrid from './components/ImageGrid.vue'
@@ -88,8 +89,7 @@ onBeforeUnmount(() => {
 })
 
 function isExternal(e) {
-  const types = [...(e.dataTransfer?.types || [])]
-  return types.includes('Files') || types.includes('text/uri-list')
+  return isExternalDT(e)
 }
 /* 主展示区兜底：子区（树行/资料库行）会 stopPropagation 抢占各自落点 */
 function onDragEnter(e) {
