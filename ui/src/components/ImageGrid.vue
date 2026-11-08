@@ -161,8 +161,12 @@ watch(
 )
 function onSubClick(e, f) {
   const add = e.altKey || e.ctrlKey || e.metaKey
-  if (e.shiftKey || add) lib.selectDir(f.rel, { shift: e.shiftKey, add })
-  else lib.openDir(f.rel)
+  /* 正文卡片：单击只选中（详情看文件夹），双击才进入，防误入 */
+  lib.selectDir(f.rel, { shift: e.shiftKey, add })
+}
+function onSubDblClick(e, f) {
+  if (e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return
+  lib.openDir(f.rel)
 }
 
 /* ---------- 编辑排印头块（Wenku8 式：衬线大标题 + 英文小标 + 规则线） ---------- */
@@ -558,6 +562,7 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
               v-for="f in subfolders" :key="f.rel" class="sf-card"
               :class="{ sel: lib.selectedDirs.includes(f.rel), 'drop-into': subDropRel === f.rel }"
               @click="onSubClick($event, f)"
+              @dblclick="onSubDblClick($event, f)"
               @dragover="onSubDragOver($event, f)" @dragleave="onSubDragLeave(f)" @drop="onSubDrop($event, f)"
               @contextmenu.prevent="lib.openDirMenu($event, { rel: f.rel, node: f })"
             >
@@ -565,7 +570,7 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
                 <img v-if="covers[f.rel]" :src="covers[f.rel]" draggable="false" loading="lazy" />
                 <FolderIcon v-else :color="lib.dirMemory[f.rel]?.color || ''" :size="30" />
               </div>
-              <div class="sf-name" :title="f.name">{{ f.name }}</div>
+              <div class="sf-name" :title="f.name + ' · 双击进入'">{{ f.name }}</div>
               <div class="sf-count">{{ f.total }} 个文件</div>
             </div>
           </div>
