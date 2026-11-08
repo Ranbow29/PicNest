@@ -312,3 +312,5 @@ PicNest/
     **低饱和黑白**强调色/阴影/玻璃/详情浮岛全部去饱和，默认文件夹图标走 `--folder-default`（普通金/黑白灰）；
     概览滑尺是 canvas，换主题必须 watch `theme.resolved` 重绘（否则 dash 仍是旧 accent）。
     主题弹板与布局/筛选弹板互斥，Esc/外部点击关闭；按钮在 auto 时按解析结果显示 ☀/☾，黑白主题显示 ◐，非 auto 高亮。
+    顶栏漏斗/布局/主题三个 `vo-wrap` 改 flex 对齐（盒子统一 29×28）；主题按钮用 `springAt` 做旋转+缩放手势，
+    挂载/hover/mousedown/换主题/`iconShake` 集体晃动都会播放。

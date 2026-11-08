@@ -6,7 +6,7 @@ import FilterBar from './FilterBar.vue'
 import { api } from '../api'
 import { startWindowDrag, onBarDblclick } from '../lib/winDrag'
 import AnimIcon from './AnimIcon.vue'
-import { collectiveShake } from '../lib/iconMotion'
+import { collectiveShake, springAt, GESTURE_MS, iconShake } from '../lib/iconMotion'
 import { useTheme } from '../lib/theme'
 
 // 主题：auto/light/dark（lib/theme.js 驱动 <html data-theme>）
@@ -21,6 +21,27 @@ const themeGlyph = computed(() => {
   if (v.startsWith('mono-')) return '◐'
   return v === 'dark' ? '☾' : '☀'
 })
+/* 主题图标手势：与顶栏其他 AnimIcon 同一套弹簧（挂载/悬停/按下/集体晃动/换主题） */
+const themePhase = ref(-1)
+let themeRaf = 0
+function playTheme() {
+  cancelAnimationFrame(themeRaf)
+  const t0 = performance.now()
+  const tick = (now) => {
+    const t = (now - t0) / GESTURE_MS
+    if (t >= 1) { themePhase.value = -1; return }
+    themePhase.value = t
+    themeRaf = requestAnimationFrame(tick)
+  }
+  themeRaf = requestAnimationFrame(tick)
+}
+const themeGlyphStyle = computed(() => {
+  if (themePhase.value < 0) return {}
+  const s = springAt(themePhase.value)
+  return { transform: `rotate(${(s * 16).toFixed(2)}deg) scale(${(1 + s * 0.1).toFixed(3)})` }
+})
+watch(iconShake, playTheme)
+watch(() => theme.resolved.value, playTheme)
 
 // 主面板顶栏 = 顶部玻璃条（内容从其底下穿过），按模式变形：
 // 浏览模式（面包屑/筛选/布局排列/缩放/搜索） ⇄ 大图模式（返回/序号/缩放）；窗控圆形按钮内联右端
@@ -68,13 +89,17 @@ function closePanel(e) {
     themeOpen.value = false
   }
 }
+let themeMountT = 0
 onMounted(() => {
   document.addEventListener('click', closePanel)
   window.addEventListener('keydown', onKey)
+  themeMountT = setTimeout(playTheme, 80) // 与 AnimIcon 同拍：挂载即晃一次
 })
 onBeforeUnmount(() => {
   document.removeEventListener('click', closePanel)
   window.removeEventListener('keydown', onKey)
+  clearTimeout(themeMountT)
+  cancelAnimationFrame(themeRaf)
 })
 
 const SORTS = [
@@ -190,8 +215,9 @@ function onKey(e) {
         </div>
       </div>
       <div class="vo-wrap">
-        <button class="tool theme-btn" :class="{ on: themeOpen || theme.mode.value !== 'auto' }" :title="`主题：${themeLabel}`" @click.stop="toggleThemePanel">
-          <span class="theme-glyph">{{ themeGlyph }}</span>
+        <button class="tool theme-btn" :class="{ on: themeOpen || theme.mode.value !== 'auto' }" :title="`主题：${themeLabel}`"
+                @click.stop="toggleThemePanel" @mouseenter="playTheme" @mousedown="playTheme">
+          <span class="theme-glyph" :style="themeGlyphStyle">{{ themeGlyph }}</span>
         </button>
         <div v-if="themeOpen" class="vo-panel glass-card theme-panel" @click.stop>
           <div class="vo-cap">主题</div>
@@ -312,10 +338,16 @@ function onKey(e) {
   background: var(--accent-weak); color: var(--accent); font-weight: 600;
   box-shadow: inset 0 0 0 1px var(--accent);
 }
-.vo-wrap { position: relative; }
+.vo-wrap { position: relative; display: flex; align-items: center; }
 /* ---- 主题选择 ---- */
-.theme-btn { padding: 0 6px; }
-.theme-glyph { font-family: 'Segoe UI Symbol', var(--font-sans); font-size: 15px; line-height: 1; }
+.theme-btn {
+  padding: 0 7px; min-width: 29px;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.theme-glyph {
+  font-family: 'Segoe UI Symbol', var(--font-sans); font-size: 15px; line-height: 1;
+  display: inline-block; transform-origin: 50% 50%; will-change: transform;
+}
 .theme-panel { width: 196px; padding: 4px 8px 8px; }
 .theme-opt {
   display: flex; align-items: center; justify-content: space-between; width: 100%;

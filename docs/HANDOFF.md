@@ -113,7 +113,8 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 - 随机自弹已移除；入场波 520ms；滑尺 48 槽 cos² 波峰 + 单条金色 dash。
 
 ### 主题
-- 顶栏 **☀/☾/◐ 按钮** → 六选一弹板：**跟随系统 / 暖砂 / 靛夜 / 灰白（低饱和） / 炭黑（低饱和） / 墨黑（低饱和）**；持久化 `localStorage['picnest.theme']`。暖砂=原暖米+金浅色，靛夜=原蓝紫夜+金深色。
+- 顶栏 **☀/☾/◐ 按钮** → 六选一弹板：**跟随系统 / 暖砂 / 靛夜 / 灰白（低饱和） / 炭黑（低饱和） / 墨黑（低饱和）**；持久化 `localStorage['picnest.theme']`。暖砂=原暖米+金浅色，靛夜=原蓝紫夜+金深色。三个顶栏按钮（漏斗/布局/主题）`vo-wrap` 改 flex 对齐，盒子统一 29×28。
+- 主题按钮动效：同一套 `springAt`（640ms，旋转 16° + 缩放 1.10 峰值），挂载/hover/mousedown/换主题/`iconShake` 集体晃动都会播放——不是 SVG 层图标但绑进集体动效总线。
 - `ui/src/lib/theme.js`：auto 模式读 `matchMedia('(prefers-color-scheme: dark)')` 并监听变化，**解析到 `mono-light`（灰白）/ `mono-dark`（墨黑）**；解析结果写 `<html data-theme="light|dark|mono-light|mono-charcoal|mono-dark">` + `style.colorScheme`（light/mono-light → light，其余 → dark）；五个主题各有 token 块（light 为 `:root` 默认，其余按 `data-theme` 覆盖）。
 - **低饱和黑白**：`mono-light`（中性灰白）/ `mono-charcoal`（比墨黑浅一档的中性灰）/ `mono-dark`（中性近黑），强调色也去饱和；默认文件夹图标走 `--folder-default` token（普通主题金、黑白主题灰）。**黑白主题只改界面，不改图片/色板内容**。
 - **概览滑尺是 canvas**：`ImageGrid` watch `theme.resolved` → `queueRuler()` 重绘，否则换主题后 dash 还是旧 `--accent`。

@@ -42,8 +42,11 @@
 任何"界面状态跃迁"触发全体图标同步做一次手势：
 
 ```
-collectiveShake()  →  iconShake.value++  →  watch 的所有 AnimIcon/FolderIcon play()
+collectiveShake()  →  iconShake.value++  →  watch 的所有 AnimIcon/FolderIcon/主题按钮 play()
 ```
+
+主题按钮（☀/☾/◐）不是 SVG 层图标，但用同一套 `springAt` 驱动旋转+缩放（16° / 1.10 峰值），
+在挂载、hover、mousedown、换主题、以及 `iconShake` 集体晃动时播放；与顶栏其他图标同拍。
 
 触发点：切视图 / 换文件夹 / 切资料库 / 关大图 / 漏斗与布局弹板开关 / 点外部关闭面板 / 详情展开与褪去。
 对应 Wenku8 的哲学：**面板关闭或正文更新，全体动效进行一次**——状态跃迁的"盖章"。
