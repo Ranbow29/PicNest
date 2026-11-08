@@ -33,8 +33,10 @@
 
 - 支持：网页图片（含 `data:` / `blob:`）、页面可见区域截图、按住采集面板（全部文件夹 + 原生滚动）。
 - 不支持：整页滚动截图、视频、PDF；标签（PicNest 标签系统尚未实现，扩展不发送标签）。
-- 按住采集只挂主 frame 的 `<img>`：跨域 iframe、CSS 背景图、canvas 图片暂不识别。
-- 防盗链图片可能下载失败（PicNest 服务端下载不带浏览器 Cookie）；失败会在浏览器通知里报错。
+- 防盗链图片可能下载失败（PicNest 服务端下载不带浏览器 Cookie）；服务端会带页面 Referer + 常规浏览器 UA
+  （Pixiv `i.pximg.net` 依赖 Referer）。`data:` / `blob:` 图片由扩展转 base64 发送。
+- 按住采集只挂主 frame 的 `<img>`：跨域 iframe、CSS 背景图、canvas 图片暂不识别；被覆盖层 DIV 挡住的图片
+  会用 `elementsFromPoint` 按坐标找底层 `<img>`（Pinterest 已验证）。
 - 仅供本机使用：服务端绑定 `127.0.0.1`，并拒绝非扩展 Origin 的跨站请求；**暂无 token 鉴权**，
   开源发布前会补上（见根目录 HANDOFF 的未做清单）。
 - 与本项目一样以 **GPL-3.0** 发布；代码原创，与 Eagle 官方无关联，也不包含 Eagle 的任何资源。

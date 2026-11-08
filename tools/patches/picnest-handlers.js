@@ -1729,7 +1729,7 @@ function picnestCollectDataUrl(u) {
   const buf = m[2] ? Buffer.from(m[3], "base64") : Buffer.from(decodeURIComponent(m[3]), "utf8");
   return { buf, contentType: m[1] || "application/octet-stream" };
 }
-async function picnestCollectFetchImage(src) {
+async function picnestCollectFetchImage(src, referer) {
   const u = String(src || "");
   if (u.startsWith("data:")) {
     const d = picnestCollectDataUrl(u);
@@ -1740,10 +1740,20 @@ async function picnestCollectFetchImage(src) {
   const ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
   const timer = setTimeout(() => { try { ctl?.abort(); } catch (e) {} }, 30000);
   try {
+    /* Pixiv（i.pximg.net）等站点按 Referer 防盗链；用页面 URL 作 Referer，并伪装常规浏览器 UA */
+    const ref = String(referer || "").trim() || (() => {
+      try { return new URL(u).origin + "/"; } catch (e) { return ""; }
+    })();
+    const headers = {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
+      "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+      "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    };
+    if (ref) headers.Referer = ref;
     const res = await fetch(u, {
       redirect: "follow",
       signal: ctl?.signal,
-      headers: { "User-Agent": "PicNest/0.1 (+collect)" },
+      headers,
     });
     if (!res.ok) throw new Error(`下载失败 HTTP ${res.status}`);
     const ab = await res.arrayBuffer();
@@ -1817,7 +1827,7 @@ async function picnestCollectSaveOne(item) {
     ext = picnestCollectExt(contentType, "");
     base = picnestCollectSafeName(item.title || "页面截图");
   } else {
-    const d = await picnestCollectFetchImage(item.dataUrl || item.src);
+    const d = await picnestCollectFetchImage(item.dataUrl || item.src, item.url || item.referer);
     buf = d.buf;
     contentType = d.contentType;
     ext = picnestCollectExt(contentType, item.src || item.dataUrl);

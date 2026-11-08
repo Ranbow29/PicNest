@@ -329,3 +329,5 @@ PicNest/
     （Chrome 137+ 禁用 `--load-extension` 命令行），只使用标准 MV3 API（contextMenus/scripting/notifications/storage/tabs）。
     **采集查重**：写入前按同根 + 同 file_size 筛候选（≤6）→ MD5；命中不落盘，返回 `duplicate` + matches；
     按住面板显示「跳过 / 仍然保存」（`force:true`），右键/页面截图只提示跳过。历史重复不自动清理。
+    **防盗链/覆盖层**：服务端下载外部图片带页面 Referer + 常规 Edge/Chrome UA（Pixiv `i.pximg.net` 必需）；
+    按住目标先用事件路径找 IMG，失败再 `elementsFromPoint` 按坐标找底层可见 `<img>`（Pinterest 覆盖层实测）。

@@ -131,6 +131,20 @@
     }
     return null
   }
+  /* Pinterest 等站点会用覆盖层 DIV 盖住图片：事件目标不是 IMG，按坐标找底层可见图片 */
+  function imgAtPoint(x, y) {
+    const list = document.elementsFromPoint?.(x, y) || []
+    for (const el of list) {
+      if (!el || el.tagName !== 'IMG') continue
+      const r = el.getBoundingClientRect()
+      if (r.width < 24 || r.height < 24) continue
+      if (x < r.left || x > r.right || y < r.top || y > r.bottom) continue
+      const cs = getComputedStyle(el)
+      if (cs.display === 'none' || cs.visibility === 'hidden' || Number(cs.opacity) === 0) continue
+      return el
+    }
+    return null
+  }
   function rowFromEvent(e) {
     if (!session?.panel) return null
     const path = e.composedPath?.() || []
@@ -425,7 +439,7 @@
     if (inHost(e)) return
     if (session && !session.opened) return
     if (session?.opened) closePanel()
-    const img = imgFromEvent(e)
+    const img = imgFromEvent(e) || imgAtPoint(e.clientX, e.clientY)
     if (!img) return
     const r = img.getBoundingClientRect()
     if (r.width < 24 || r.height < 24) return
