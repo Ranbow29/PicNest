@@ -84,9 +84,11 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 - 实测全库 6,724 文件 258ms（27 个同尺寸候选）→ 9 组 / 19 文件 / 可省 13.1MB。
 - **AI 二次查重**（DupFinder 顶部「AI 查重」页签）：配置 OpenAI 兼容 `/chat/completions` 视觉 API（地址/模型/Key；Key 用 `electron.safeStorage` 加密存 `dataDir/picnest-ai.json`，**不回传渲染层**）；「保存并测试」用两张 64×64 色块验证视觉连通。
 - **模型列表**：`GET {base}/models` 自动拉取（兼容填 base 或完整 `/chat/completions`；已输入未保存的 Key 也可用；去重排序最多 500 个），结果显示为可搜索的 datalist 供选择，仍允许手填；进入 AI 页签或保存配置后自动刷新，「获取模型」可手动重试。401/403 提示地址与 Key 不匹配，404 提示该地址无 `/models`；错误体里的 Key 统一打码。
+- **推理模型额度**：MiMo / o 系列用 `max_completion_tokens=2048`，普通模型用 `max_tokens=1024`；MiMo 思考模式不传 `temperature`。空 `content` 会报 `finish_reason`、思考 token 数、是否只有 `reasoning_content`，避免只显示“无法解析”。
 - **流程**：范围同精确查重 → 缩略图 dHash（9×8 灰度 64-bit）→ 汉明距离 ≤10 生成候选对（按距离排序，最多 `maxPairs` 默认 40、可调 1–200）→ 候选对的 384px 白底 JPEG 缩略图发 API 问 `{same}` → 并查集成组。
 - **结果**：组带 AI 徽标；可省=sum−max（保留最大有意义，快捷「保留最大/最新/最旧」）；进度 `picnest-ai-dup-progress`（hash / ai 两阶段），可停止；只处理图片（跳过视频/文本），**只上传候选缩略图、不上传原图**；必须勾选允许上传才能开始；删除仍只走图巢回收站。
 - 实测（本地 mock 视觉 API）：3 张测试图（128/64 同图 + 噪声图）→ 1 候选对、1 次 AI 调用、正确成组；配置返回 encrypted:true。模型列表 mock 返回 2 个模型 → datalist 可选、选中写回模型框；401 路径提示 Key 与地址不匹配且 Key 已打码。
+- 实测 MiMo `mimo-v2.6-flash`（`https://api.xiaomimimo.com/v1`，7 个模型）：`/v1/models` 正常；视觉测试（两张异色 64×64）返回 `same:false`。此前 `max_tokens:80` 被思考阶段吃光，`content` 为空。
 
 ### 简报 / 黑白 / 无标题栏大图
 - **简报模式**：全屏黑底（页面级 `requestFullscreen`），单击下一张、←/A 上一张、→/D 下一张、Esc 退出；视频静音循环、文本占位；计数/提示/右上关闭。

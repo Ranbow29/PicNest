@@ -1766,10 +1766,14 @@ electron.ipcMain.handle("picnest-ai-models", async (_event, opts) => {
 async function picnestAiCompare(cfg, dataA, dataB) {
   const base = picnestAiBaseOf(cfg.baseUrl);
   const endpoint = /\/chat\/completions$/i.test(base) ? base : base + "/chat/completions";
+  const model = String(cfg.model || "");
+  let isMimo = false;
+  try { isMimo = /(^|\.)xiaomimimo\.com$/i.test(new URL(base).hostname); } catch (e) {}
+  // MiMo / o 系列是推理模型：用 max_completion_tokens 留足思考+答案额度；
+  // 旧式模型用 max_tokens 即可。MiMo 思考模式也不接受自定义 temperature。
+  const reasoningModel = isMimo || /^(o[134]|gpt-5)/i.test(model);
   const body = {
-    model: cfg.model,
-    temperature: 0,
-    max_tokens: 80,
+    model,
     messages: [
       { role: "system", content: "You are an image duplicate checker. Reply with JSON only." },
       {
@@ -1782,6 +1786,9 @@ async function picnestAiCompare(cfg, dataA, dataB) {
       },
     ],
   };
+  if (!reasoningModel) body.temperature = 0;
+  if (reasoningModel) body.max_completion_tokens = 2048;
+  else body.max_tokens = 1024;
   const ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
   const timer = setTimeout(() => { try { ctl?.abort(); } catch (e) {} }, 90000);
   try {
@@ -1802,9 +1809,18 @@ async function picnestAiCompare(cfg, dataA, dataB) {
       throw new Error(picnestAiHttpError(res.status, txt));
     }
     const json = await res.json();
-    const content = json.choices?.[0]?.message?.content;
+    const choice = json.choices?.[0] || {};
+    const content = choice.message?.content;
     const text = typeof content === "string" ? content
       : Array.isArray(content) ? content.map((x) => x?.text || "").join("") : "";
+    if (!text.trim()) {
+      const reasoning = typeof choice.message?.reasoning_content === "string" ? choice.message.reasoning_content : "";
+      const rt = json.usage?.completion_tokens_details?.reasoning_tokens;
+      const bits = [`finish_reason=${choice.finish_reason || "?"}`];
+      if (rt) bits.push(`思考 ${rt} tokens`);
+      if (reasoning) bits.push(`仅有 reasoning_content ${reasoning.length} 字`);
+      throw new Error(`AI 返回空 content（${bits.join("，")}）；请提高输出上限或换用非推理模型`);
+    }
     let obj = null;
     const m = /\{[\s\S]*\}/.exec(text || "");
     if (m) { try { obj = JSON.parse(m[0]); } catch (e) {} }
