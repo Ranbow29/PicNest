@@ -13,7 +13,8 @@ const props = defineProps({
 })
 
 const FILLS = {
-  '': '#c9a86c', blue: '#5b9bd5', green: '#6dbf90', red: '#e57373',
+  '': 'var(--folder-default, #c9a86c)', // 默认跟随主题（低饱和黑白主题下为灰）
+  blue: '#5b9bd5', green: '#6dbf90', red: '#e57373',
   orange: '#f0a45c', purple: '#a48ad4', cyan: '#5bc4c4', pink: '#e88ab8',
 }
 const fill = computed(() => FILLS[props.color] || props.color || FILLS[''])

@@ -19,7 +19,7 @@ const ask = ref(null) // { title, initial, selectBase, run(name) }
 const isLib = computed(() => !!menu.value.node?.isLibrary) // 资料库根：不提供重命名/移动（保 DB 登记一致性）
 
 const FOLDER_COLORS = [
-  { key: '', css: '#c9a86c', label: '默认' },
+  { key: '', css: 'var(--folder-default, #c9a86c)', label: '默认' },
   { key: 'blue', css: '#5b9bd5' },
   { key: 'green', css: '#6dbf90' },
   { key: 'red', css: '#e57373' },

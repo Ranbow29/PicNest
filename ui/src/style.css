@@ -31,6 +31,7 @@
   --text-2: #6f6a60;
   --accent: #b4884b;
   --accent-weak: rgba(180, 136, 75, 0.14);
+  --folder-default: #c9a86c; /* 默认文件夹图标（低饱和主题会换灰） */
   --border: rgba(60, 50, 30, 0.12);
   --shadow: 0 8px 30px rgba(60, 50, 30, 0.12);
   /* 悬浮层：主面板压左栏 / 详情岛压正文（近影 + 主影 + 大范围柔光） */
@@ -69,6 +70,7 @@
     --text-2: #a49e90;
     --accent: #d4a964;
     --accent-weak: rgba(212, 169, 100, 0.16);
+    --folder-default: #c9a86c;
     --border: rgba(255, 255, 255, 0.1);
     --shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
     --shadow-float: 0 3px 8px rgba(0, 0, 0, 0.5), 0 22px 52px rgba(0, 0, 0, 0.6), 0 60px 140px rgba(0, 0, 0, 0.46);
@@ -87,6 +89,68 @@
     --panel-insp-mid: rgba(52, 52, 72, 0.92);
     --panel-insp-low: rgba(52, 52, 72, 0.84);
     --panel-insp-bot: rgba(52, 52, 72, 0.62);
+}
+
+/* ---- 低饱和黑白 · 灰白（中性灰，强调色也去饱和） ---- */
+:root[data-theme="mono-light"] {
+    --bg: #ebebeb;
+    --bg-2: #e1e1e1;
+    --panel: rgba(255, 255, 255, 0.55);
+    --panel-strong: rgba(252, 252, 252, 0.95);
+    --text: #262626;
+    --text-2: #6b6b6b;
+    --accent: #5f5f5f;
+    --accent-weak: rgba(0, 0, 0, 0.07);
+    --folder-default: #6d6d6d;
+    --border: rgba(0, 0, 0, 0.11);
+    --shadow: 0 8px 30px rgba(0, 0, 0, 0.12);
+    --shadow-float: 0 3px 6px rgba(0, 0, 0, 0.08), 0 20px 48px rgba(0, 0, 0, 0.17), 0 56px 130px rgba(0, 0, 0, 0.10);
+    --shadow-tile: 0 1px 2px rgba(0, 0, 0, 0.09), 0 5px 14px rgba(0, 0, 0, 0.11), 0 14px 30px rgba(0, 0, 0, 0.07);
+    --shadow-tile-hover: 0 2px 5px rgba(0, 0, 0, 0.12), 0 12px 26px rgba(0, 0, 0, 0.17), 0 28px 56px rgba(0, 0, 0, 0.10);
+    --tile-edge: rgba(255, 255, 255, 0.55);
+    --sidebar-glow: rgba(255, 255, 255, 0.86);
+    --panel-edge: rgba(255, 255, 255, 0.7);
+    --overlay-grad: linear-gradient(transparent, rgba(255, 255, 255, 0.94));
+    --overlay-text: #1f1f1f;
+    --overlay-halo: 0 1px 3px rgba(255, 255, 255, 0.9), 0 0 1px rgba(255, 255, 255, 0.9);
+    --glass-strong: rgba(243, 243, 243, 0.92);
+    --glass-weak: rgba(243, 243, 243, 0.35);
+    --panel-inspector: rgba(255, 255, 255, 0.94);
+    --panel-insp-top: rgba(255, 255, 255, 0.97);
+    --panel-insp-mid: rgba(255, 255, 255, 0.93);
+    --panel-insp-low: rgba(255, 255, 255, 0.86);
+    --panel-insp-bot: rgba(255, 255, 255, 0.60);
+}
+
+/* ---- 低饱和黑白 · 墨黑（中性炭灰） ---- */
+:root[data-theme="mono-dark"] {
+    --bg: #212121;
+    --bg-2: #171717;
+    --panel: rgba(33, 33, 33, 0.55);
+    --panel-strong: rgba(17, 17, 17, 0.92);
+    --text: #e7e7e7;
+    --text-2: #a3a3a3;
+    --accent: #b5b5b5;
+    --accent-weak: rgba(255, 255, 255, 0.10);
+    --folder-default: #b0b0b0;
+    --border: rgba(255, 255, 255, 0.10);
+    --shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
+    --shadow-float: 0 3px 8px rgba(0, 0, 0, 0.5), 0 22px 52px rgba(0, 0, 0, 0.6), 0 60px 140px rgba(0, 0, 0, 0.46);
+    --shadow-tile: 0 1px 3px rgba(0, 0, 0, 0.42), 0 5px 16px rgba(0, 0, 0, 0.42), 0 14px 34px rgba(0, 0, 0, 0.26);
+    --shadow-tile-hover: 0 2px 6px rgba(0, 0, 0, 0.52), 0 12px 30px rgba(0, 0, 0, 0.56), 0 28px 60px rgba(0, 0, 0, 0.36);
+    --tile-edge: rgba(255, 255, 255, 0.13);
+    --sidebar-glow: rgba(255, 255, 255, 0.07);
+    --panel-edge: rgba(255, 255, 255, 0.09);
+    --overlay-grad: linear-gradient(transparent, rgba(0, 0, 0, 0.85));
+    --overlay-text: #f2f2f2;
+    --overlay-halo: 0 1px 3px rgba(0, 0, 0, 0.8), 0 0 1px rgba(0, 0, 0, 0.8);
+    --glass-strong: rgba(33, 33, 33, 0.90);
+    --glass-weak: rgba(33, 33, 33, 0.30);
+    --panel-inspector: rgba(48, 48, 48, 0.92);
+    --panel-insp-top: rgba(48, 48, 48, 0.96);
+    --panel-insp-mid: rgba(48, 48, 48, 0.92);
+    --panel-insp-low: rgba(48, 48, 48, 0.84);
+    --panel-insp-bot: rgba(48, 48, 48, 0.62);
 }
 
 * { box-sizing: border-box; }

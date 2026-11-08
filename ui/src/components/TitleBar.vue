@@ -16,6 +16,11 @@ const themeLabel = computed(() => {
   const m = theme.modes.find((x) => x.key === theme.mode.value) || theme.modes[0]
   return m.key === 'auto' ? `跟随系统（${theme.resolved.value === 'dark' ? '深色' : '浅色'}）` : m.label
 })
+const themeGlyph = computed(() => {
+  const v = theme.resolved.value
+  if (v === 'mono-light' || v === 'mono-dark') return '◐'
+  return v === 'dark' ? '☾' : '☀'
+})
 
 // 主面板顶栏 = 顶部玻璃条（内容从其底下穿过），按模式变形：
 // 浏览模式（面包屑/筛选/布局排列/缩放/搜索） ⇄ 大图模式（返回/序号/缩放）；窗控圆形按钮内联右端
@@ -186,15 +191,17 @@ function onKey(e) {
       </div>
       <div class="vo-wrap">
         <button class="tool theme-btn" :class="{ on: themeOpen || theme.mode.value !== 'auto' }" :title="`主题：${themeLabel}`" @click.stop="toggleThemePanel">
-          <span class="theme-glyph">{{ theme.resolved.value === 'dark' ? '☾' : '☀' }}</span>
+          <span class="theme-glyph">{{ themeGlyph }}</span>
         </button>
         <div v-if="themeOpen" class="vo-panel glass-card theme-panel" @click.stop>
           <div class="vo-cap">主题</div>
-          <button v-for="m in theme.modes" :key="m.key" class="theme-opt" :class="{ on: theme.mode.value === m.key }"
-                  @click="pickTheme(m.key)">
-            <span>{{ m.label }}</span><i v-if="theme.mode.value === m.key">✓</i>
-          </button>
-          <div class="theme-hint">跟随系统：随 Windows 明暗自动切换</div>
+          <template v-for="m in theme.modes" :key="m.key">
+            <div v-if="m.key === 'mono-light'" class="theme-sep" />
+            <button class="theme-opt" :class="{ on: theme.mode.value === m.key }" @click="pickTheme(m.key)">
+              <span>{{ m.label }}</span><i v-if="theme.mode.value === m.key">✓</i>
+            </button>
+          </template>
+          <div class="theme-hint">跟随系统随 Windows 明暗切换；黑白主题只改界面，不改变图片</div>
         </div>
       </div>
       <div class="zoom-slider">
@@ -318,6 +325,7 @@ function onKey(e) {
 }
 .theme-opt:hover { background: var(--accent-weak); }
 .theme-opt.on { color: var(--accent); font-weight: 600; }
+.theme-sep { height: 1px; margin: 5px 8px; background: var(--border); }
 .theme-hint { padding: 6px 10px 2px; font-size: 10.5px; line-height: 1.5; color: var(--text-2); opacity: 0.8; }
 button.tool.funnel { position: relative; }
 button.tool.funnel .badge {

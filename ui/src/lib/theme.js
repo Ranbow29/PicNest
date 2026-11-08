@@ -8,6 +8,8 @@ const MODES = [
   { key: 'auto', label: '跟随系统' },
   { key: 'light', label: '浅色' },
   { key: 'dark', label: '深色' },
+  { key: 'mono-light', label: '灰白（低饱和）' },
+  { key: 'mono-dark', label: '墨黑（低饱和）' },
 ]
 const KEY = 'picnest.theme'
 const saved = localStorage.getItem(KEY)
@@ -25,7 +27,7 @@ const resolved = computed(() => (mode.value === 'auto' ? (systemDark.value ? 'da
 
 function apply(v) {
   document.documentElement.dataset.theme = v
-  document.documentElement.style.colorScheme = v
+  document.documentElement.style.colorScheme = v.includes('dark') ? 'dark' : 'light'
 }
 watch(resolved, apply, { immediate: true })
 

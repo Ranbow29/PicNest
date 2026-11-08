@@ -6,10 +6,12 @@ import { startWindowDrag } from '../lib/winDrag'
 import { waveSeq, waveDelay, replayWave } from '../lib/wave'
 import { isExternalDT as isDnDExternal } from '../lib/dnd'
 import { isVideoPath, isTextPath, extOf } from '../lib/fileKinds'
+import { useTheme } from '../lib/theme'
 import FolderIcon from './FolderIcon.vue'
 
 const lib = useLibrary()
 const showLabels = computed(() => lib.hoverLabels !== false)
+const { resolved: themeResolved } = useTheme() // 概览滑尺是 canvas：换主题要重画取新 --accent
 
 /* Wenku8 式全体动效：视图/排序/筛选/内容更新 → 首屏入场波重放（防抖合并连续变更） */
 let waveTimer = null
@@ -356,6 +358,7 @@ function queueRuler() {
   rulerRAF = requestAnimationFrame(() => { rulerRAF = 0; drawRuler() })
 }
 watch([scrollTop, totalH, viewH, viewW, () => items.value.length], queueRuler)
+watch(themeResolved, queueRuler) // 换主题：滑尺按新 accent 重绘
 onMounted(queueRuler)
 
 /* 滑尺交互：按下/拖拽 → 按比例跳转（即时，ZCode 同款） */

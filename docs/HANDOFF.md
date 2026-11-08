@@ -113,10 +113,12 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 - 随机自弹已移除；入场波 520ms；滑尺 48 槽 cos² 波峰 + 单条金色 dash。
 
 ### 主题
-- 顶栏 **☀/☾ 按钮** → 三选一弹板：**跟随系统 / 浅色 / 深色**；持久化 `localStorage['picnest.theme']`。
-- `ui/src/lib/theme.js`：auto 模式读 `matchMedia('(prefers-color-scheme: dark)')` 并监听变化，解析结果写 `<html data-theme="light|dark">` + `style.colorScheme`；暗色 token 块是 `:root[data-theme="dark"]`（不再用媒体查询）。
+- 顶栏 **☀/☾/◐ 按钮** → 五选一弹板：**跟随系统 / 浅色 / 深色 / 灰白（低饱和） / 墨黑（低饱和）**；持久化 `localStorage['picnest.theme']`。
+- `ui/src/lib/theme.js`：auto 模式读 `matchMedia('(prefers-color-scheme: dark)')` 并监听变化，解析结果写 `<html data-theme="light|dark|mono-light|mono-dark">` + `style.colorScheme`；四种主题各有 token 块（light 为 `:root` 默认，其余按 `data-theme` 覆盖）。
+- **低饱和黑白**：`mono-light`（中性灰白）/ `mono-dark`（中性炭黑），强调色也去饱和；默认文件夹图标走 `--folder-default` token（普通主题金、黑白主题灰）。**黑白主题只改界面，不改图片/色板内容**。
+- **概览滑尺是 canvas**：`ImageGrid` watch `theme.resolved` → `queueRuler()` 重绘，否则换主题后 dash 还是旧 `--accent`。
 - `ui/index.html` 内联脚本在首屏样式前落定 `data-theme`，防止强制模式闪白；运行期由 theme.js 接管。
-- 新增颜色必须同时补 light `:root` 与 dark 块；组件里不要直接写 `@media (prefers-color-scheme)`。
+- 新增颜色必须同时补 light `:root`、dark、mono-light、mono-dark 四块；组件里不要直接写 `@media (prefers-color-scheme)`。
 
 ## 三、数据模型 / 关键约束
 
@@ -195,7 +197,7 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 25. 入场波 `.wi` 的 fill-mode 保持 `backwards`，不要改回 `both`（会永久压住 hover 的 transform）；卡片浮岛靠 `--shadow-tile*` / `--tile-edge` 双主题 token。
 26. 颜色筛选依赖内存 `palettes`：`loadImages` 末尾必须 `ensurePalettes()`（init 只覆盖启动时文件夹，切换后不补建=颜色筛选恒 0）；FilterBar 取色/灰度、详情现算色板都要兜底触发/回写 `lib.palettes`。
 27. 移出根文件 = 只清 DB 索引/排序键/回收站条目，磁盘文件永不动；回收站非空先拒；watcher 命中该根必须停并清 `_addQueue`，否则根会被 add 事件复活。新增根相关 IPC 走 `picnest-handlers.js` + `apply.mjs` 的 P4b preload 列表两处（渲染层直接 `window.picrand.*`）。
-28. 主题只认 `<html data-theme>`：新颜色同时补 `:root` 与 `:root[data-theme="dark"]`，组件里不要写 `prefers-color-scheme`；auto 的系统联动在 `lib/theme.js`，首屏防闪在 `index.html` 内联脚本。
+28. 主题只认 `<html data-theme>`：新颜色同时补 `:root`（light）、`[data-theme="dark"]`、`mono-light`、`mono-dark` 四块，组件里不要写 `prefers-color-scheme`；auto 的系统联动在 `lib/theme.js`，首屏防闪在 `index.html` 内联脚本；canvas（概览滑尺）换主题要主动重绘。
 
 ## 七、验收状态 / 最近提交
 
