@@ -231,7 +231,17 @@ electron.ipcMain.handle("picnest-import-dir-copy", async (_event, srcDir, target
     if (!srcDir || !fs.existsSync(srcDir)) return { ...detail, error: "源文件夹不存在" };
     if (!fs.existsSync(targetDir)) return { ...detail, error: "目标目录不存在" };
     if (!fs.statSync(srcDir).isDirectory()) return { ...detail, error: "不是文件夹" };
+    /* 防自包含递归：目标在源内（含相同）或源已在目标同名位置时拒绝 */
+    const normPath = (p) => path.resolve(p).toLowerCase();
+    const srcNorm = normPath(srcDir);
+    const dstNorm = normPath(targetDir);
+    if (dstNorm === srcNorm || dstNorm.startsWith(srcNorm + path.sep)) {
+      return { ...detail, error: "不能把文件夹复制进自身或其子目录" };
+    }
     const base = path.basename(srcDir).replace(/[\\/:*?"<>|]/g, "_") || "导入文件夹";
+    if (normPath(path.join(targetDir, base)) === srcNorm) {
+      return { ...detail, error: "文件夹已在此位置" };
+    }
     let dest = path.join(targetDir, base);
     for (let n = 1; fs.existsSync(dest) && !fs.statSync(dest).isDirectory(); n++) {
       dest = path.join(targetDir, base + " (" + n + ")");
