@@ -1654,6 +1654,31 @@ const PICNEST_AI_CFG_PATH = path.join(dataDir, "picnest-ai.json");
 const PICNEST_AI_IMG_EXT = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".avif", ".tif", ".tiff", ".svg"]);
 let picnestAiCancel = false;
 
+function picnestAiMask(s) {
+  return String(s == null ? "" : s).replace(/sk-[A-Za-z0-9_*-]{6,}/g, "sk-***");
+}
+function picnestAiErrText(txt) {
+  const raw = String(txt || "");
+  try {
+    const j = JSON.parse(raw);
+    const m = j?.error?.message || j?.message || j?.error;
+    if (m) return String(m);
+  } catch (e) {}
+  // 错误体可能被截断导致 JSON.parse 失败，尽量把 message 抽出来
+  const m = /"message"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(raw);
+  if (m) {
+    try { return JSON.parse('"' + m[1] + '"'); } catch (e) { return m[1]; }
+  }
+  return raw;
+}
+function picnestAiHttpError(status, txt) {
+  const body = picnestAiErrText(txt).replace(/\s+/g, " ").trim().slice(0, 300);
+  return picnestAiMask(`API HTTP ${status}${body ? ": " + body : ""}`);
+}
+// 兼容两种写法：配置里既可能填 base（…/v1），也可能直接填完整 chat 地址
+function picnestAiBaseOf(baseUrl) {
+  return String(baseUrl || "").trim().replace(/\/+$/, "").replace(/\/chat\/completions$/i, "");
+}
 function picnestAiReadConfig() {
   try {
     const c = JSON.parse(fs.readFileSync(PICNEST_AI_CFG_PATH, "utf-8"));
@@ -1698,8 +1723,48 @@ electron.ipcMain.handle("picnest-ai-config-set", (_event, opts) => {
   } catch (e) { return { ok: false, error: String(e?.message || e) }; }
 });
 
+// GET {base}/models：用已保存或刚输入（尚未保存）的 Key 拉模型列表，供下拉选择
+electron.ipcMain.handle("picnest-ai-models", async (_event, opts) => {
+  const stored = picnestAiReadConfig();
+  const base = picnestAiBaseOf(opts?.baseUrl || stored.baseUrl);
+  const apiKey = String(opts?.apiKey || "").trim() || stored.apiKey;
+  if (!/^https?:\/\//i.test(base)) return { ok: false, error: "请先填写 API 地址（http/https）" };
+  if (!apiKey) return { ok: false, error: "请先填写 API Key，或先保存一次" };
+  const ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
+  const timer = setTimeout(() => { try { ctl?.abort(); } catch (e) {} }, 25000);
+  try {
+    const res = await fetch(base + "/models", {
+      headers: { Authorization: "Bearer " + apiKey, Accept: "application/json" },
+      signal: ctl?.signal,
+    });
+    if (!res.ok) {
+      let txt = "";
+      try { txt = (await res.text()).slice(0, 800); } catch (e) {}
+      const hint = res.status === 401 || res.status === 403
+        ? "（Key 与该 API 地址不匹配，或 Key 无效；模型列表需要和聊天用同一个 Key）"
+        : res.status === 404 ? "（该地址没有 /models 接口，可手动填写模型名）" : "";
+      return { ok: false, error: picnestAiMask(picnestAiHttpError(res.status, txt) + hint) };
+    }
+    const json = await res.json();
+    const raw = Array.isArray(json) ? json
+      : Array.isArray(json?.data) ? json.data
+        : Array.isArray(json?.models) ? json.models : [];
+    const ids = [...new Set(raw
+      .map((x) => (typeof x === "string" ? x : x?.id || x?.name || x?.model))
+      .map((x) => String(x || "").trim())
+      .filter(Boolean))]
+      .sort((a, b) => a.localeCompare(b))
+      .slice(0, 500);
+    if (!ids.length) return { ok: false, error: "接口返回了空模型列表，可手动填写模型名" };
+    return { ok: true, models: ids };
+  } catch (e) {
+    const msg = String(e?.message || e);
+    return { ok: false, error: picnestAiMask(/abort/i.test(msg) ? "获取模型列表超时" : msg) };
+  } finally { clearTimeout(timer); }
+});
+
 async function picnestAiCompare(cfg, dataA, dataB) {
-  const base = String(cfg.baseUrl || "").trim().replace(/\/+$/, "");
+  const base = picnestAiBaseOf(cfg.baseUrl);
   const endpoint = /\/chat\/completions$/i.test(base) ? base : base + "/chat/completions";
   const body = {
     model: cfg.model,
@@ -1733,8 +1798,8 @@ async function picnestAiCompare(cfg, dataA, dataB) {
     }
     if (!res.ok) {
       let txt = "";
-      try { txt = (await res.text()).slice(0, 240); } catch (e) {}
-      throw new Error(`API HTTP ${res.status}${txt ? ": " + txt : ""}`);
+      try { txt = (await res.text()).slice(0, 800); } catch (e) {}
+      throw new Error(picnestAiHttpError(res.status, txt));
     }
     const json = await res.json();
     const content = json.choices?.[0]?.message?.content;
@@ -1762,7 +1827,7 @@ electron.ipcMain.handle("picnest-ai-test", async () => {
     };
     const same = await picnestAiCompare(cfg, await mk({ r: 220, g: 60, b: 60 }), await mk({ r: 60, g: 80, b: 220 }));
     return { ok: true, same };
-  } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+  } catch (e) { return { ok: false, error: picnestAiMask(e?.message || e) }; }
 });
 
 function picnestAiPop32(x) {
@@ -1917,7 +1982,7 @@ electron.ipcMain.handle("picnest-ai-dup-scan", async (event, folderId, rel, maxP
     };
     return { ok: true, rootId: folderId, rel: scopeRel, groups, stats };
   } catch (e) {
-    return { ok: false, error: String((e && e.message) || e) };
+    return { ok: false, error: picnestAiMask(e?.message || e) };
   }
 });
 /* ==== M6 采集：本地保存服务（自研扩展用，127.0.0.1:41600） ====

@@ -32,6 +32,7 @@ export function extractDropUrls(dt) {
 function defaultAiDupState() {
   return {
     configLoaded: false, baseUrl: '', model: '', hasKey: false, encrypted: true,
+    models: [], modelsLoading: false, modelsError: '',
     allowed: false, maxPairs: 40,
     loading: false, testing: false, canceling: false,
     note: '', noteErr: false,
@@ -995,12 +996,46 @@ export const useLibrary = defineStore('library', {
         if (this.dupFinder.open) this.dupFinder.ai.configLoaded = true
       }
     },
+    async fetchAiModels(apiKey = '') {
+      const ai = this.dupFinder.ai
+      if (ai.modelsLoading) return
+      const base = String(ai.baseUrl || '').trim()
+      if (!/^https?:\/\//i.test(base)) { ai.models = []; ai.modelsError = '请先填写 API 地址'; return }
+      ai.modelsLoading = true
+      ai.modelsError = ''
+      try {
+        const r = await window.picrand.picnestAiModels({ baseUrl: base, apiKey: String(apiKey || '').trim() })
+        if (!this.dupFinder.open || this.dupFinder.ai !== ai) return
+        if (String(ai.baseUrl || '').trim() !== base) return // 等待期间改过地址，丢弃旧列表
+        if (!r?.ok) {
+          ai.models = []
+          ai.modelsError = r?.error || '获取模型列表失败，可手动填写模型名'
+          return
+        }
+        ai.models = Array.isArray(r.models) ? r.models : []
+        if (!ai.models.length) ai.modelsError = '接口返回了空模型列表，可手动填写模型名'
+        else if (!ai.model) ai.model = ai.models[0]
+      } catch (e) {
+        if (this.dupFinder.open && this.dupFinder.ai === ai && String(ai.baseUrl || '').trim() === base) {
+          ai.modelsError = String(e?.message || e)
+        }
+      } finally {
+        if (this.dupFinder.ai === ai) ai.modelsLoading = false
+      }
+    },
     setDupMode(mode) {
       const m = mode === 'ai' ? 'ai' : 'exact'
       if (this.dupFinder.mode === m) return
       this.dupFinder.mode = m
       this.dupFinder.selected = []
-      if (m === 'ai' && !this.dupFinder.ai.configLoaded) this.loadAiConfig()
+      if (m !== 'ai') return
+      const ai = this.dupFinder.ai
+      const fetchIfReady = () => {
+        if (!this.dupFinder.open || this.dupFinder.mode !== 'ai') return
+        if (ai.hasKey && !ai.models.length && !ai.modelsLoading) this.fetchAiModels('')
+      }
+      if (!ai.configLoaded) this.loadAiConfig().then(fetchIfReady)
+      else fetchIfReady()
     },
     async saveAiConfig(opts = {}) {
       const ai = this.dupFinder.ai
@@ -1026,6 +1061,8 @@ export const useLibrary = defineStore('library', {
           ai.note = '保存成功，但测试失败：' + (t?.error || '未知错误')
           ai.noteErr = true
         }
+        // 保存后顺带刷新模型列表；失败只显示在模型栏，不覆盖连接测试结果
+        this.fetchAiModels('').catch(() => {})
         return r
       } catch (e) {
         ai.note = String(e?.message || e)

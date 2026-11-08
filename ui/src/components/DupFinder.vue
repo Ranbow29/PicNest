@@ -95,9 +95,17 @@ function thumbOf(file) {
         <div v-if="f.mode === 'ai'" class="ai-box">
           <div class="ai-grid">
             <label>API 地址<input v-model="f.ai.baseUrl" placeholder="https://api.openai.com/v1" spellcheck="false" /></label>
-            <label>模型<input v-model="f.ai.model" placeholder="gpt-4o-mini" spellcheck="false" /></label>
+            <label>模型<input v-model="f.ai.model" list="picnest-ai-models" placeholder="gpt-4o-mini" spellcheck="false" /></label>
             <label>API Key<input v-model="aiKey" type="password" autocomplete="off" :placeholder="f.ai.hasKey ? '已保存（留空不改）' : 'sk-…'" /></label>
             <label class="ai-num">最多比对<input v-model.number="f.ai.maxPairs" type="number" min="1" max="200" /> 对</label>
+          </div>
+          <datalist id="picnest-ai-models">
+            <option v-for="m in f.ai.models" :key="m" :value="m" />
+          </datalist>
+          <div v-if="f.ai.modelsLoading || f.ai.modelsError || f.ai.models.length" class="ai-modelbar" :class="{ err: !!f.ai.modelsError }">
+            <span v-if="f.ai.modelsLoading">正在获取模型列表…</span>
+            <span v-else-if="f.ai.modelsError">{{ f.ai.modelsError }}</span>
+            <span v-else>已获取 {{ f.ai.models.length }} 个模型，点「模型」输入框选择，或继续手填</span>
           </div>
           <label class="ai-allow">
             <input v-model="f.ai.allowed" type="checkbox" />
@@ -105,10 +113,11 @@ function thumbOf(file) {
           </label>
           <div class="ai-actions">
             <button class="df-btn" :disabled="f.ai.testing" @click="saveAi">{{ f.ai.testing ? '测试中…' : '保存并测试' }}</button>
+            <button class="df-btn" :disabled="f.ai.modelsLoading" @click="lib.fetchAiModels(aiKey)">{{ f.ai.modelsLoading ? '获取中…' : '获取模型' }}</button>
             <button class="df-btn primary" :disabled="f.ai.loading || f.ai.testing || !f.ai.hasKey || !f.ai.allowed" @click="lib.aiFindDuplicates()">开始 AI 查重</button>
             <span v-if="f.ai.note" class="ai-note" :class="{ err: f.ai.noteErr }">{{ f.ai.note }}</span>
           </div>
-          <div class="ai-hint">OpenAI 兼容 /chat/completions，模型需支持图片输入。先本地 dHash 缩圈（同图不同尺寸距离很小），再把候选缩略图交给 AI 确认；最多检查 {{ f.ai.maxPairs }} 对。</div>
+          <div class="ai-hint">OpenAI 兼容 /chat/completions + /models，模型需支持图片输入。先本地 dHash 缩圈（同图不同尺寸距离很小），再把候选缩略图交给 AI 确认；最多检查 {{ f.ai.maxPairs }} 对。</div>
         </div>
 
         <div v-if="activeLoading" class="df-loading">
@@ -220,6 +229,8 @@ function thumbOf(file) {
 .ai-num { flex-direction: row !important; align-items: center; }
 .ai-num input { width: 56px; margin-left: 4px; }
 .ai-allow { display: flex; align-items: flex-start; gap: 6px; margin-top: 8px; font-size: 11px; color: var(--text-2); line-height: 1.5; cursor: pointer; }
+.ai-modelbar { margin-top: 6px; font-size: 10.5px; line-height: 1.5; color: var(--text-2); }
+.ai-modelbar.err { color: #b4463b; }
 .ai-allow input { accent-color: var(--accent); margin-top: 1px; }
 .ai-actions { display: flex; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
 .ai-note { font-size: 11px; color: #4f7d5e; }

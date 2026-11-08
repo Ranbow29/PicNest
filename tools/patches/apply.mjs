@@ -161,6 +161,7 @@ const bridge = [
   '  picnestAiConfigGet: () => electron.ipcRenderer.invoke("picnest-ai-config-get"),',
   '  picnestAiConfigSet: (opts) => electron.ipcRenderer.invoke("picnest-ai-config-set", opts),',
   '  picnestAiTest: () => electron.ipcRenderer.invoke("picnest-ai-test"),',
+  '  picnestAiModels: (opts) => electron.ipcRenderer.invoke("picnest-ai-models", opts),',
   '  picnestAiDupScan: (folderId, rel, maxPairs) => electron.ipcRenderer.invoke("picnest-ai-dup-scan", folderId, rel, maxPairs),',
   '  picnestAiDupCancel: () => electron.ipcRenderer.invoke("picnest-ai-dup-cancel"),',
   '  onPicnestAiDupProgress: (cb) => electron.ipcRenderer.on("picnest-ai-dup-progress", (_e, d) => cb(d)),',
