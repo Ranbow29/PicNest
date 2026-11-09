@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useLibrary, extractDropUrls } from './stores/library'
 import { isExternalDT } from './lib/dnd'
 import TitleBar from './components/TitleBar.vue'
@@ -21,6 +21,17 @@ import InspResize from './components/InspResize.vue'
 // ZCode 式嵌套结构：左栏底层(可拖宽) → 主面板工作区（浏览 ⇄ 大图双模式）→ 详情计划式浮岛(可收起可拖宽)
 // 外部拖入 = 位置即意图：主展示区/树行/缝隙/资料库栏各自高亮 + 跟随光标的落点提示
 const lib = useLibrary()
+/* 详情固定高度 = 用户偏好，但必须随窗口收缩钳制：否则最大化时设的 1137px 在窗口变矮后
+   会从底部往上顶出视口（顶部内容被窗控盖住）。只影响显示，不改用户存的值；窗口放大后恢复。 */
+const browseEl = ref(null)
+const browseH = ref(Math.max(0, window.innerHeight - 30))
+const inspEffH = computed(() => {
+  const h = Number(lib.inspectorHeight) || 0
+  if (h <= 0) return 0
+  const max = Math.max(240, Math.round((browseH.value || 0) - 50))
+  return Math.min(h, max)
+})
+let browseRO = null
 /* 复制/粘贴快捷键（输入框内保留原生行为；有文本选择时让浏览器复制文本） */
 function isTypingTarget(el) {
   if (!el) return false
@@ -81,12 +92,21 @@ onMounted(() => {
   window.addEventListener('drop', clearDropUi, true)
   window.addEventListener('dragend', clearDropUi, true)
   window.addEventListener('dragleave', onWindowDragLeave, true)
+  /* 窗口尺寸变化 → 详情固定高度的显示上限跟着走（grip 与浮岛共用 --insp-h） */
+  try {
+    browseRO = new ResizeObserver((entries) => {
+      const h = entries[0]?.contentRect?.height
+      if (h) browseH.value = h
+    })
+    if (browseEl.value) browseRO.observe(browseEl.value)
+  } catch { /* 旧内核无 RO 时退回 window.innerHeight 估算 */ }
 })
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown)
   window.removeEventListener('drop', clearDropUi, true)
   window.removeEventListener('dragend', clearDropUi, true)
   window.removeEventListener('dragleave', onWindowDragLeave, true)
+  browseRO?.disconnect()
 })
 
 function isExternal(e) {
@@ -135,9 +155,9 @@ const chipStyle = computed(() => {
       <TitleBar />
       <div class="main-inner">
         <!-- 浏览模式：网格 + 详情浮岛（灯箱时保留布局只隐身，滚动位置不丢，与简报退出一致） -->
-        <div class="browse"
+        <div class="browse" ref="browseEl"
              :class="{ 'lb-behind': lib.lightbox.open, 'insp-h-fixed': lib.inspectorHeight > 0, 'insp-open': lib.viewer.showInspector }"
-             :style="{ '--insp-w': lib.inspectorWidth + 'px', '--insp-h': lib.inspectorHeight + 'px' }">
+             :style="{ '--insp-w': lib.inspectorWidth + 'px', '--insp-h': inspEffH + 'px' }">
           <ImageGrid />
           <Transition name="insp">
             <Inspector v-if="lib.viewer.showInspector" :style="{ '--insp-w': lib.inspectorWidth + 'px' }" />
@@ -148,7 +168,7 @@ const chipStyle = computed(() => {
         <template v-if="lib.lightbox.open">
           <Lightbox />
           <div class="insp-overlay" :class="{ 'insp-h-fixed': lib.inspectorHeight > 0 }"
-               :style="{ '--insp-w': lib.inspectorWidth + 'px', '--insp-h': lib.inspectorHeight + 'px' }">
+               :style="{ '--insp-w': lib.inspectorWidth + 'px', '--insp-h': inspEffH + 'px' }">
             <Transition name="insp">
               <Inspector v-if="lib.viewer.showInspector" :style="{ '--insp-w': lib.inspectorWidth + 'px' }" />
             </Transition>

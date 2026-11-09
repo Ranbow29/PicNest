@@ -16,7 +16,8 @@ function start(kind, e) {
     x0: e.clientX,
     y0: e.clientY,
     w0: lib.inspectorWidth,
-    h0: lib.inspectorHeight || Math.round(insp.height),
+    /* 从当前显示高度起拖：窗口收缩后显示高度已被钳制，不能用存着的偏好值（会跳变） */
+    h0: Math.round(insp.height),
     maxH: Math.max(240, Math.round(hr.height - 50)), // 顶边不越过 40px（窗控按钮下缘 39 之下）
   }
   document.addEventListener('mousemove', onMove)
