@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- PicNest 图巢 · 黑底 N 标（终稿方向）
+       暖黑圆角底 tile + 纸白 N + 金色蛋点。N 由左竖、断开的上挑斜线、右竖三笔组成；
+       金点画在 N 之前，右竖的圆头压住它左下方，形成「蛋在巢里」的层次。
+       1024 画布，22.5% 圆角，80% 安全区内。 -->
+  <rect x="0" y="0" width="1024" height="1024" rx="230" fill="#1B1A18"/>
+  <rect x="1.5" y="1.5" width="1021" height="1021" rx="228.5" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="3"/>
+  <circle cx="752" cy="270" r="94" fill="#C18B3F"/>
+  <path d="M355 780 V300" fill="none" stroke="#F5EFE3" stroke-width="112" stroke-linecap="round"/>
+  <path d="M492 300 C560 430 628 590 698 752" fill="none" stroke="#F5EFE3" stroke-width="100" stroke-linecap="round"/>
+  <path d="M700 752 V322" fill="none" stroke="#F5EFE3" stroke-width="112" stroke-linecap="round"/>
+</svg>

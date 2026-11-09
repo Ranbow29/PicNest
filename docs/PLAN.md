@@ -418,3 +418,5 @@ PicNest/
 67. **AI 查重风险提示（2026-11-09，Feb 指定）**：`DupFinder.vue` AI 面板 `ai-hint` 下方新增 `.ai-risk` 小字（10.5px，琥珀 #b8862e）：「注意：图片可能因暴露度较高或不符合所选 AI 的使用准则而被服务商拒绝/弹回；请自行甄别素材并确认该服务条款。」实测 DOM 存在、颜色/字号正确。
 
 68. **Logo 概念与 PSD 底稿（2026-11-09，Feb 问设计想法）**：`branding/` 下三版矢量概念——A 巢·照片卡（照片卡+U 形巢弧+金蛋，推荐主图标）、B 巢鸮（猫头鹰耳朵/双眼/喙+巢弧，吉祥物方向）、C N 字母标（圆角画框+N+金点，16px 最稳）；每版有浅底/深底 SVG（深底墨线换纸白）与 1024/512 PNG。`PicNest-logo-template.psd` 2048×2048，图层含暖纸背景、80% 安全区、22.5% 圆角、64 网格、中心十字、A/B/C 底稿（B/C 默认隐藏）；`preview-concepts.png`/`preview-sizes.png` 为对照图，README 写设计约束/导出规格/检查清单。**尚未接入 app/icon.png 与 .ico**，等 Feb 选定/改稿后再导出多尺寸。
+
+69. **黑底 N 标终稿（2026-11-09，Feb 给截图指定方向）**：按截图重做 `branding/final/picnest-icon.svg`——暖黑 `#1B1A18` 22.5% 圆角 tile、纸白 `#F5EFE3` N（左竖/断开上挑斜线/右竖三笔）、金 `#C18B3F` 蛋点画在 N 前由右竖圆头压住左下；1024 画布、80% 安全区。导出 1024/512/256/128/64/48/32/16 PNG、多尺寸 `picnest.ico`、浅/深底 `preview-icon.png`；16px 可读。**尚未替换 app/_internal_data/icon.png 与 exe 资源**，等 Feb 确认版式后接入。
