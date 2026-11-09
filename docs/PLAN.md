@@ -443,3 +443,9 @@ PicNest/
     ③ **为什么这样做**：Windows 上 `startDrag` 与 HTML5 内部拖拽互斥（electron#7118），不能在 dragstart 就调用；保持 HTML5 在窗口内工作，只在光标离开窗口后升级，才能一个手势同时覆盖内部高亮排序和拖出。
     ④ **落回保护**：主进程在升级时发 out-start，渲染层 `markNativeDragOut()`；App 捕获阶段吞掉 `dragenter/dragover/drop` 的 Files，拖动途中又落回 PicNest 不会触发「重复添加」。out-end 后延迟 500ms 清标记，60s 兜底。
     ⑤ **实测**：build/apply 0 失败；普通拖动（不按任何键）从网格拖出窗口 → 外部 WinForms 文件拖放目标收到真实文件路径；主进程日志 `begin → escalate → startDrag returned`；落回 PicNest 不再弹重复添加。**实际拖入 CSP 画布仍需 Feb 手动确认**（未自动操作 CSP，避免动到正在编辑的画布）。
+
+75. **Pinterest 采集失灵修复（2026-11-10，Feb 报「浏览器采集 Pinterest 失灵了」）**：
+    ① **根因**：Pinterest 现在会把图片 `<img>` 设为 `pointer-events:none`（实测设置后 `document.elementsFromPoint` 直接不再包含该 img）。旧 `imgAtPoint` 只遍历 `elementsFromPoint`，于是按住采集拿不到图片、面板根本不弹；右键走浏览器原生 image context 同样可能不出现。采集服务日志只有 listening、没有 save/error，符合“请求根本没发出”。
+    ② **修法**（`extension/content.js`）：新增 `imgVisibleAt()` 统一可见性判断（尺寸/自然尺寸/`checkVisibility`/display/visibility/opacity）；`imgAtPoint` 先走 `elementsFromPoint`，找不到时几何扫描 `document.images`，取包含该点、面积最大的可见图片。面板选择新增 `rowAtPoint`/`panelAtPoint` 坐标兜底：站点 `setPointerCapture` 把事件重定向到页面元素时，`composedPath` 里没有面板，仍能靠坐标高亮/点击行；`onDown` 也忽略面板区域，避免点面板时把面板关掉。
+    ③ **验证**：把 `content.js` 注入真实 Pinterest 搜索页（stub `chrome.runtime`），先把 img 设 `pointer-events:none` 再 synthetic pointerdown → 面板正常打开（428×216）；随后把 pointermove/pointerup 派发到 `document.body`（模拟 capture 重定向）但坐标落在「文件夹A」行 → 行高亮 + `save-panel`，保存 URL 为 474x 的 `i.pinimg.com` 图片。未写真实文件（stub 只记录消息）。
+    ④ **发布**：扩展版本 `0.1.1`；改动先落纯净版 `D:\zcode工作区\PicNest-Public`（commit `44f36ff`），再同步回开发版；沿用“重载扩展后必须刷新已打开网页”的纪律。

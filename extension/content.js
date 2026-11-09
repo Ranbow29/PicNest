@@ -209,30 +209,63 @@
     return null
   }
   /* Pinterest 等站点会用覆盖层 DIV 盖住图片：事件目标不是 IMG，按坐标找底层可见图片 */
+  function imgVisibleAt(el, x, y) {
+    if (!el || el.tagName !== 'IMG') return false
+    const r = el.getBoundingClientRect()
+    if (r.width < 24 || r.height < 24) return false
+    if (x < r.left || x > r.right || y < r.top || y > r.bottom) return false
+    if (!el.naturalWidth || !el.naturalHeight) return false
+    if (el.checkVisibility && !el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) return false
+    const cs = getComputedStyle(el)
+    return cs.display !== 'none' && cs.visibility !== 'hidden' && Number(cs.opacity) !== 0
+  }
   function imgAtPoint(x, y) {
     const list = document.elementsFromPoint?.(x, y) || []
     for (const el of list) {
-      if (!el || el.tagName !== 'IMG') continue
+      if (imgVisibleAt(el, x, y)) return el
+    }
+    /* 2026-11 Pinterest 把 <img> 设成 pointer-events:none，elementsFromPoint 会直接跳过它；
+       退化为几何扫描：所有可见图片里取包含该点、面积最大的那张。 */
+    let best = null
+    let bestArea = 0
+    for (const el of document.images) {
+      if (!imgVisibleAt(el, x, y)) continue
       const r = el.getBoundingClientRect()
-      if (r.width < 24 || r.height < 24) continue
-      if (x < r.left || x > r.right || y < r.top || y > r.bottom) continue
-      const cs = getComputedStyle(el)
-      if (cs.display === 'none' || cs.visibility === 'hidden' || Number(cs.opacity) === 0) continue
-      return el
+      const area = r.width * r.height
+      if (area > bestArea) { bestArea = area; best = el }
+    }
+    return best
+  }
+  function panelAtPoint(x, y) {
+    const p = session?.panel
+    if (!p) return false
+    const r = p.getBoundingClientRect()
+    return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom
+  }
+  function rowAtPoint(x, y) {
+    const p = session?.panel
+    if (!p) return null
+    for (const row of p.querySelectorAll('[data-rel]')) {
+      const r = row.getBoundingClientRect()
+      if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return row
     }
     return null
   }
   function rowFromEvent(e) {
     if (!session?.panel) return null
     const path = e.composedPath?.() || []
-    if (!path.includes(session.panel)) return null
-    for (const n of path) {
-      if (n && n.closest) {
-        const row = n.closest('[data-rel]')
-        if (row) return row
+    if (path.includes(session.panel)) {
+      for (const n of path) {
+        if (n && n.closest) {
+          const row = n.closest('[data-rel]')
+          if (row) return row
+        }
       }
+      return null
     }
-    return null
+    /* 站点若 setPointerCapture，事件会被重定向到页面元素，composedPath 里没有面板；
+       用坐标兜底，面板里的行仍能悬停/点击。 */
+    return rowAtPoint(e.clientX || 0, e.clientY || 0)
   }
 
   function setStatus(s, cls, text) {
@@ -591,6 +624,7 @@
     if (!enabled || e.button !== 0 || e.isPrimary === false) return
     if (e.pointerType === 'touch') return // 触屏长按留给系统/页面滚动
     if (inHost(e)) return
+    if (panelAtPoint(e.clientX, e.clientY)) return
     if (session && !session.opened) return
     if (session?.opened) closePanel()
     const img = imgFromEvent(e) || imgAtPoint(e.clientX, e.clientY)
@@ -622,7 +656,7 @@
     if (!s.opened) { closePanel(); return }
     const row = rowFromEvent(e)
     if (row) { saveTo(s, row.dataset.rel); return }
-    const inPanel = (e.composedPath?.() || []).includes(s.panel)
+    const inPanel = (e.composedPath?.() || []).includes(s.panel) || panelAtPoint(e.clientX, e.clientY)
     if (!inPanel) { closePanel(); return }
     s.holding = false
     setHint(s)
@@ -649,7 +683,7 @@
   }
   function onOutside(e) {
     if (!session || !session.opened || session.holding) return
-    if (inHost(e)) return
+    if (inHost(e) || panelAtPoint(e.clientX, e.clientY)) return
     closePanel()
   }
 
