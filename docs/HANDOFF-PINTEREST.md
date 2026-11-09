@@ -3,8 +3,8 @@
 > 给下一个窗口的专注交接。**这是目前唯一剩下的硬骨头。**
 > 阅读顺序：本文 → `extension/background.js` / `extension/content.js` → `docs/HANDOFF.md` 的「采集（M6）」小节 → `extension/README.md`。
 >
-> **2026-11-10 状态：v0.1.4 已实现并实测；v0.1.5 补上「监听失效」自愈（popup 原地重建 + content 看门狗），真实 Chrome 9 项端到端全过，待 Feb 在主 Chrome 重载 0.1.5 后物理验收。**
-> 实现细节与决策表见第 9 节；无头回归 `node tools/test-collect-script.mjs` / `node tools/test-collect-background.mjs`，真实 Chrome 冒烟 `node tools/e2e-extension.mjs`。
+> **2026-11-10 状态：已完成并通过 Feb 物理验收。** v0.1.4 实现版本化探测 + cleanup 原地接管 + Pinterest 一次性自动刷新；v0.1.5 补「监听失效」自愈（popup 原地重建 + content 看门狗 2.5s）。Feb 主 Chrome 重载 0.1.5 后，书签同标签进入路径实测成功。
+> 实现细节与决策表见第 9/10 节；无头回归 `node tools/test-collect-script.mjs` / `node tools/test-collect-background.mjs`，真实 Chrome 冒烟 `node tools/e2e-extension.mjs`（9 项）。
 
 ## 0. 一句话结论
 
@@ -245,6 +245,8 @@ manifest 注入 + 健康探测、`collectStatus` current、旧版带 cleanup 原
 
 ### 9.5 待 Feb 验收（真实 Chrome）
 
+> **验收结果（2026-11-10）：Feb 主 Chrome（Default）重载到 0.1.5 后，按书签同标签进入 Pinterest 路径实测成功。**
+
 > 自动化部分已在临时 Chrome 156 通过（见 9.4）；下面是用你**日常主 Chrome + 真实 Pinterest 登录态**的物理验收，
 > 重点验证睡眠标签 / bookmarks / 多窗口切换这些自动化覆盖不到的路径。
 
@@ -305,7 +307,7 @@ Feb 从书签同一标签跳 Pinterest 后，popup「本页采集」显示 **监
   `document.open()` 清空监听器后 `repairCollect` 原地重建；以及不调用后台、仅靠 content 看门狗自愈。
 - 测试窗口把扩展从 0.1.4 卸载重载到 0.1.5 后，三个已打开的 Pinterest 标签**全部原地升到 0.1.5、无页面刷新**，
   `probe` 全 healthy。
-- 主 Chrome 需 Feb 重载到 **0.1.5** 后按书签路径物理验收；若 popup 仍显示「监听失效」，
+- **Feb 主 Chrome（Default）已重载到 0.1.5，书签同标签进入路径物理实测成功**；若以后 popup 仍显示「监听失效」，
   等 1.2–2.5s 看门狗自愈，或点「修复本页」（现在会显示“已原地重建采集脚本”）。
 
 ### 10.4 版本
