@@ -2407,7 +2407,8 @@ export const useLibrary = defineStore('library', {
     selectImage(path, opts = {}) {
       const shift = !!opts.shift
       const add = !!opts.add
-      const list = this.filteredImages.map((i) => i.file_path)
+      /* 按画面实际视觉顺序（gridOrder）做 Shift 范围选，兼容瀑布流/自适应行高与前端即时排序 */
+      const list = this.gridOrder?.length ? this.gridOrder : this.filteredImages.map((i) => i.file_path)
       if (!this.selectionView) this.clearDirSelection()
       if (shift && this.selectionAnchor != null) {
         const a = list.indexOf(this.selectionAnchor)
@@ -2449,7 +2450,7 @@ export const useLibrary = defineStore('library', {
     /* Ctrl+A：选中当前可见（筛选后）全部图片 */
     selectAllImages() {
       if (!this.images.length) return 0
-      const list = this.filteredImages.map((i) => i.file_path)
+      const list = this.gridOrder?.length ? [...this.gridOrder] : this.filteredImages.map((i) => i.file_path)
       this.selectedPaths = list
       this.selectedPath = list[list.length - 1] || null
       this.selectionAnchor = list[0] || null
@@ -2602,11 +2603,11 @@ export const useLibrary = defineStore('library', {
       } catch (e) {}
     },
     briefNav(dir) {
-      const list = this.images
+      const list = this.gridOrder?.length ? this.gridOrder : this.filteredImages.map((x) => x.file_path)
       if (!list.length) return
-      const i = list.findIndex((x) => x.file_path === this.brief.path)
+      const i = list.indexOf(this.brief.path)
       const n = ((i < 0 ? 0 : i) + dir + list.length) % list.length
-      this.brief = { open: true, path: list[n].file_path, scale: 1, tx: 0, ty: 0 }
+      this.brief = { open: true, path: list[n], scale: 1, tx: 0, ty: 0 }
     },
 
     /* ---- 移入未分类：物理移到库根并保留索引（替代“从库中移除”，避免幽灵文件） ---- */
@@ -2654,10 +2655,12 @@ export const useLibrary = defineStore('library', {
       collectiveShake() // 详情展开/褪去 → 集体晃动
     },
     lightboxNav(dir) {
-      const i = this.images.findIndex((x) => x.file_path === this.lightbox.path)
+      const list = this.gridOrder?.length ? this.gridOrder : this.filteredImages.map((x) => x.file_path)
+      if (!list.length) return
+      const i = list.indexOf(this.lightbox.path)
       if (i < 0) return
-      const n = (i + dir + this.images.length) % this.images.length
-      this.lightbox.path = this.images[n].file_path
+      const n = (i + dir + list.length) % list.length
+      this.lightbox.path = list[n]
       this.selectedPath = this.lightbox.path
       this.selectedPaths = [this.lightbox.path]
       this.selectionAnchor = this.lightbox.path

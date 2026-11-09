@@ -124,8 +124,6 @@ const sortedImages = computed(() => {
   else arr.sort((a, b) => asc * ((key(a) || 0) - (key(b) || 0)))
   return arr
 })
-/* 回写当前实际显示顺序：「应用为手动排序」按 WYSIWYG 固化（含筛选/前端排序） */
-watch(sortedImages, (arr) => { lib.gridOrder = arr.map((i) => i.file_path) }, { immediate: true })
 
 /* ---------- 布局引擎：grid（等格）/ justified（自适应行高） ---------- */
 const GAP = 14
@@ -259,19 +257,55 @@ const items = computed(() => {
     }
     flushRow(true)
   } else if (lib.layout === 'masonry') {
-    // 瀑布流：定列数，每张图放进最矮的列
+    // 瀑布流：定列数，每张图放进最矮的列（高度差在容差内时优先按从左到右排，避免同尺寸图因几像素误差穿插乱序）
     const targetColW = Math.round(220 * lib.zoom)
     const cols = Math.max(1, Math.floor((W + GAP) / (targetColW + GAP)))
     const colW = Math.floor((W - GAP * (cols - 1)) / cols)
     const colH = new Array(cols).fill(contentTop.value)
+    const slack = Math.max(12, Math.round(colW * 0.12))
+    const placed = []
     for (const img of imgs) {
       const ar = Math.max(0.2, Math.min(4, (img.width || 1) / (img.height || 1)))
+      let minH = colH[0]
+      for (let c = 1; c < cols; c++) if (colH[c] < minH) minH = colH[c]
       let col = 0
-      for (let c = 1; c < cols; c++) if (colH[c] < colH[col]) col = c
+      for (let c = 0; c < cols; c++) {
+        if (colH[c] <= minH + slack) { col = c; break }
+      }
       const h = Math.round(colW / ar)
-      out.push({ ...img, x: col * (colW + GAP), y: colH[col], w: colW, h })
+      placed.push({ ...img, col, x: col * (colW + GAP), y: colH[col], w: colW, h })
       colH[col] += h + GAP
     }
+    // 按画面视觉阅读顺序（从上到下分行带、同行带内严格从左到右）重排 items，使 Shift 范围选与视觉位置一致
+    placed.sort((a, b) => a.y - b.y || a.x - b.x)
+    let band = []
+    const usedCols = new Set()
+    let bandThresholdSum = 0
+    const flushBand = () => {
+      if (!band.length) return
+      band.sort((a, b) => a.x - b.x)
+      for (const it of band) out.push(it)
+      band = []
+      usedCols.clear()
+      bandThresholdSum = 0
+    }
+    for (const it of placed) {
+      const span = Math.max(it.h * 0.55, colW * 0.55)
+      if (!band.length) {
+        band.push(it)
+        usedCols.add(it.col)
+        bandThresholdSum = it.y + span
+        continue
+      }
+      const avgThresholdY = bandThresholdSum / band.length
+      if (usedCols.has(it.col) || it.y > avgThresholdY) {
+        flushBand()
+      }
+      band.push(it)
+      usedCols.add(it.col)
+      bandThresholdSum += it.y + span
+    }
+    flushBand()
   } else {
     const cell = Math.round(200 * lib.zoom)
     const step = cell + GAP
@@ -284,13 +318,25 @@ const items = computed(() => {
   }
   return out
 })
+/* 回写当前画面实际视觉顺序：Shift 范围连选、灯箱左右翻页、「应用为手动排序」均严格按画面从上到下、从左到右的 WYSIWYG 顺序 */
+watch(
+  [items, sortedImages],
+  ([it, arr]) => {
+    lib.gridOrder = (it && it.length ? it : arr).map((i) => i.file_path)
+  },
+  { immediate: true },
+)
 
 const totalH = computed(() => {
   const it = items.value
   const top = contentTop.value
   if (!it.length) return top + 10
-  const last = it[it.length - 1]
-  return Math.max(last.y + last.h + 40, top + 10)
+  let maxBottom = top
+  for (let i = Math.max(0, it.length - 24); i < it.length; i++) {
+    const b = it[i].y + it[i].h
+    if (b > maxBottom) maxBottom = b
+  }
+  return Math.max(maxBottom + 40, top + 10)
 })
 
 /* 可视窗口：二分找起点，向后扫到出界 */
@@ -305,10 +351,13 @@ const visible = computed(() => {
     if (it[mid].y + it[mid].h >= top) { start = mid; hi = mid - 1 }
     else lo = mid + 1
   }
+  const from = Math.max(0, start - 20)
   const out = []
-  for (let i = start; i < it.length; i++) {
-    if (it[i].y > bottom) break
-    out.push({ ...it[i], gi: i }) // gi = 全局序号：入场波以真实位置排延迟（滚动补挂载不重放）
+  for (let i = from; i < it.length; i++) {
+    if (it[i].y > bottom + 360) break
+    if (it[i].y + it[i].h >= top && it[i].y <= bottom) {
+      out.push({ ...it[i], gi: i }) // gi = 全局序号：入场波以真实位置排延迟（滚动补挂载不重放）
+    }
   }
   return out
 })
