@@ -392,6 +392,36 @@ electron.ipcMain.handle("picnest-psd-preview", async (_event, filePath) => {
     return { ok: false, error: String(e?.message || e) };
   }
 });
+electron.ipcMain.handle("picnest-view-preview", async (_event, filePath) => {
+  try {
+    if (!filePath) return { ok: false, error: "文件不存在" };
+    const abs = path.resolve(String(filePath));
+    if (!fs.existsSync(abs)) return { ok: false, error: "文件不存在" };
+    const ext = path.extname(abs).toLowerCase();
+    const exts = new Set([".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff", ".avif", ".heic", ".heif", ".psd"]);
+    if (!exts.has(ext)) return { ok: false, error: "该格式不支持大图预览" };
+    const mt = Math.floor(fs.statSync(abs).mtimeMs);
+    const out = path.join(cacheDir, "view-" + crypto.createHash("md5").update(abs + "|2048|" + mt).digest("hex") + ".webp");
+    if (!fs.existsSync(out)) {
+      let src = abs;
+      if (ext === ".psd") {
+        const png = path.join(cacheDir, "psd-" + crypto.createHash("md5").update(abs).digest("hex") + ".png");
+        try {
+          if (fs.existsSync(png) && fs.statSync(png).mtimeMs < fs.statSync(abs).mtimeMs) fs.unlinkSync(png);
+        } catch (e) {}
+        src = await ensurePsdPng(abs);
+        if (!src || src === abs || !fs.existsSync(src)) return { ok: false, error: "PSD 渲染失败" };
+      }
+      const sharp = (await import("sharp")).default;
+      await sharp(src, { failOn: "none" }).rotate()
+        .resize({ width: 2048, height: 2048, fit: "inside", withoutEnlargement: true })
+        .webp({ quality: 88, alphaQuality: 100 }).toFile(out);
+    }
+    return { ok: true, path: out };
+  } catch (e) {
+    return { ok: false, error: String(e?.message || e) };
+  }
+});
 electron.ipcMain.handle("picnest-repair-thumbs-cancel", () => { picnestThumbRepairCancel = true; return { ok: true }; });
 electron.ipcMain.handle("picnest-repair-thumbs", async (event, folderId) => {
   const send = (p) => { try { if (!event.sender.isDestroyed()) event.sender.send("picnest-thumb-repair-progress", p); } catch (e) {} };

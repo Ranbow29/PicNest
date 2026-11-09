@@ -21,17 +21,22 @@ const psdLoading = ref(false)
 const psdError = ref('')
 const imgFallback = ref(false)
 const imgDead = ref(false)
+const previewPath = ref('')
+const previewError = ref(false)
+/* 简报显示 2048 视口预览，放大到 2× 才换原图：大图平移只合成小纹理 */
+const useFull = computed(() => (lib.brief.scale || 1) >= 2)
 /* 简报图源：PSD 用主进程合成的整幅 PNG；普通图片失败时退到 400 缩略图 */
 const mediaSrc = computed(() => {
   if (kind.value !== 'image') return url.value
   const m = meta.value
   const thumb = m?.thumbnail_path && m.thumbnail_path !== 'SKIP' ? fileUrl(m.thumbnail_path) + '?v=' + (m.modify_time || 0) : ''
-  if (isPsd.value) {
-    if (psdFull.value && !imgFallback.value) return fileUrl(psdFull.value) + '?v=' + (m?.modify_time || 0)
-    return thumb
-  }
+  const preview = previewPath.value && !previewError.value ? fileUrl(previewPath.value) + '?v=' + (m?.modify_time || 0) : ''
+  const full = isPsd.value ? (psdFull.value ? fileUrl(psdFull.value) + '?v=' + (m?.modify_time || 0) : '') : url.value
+  if (useFull.value) return full || thumb
+  if (preview) return preview
+  if (isPsd.value) return thumb || full
   if (imgFallback.value && thumb) return thumb
-  return url.value
+  return full
 })
 watch(() => lib.brief.path, async (p) => {
   imgFallback.value = false
@@ -62,12 +67,36 @@ watch(() => lib.brief.path, async (p) => {
     if (lib.brief.path === p) psdLoading.value = false
   }
 }, { immediate: true })
+watch(() => lib.brief.path, async (p) => {
+  previewPath.value = ''
+  previewError.value = false
+  const ext = extOf(p)
+  if (!p || isVideoPath(p) || isTextPath(p) || ext === '.gif' || ext === '.svg') return
+  try {
+    const res = await api.viewPreview(p)
+    if (lib.brief.path !== p || !res?.ok || !res.path) return
+    const u = fileUrl(res.path) + '?v=' + (meta.value?.modify_time || 0)
+    await new Promise((resolve, reject) => {
+      const im = new Image()
+      im.decoding = 'async'
+      im.onload = () => { if (im.decode) im.decode().then(resolve).catch(resolve); else resolve() }
+      im.onerror = () => reject(new Error('preview load failed'))
+      im.src = u
+    })
+    if (lib.brief.path === p) previewPath.value = res.path
+  } catch (e) { /* 预览失败不阻塞原图 */ }
+}, { immediate: true })
 
 const mediaStyle = computed(() => ({
   transform: `translate3d(${lib.brief.tx || 0}px, ${lib.brief.ty || 0}px, 0) scale(${lib.brief.scale || 1})`,
   cursor: dragging.value ? 'grabbing' : 'grab',
+  ...(kind.value === 'image' && meta.value?.width ? { width: meta.value.width + 'px', height: meta.value.height + 'px' } : {}),
 }))
 function onImgError() {
+  if (!useFull.value && previewPath.value && !previewError.value) {
+    previewError.value = true
+    return
+  }
   if (isPsd.value && psdFull.value && !imgFallback.value) {
     psdError.value = 'PSD 原图加载失败，显示缩略图'
     imgFallback.value = true
