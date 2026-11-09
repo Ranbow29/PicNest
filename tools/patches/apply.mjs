@@ -355,6 +355,8 @@ const bridge = [
   '  picnestPluginRegistryFetch: (url) => electron.ipcRenderer.invoke("picnest-plugin-registry-fetch", url),',
   '  picnestPluginInstallRegistry: (entry) => electron.ipcRenderer.invoke("picnest-plugin-install-registry", entry),',
   '  picnestCopyImages: (paths, targetDir) => electron.ipcRenderer.invoke("picnest-copy-images", paths, targetDir),',
+  '  picnestStartDrag: (paths) => electron.ipcRenderer.send("picnest-start-drag", paths),',
+  '  onPicnestDragOutEnd: (cb) => electron.ipcRenderer.on("picnest-drag-out-end", () => cb()),',
   '  picnestCrop: (filePath, opts) => electron.ipcRenderer.invoke("picnest-crop", filePath, opts),',
   '  picnestCropAs: (filePath, opts) => electron.ipcRenderer.invoke("picnest-crop-as", filePath, opts),',
   '  picnestMkdir: (parentPath, name) => electron.ipcRenderer.invoke("picnest-mkdir", parentPath, name),',

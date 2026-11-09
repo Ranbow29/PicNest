@@ -4,7 +4,7 @@ import { useLibrary, extractDropUrls } from '../stores/library'
 import { api, fileUrl } from '../api'
 import { startWindowDrag } from '../lib/winDrag'
 import { waveSeq, waveDelay, replayWave } from '../lib/wave'
-import { isExternalDT as isDnDExternal } from '../lib/dnd'
+import { isExternalDT as isDnDExternal, markNativeDragOut } from '../lib/dnd'
 import { isVideoPath, isTextPath, extOf } from '../lib/fileKinds'
 import { useTheme } from '../lib/theme'
 import FolderIcon from './FolderIcon.vue'
@@ -67,10 +67,26 @@ function onViewportWheel(e) {
   lib.zoom = Math.min(3.2, Math.max(0.6, lib.zoom * k))
 }
 
+/* 拖出到外部应用（CSP / PS / 资源管理器）：Electron 的 startDrag 与 HTML5 内部拖拽在 Windows 上互斥，
+   所以普通拖动保持内部排序/移动；Alt+拖动 或 从卡片右上角 ↗ 手柄起拖才走原生文件拖拽。 */
+let dragOutIntent = false
+function onCellMouseDown(e) {
+  dragOutIntent = !!e.target.closest?.('.drag-out')
+}
+
 function onCellDragStart(e, img) {
   const group = (lib.selectedPaths.length > 1 && lib.selectedPaths.includes(img.file_path))
     ? lib.selectedPaths.slice()
     : []
+  if (e.altKey || dragOutIntent) {
+    dragOutIntent = false
+    e.preventDefault()
+    e.stopPropagation()
+    markNativeDragOut()
+    try { api.startDrag(group.length > 1 ? group : [img.file_path]) } catch (err) { console.error('[drag-out]', err) }
+    return
+  }
+  dragOutIntent = false
   e.dataTransfer.setData('application/x-picnest-file', img.file_path)
   e.dataTransfer.setData('text/plain', img.file_path)
   if (group.length > 1) e.dataTransfer.setData('application/x-picnest-files', JSON.stringify(group))
@@ -704,7 +720,7 @@ async function onSubDrop(e, f) {
     if (dirs.length) await lib.dropOnDirs(dirs, rel, 'into')
   }
 }
-function clearDragUi() { reorderCtx.value = null; subDropRel.value = null }
+function clearDragUi() { reorderCtx.value = null; subDropRel.value = null; dragOutIntent = false }
 onMounted(() => window.addEventListener('dragend', clearDragUi))
 onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
 </script>
@@ -786,6 +802,7 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
         class="cell" :class="{ selected: selectedSet.has(img.file_path) }"
         :style="{ transform: `translate(${img.x}px, ${img.y + 0}px)`, width: img.w + 'px', height: img.h + 'px', '--d': waveDelay(img.gi) + 'ms' }"
         draggable="true"
+        @mousedown="onCellMouseDown"
         @dragstart="onCellDragStart($event, img)"
         @click="onCellClick($event, img)"
         @dblclick="lib.openLightbox(img.file_path)"
@@ -801,6 +818,7 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
           <div v-else class="noimg">{{ img.isVideo ? '▶' : '∘' }}</div>
           <!-- PicRand 式悬停信息条：叠在图片内部底部，不占布局 -->
           <div v-if="showLabels" class="hover-overlay" :data-info="img.info" />
+          <span class="drag-out" title="拖到 Clip Studio Paint / Photoshop 等外部应用（也可按住 Alt 拖动图片）">↗</span>
         </div>
       </div>
     </div>
@@ -891,6 +909,20 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
   pointer-events: none;
 }
 .cell:hover .hover-overlay { opacity: 1; }
+/* 拖出到外部应用的小手柄：只在悬停时出现，从它起拖走 Electron 原生文件拖拽 */
+.drag-out {
+  position: absolute; top: 6px; right: 6px; z-index: 4;
+  width: 22px; height: 22px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 600; line-height: 1; color: #fff;
+  background: rgba(28, 24, 18, 0.52); border: 1px solid rgba(255, 255, 255, 0.28);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.18);
+  opacity: 0; cursor: grab; user-select: none;
+  transition: opacity 0.15s ease, background 0.15s ease, transform 0.15s var(--ease-overshoot);
+}
+.cell:hover .drag-out { opacity: 1; }
+.drag-out:hover { background: rgba(0, 0, 0, 0.72); transform: scale(1.08); }
+.drag-out:active { cursor: grabbing; }
 .hover-overlay::after {
   content: attr(data-info);
   color: var(--overlay-text);

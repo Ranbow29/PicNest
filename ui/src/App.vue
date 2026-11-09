@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useLibrary, extractDropUrls } from './stores/library'
-import { isExternalDT } from './lib/dnd'
+import { isExternalDT, isNativeDragOutActive, endNativeDragOut } from './lib/dnd'
 import TitleBar from './components/TitleBar.vue'
 import SideBar from './components/SideBar.vue'
 import ImageGrid from './components/ImageGrid.vue'
@@ -91,6 +91,13 @@ function onKeydown(e) {
 }
 function clearDropUi() { lib.clearDropHint() }
 function onWindowDragLeave(e) { if (!e.relatedTarget) lib.clearDropHint() }
+/* 原生拖出媒体文件：拖回 PicNest 内的落回事件必须吞掉，不能当成“外部录入”再导一遍 */
+function onNativeDragOutOver(e) {
+  if (!isNativeDragOutActive() || !isExternalDT(e)) return
+  e.preventDefault()
+  e.stopImmediatePropagation()
+  if (e.type === 'drop') lib.clearDropHint()
+}
 onMounted(() => {
   lib.init()
   refreshPluginThemes().catch(() => {}) // 启动时应用已启用的主题插件
@@ -98,6 +105,11 @@ onMounted(() => {
   window.addEventListener('drop', clearDropUi, true)
   window.addEventListener('dragend', clearDropUi, true)
   window.addEventListener('dragleave', onWindowDragLeave, true)
+  window.addEventListener('dragenter', onNativeDragOutOver, true)
+  window.addEventListener('dragover', onNativeDragOutOver, true)
+  window.addEventListener('drop', onNativeDragOutOver, true)
+  /* 原生拖拽结束后延迟清标记：让“落回窗口”的 drop 先被吞掉 */
+  window.picrand?.onPicnestDragOutEnd?.(() => setTimeout(endNativeDragOut, 500))
   /* 窗口尺寸变化 → 详情固定高度的显示上限跟着走（grip 与浮岛共用 --insp-h） */
   try {
     browseRO = new ResizeObserver((entries) => {
@@ -112,6 +124,9 @@ onBeforeUnmount(() => {
   window.removeEventListener('drop', clearDropUi, true)
   window.removeEventListener('dragend', clearDropUi, true)
   window.removeEventListener('dragleave', onWindowDragLeave, true)
+  window.removeEventListener('dragenter', onNativeDragOutOver, true)
+  window.removeEventListener('dragover', onNativeDragOutOver, true)
+  window.removeEventListener('drop', onNativeDragOutOver, true)
   browseRO?.disconnect()
 })
 

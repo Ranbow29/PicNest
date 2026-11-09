@@ -793,6 +793,32 @@ electron.ipcMain.handle("picnest-copy-images", async (_event, paths, targetDir) 
   }
 });
 
+/* 拖出到外部应用（CSP / PS / 资源管理器）：Electron 原生文件拖拽。
+   Windows 上 startDrag 与 HTML5 内部拖拽互斥，渲染层只在 Alt+拖动 / 右上角 ↗ 手柄时调用。 */
+electron.ipcMain.on("picnest-start-drag", (event, paths) => {
+  try {
+    const list = (Array.isArray(paths) ? paths : [paths])
+      .filter((p) => typeof p === "string" && p && fs.existsSync(p));
+    if (!list.length) return;
+    const iconPath = isDev
+      ? path.join(process.cwd(), "_internal_data", "icon.png")
+      : path.join(__dirname, "../../../../_internal_data", "icon.png");
+    let icon = electron.nativeImage.createEmpty();
+    if (/\.(png|jpe?g|webp|gif|bmp)$/i.test(list[0])) {
+      try { icon = electron.nativeImage.createFromPath(list[0]); } catch (e) {}
+    }
+    if (icon.isEmpty()) icon = electron.nativeImage.createFromPath(iconPath);
+    if (!icon.isEmpty()) icon = icon.resize({ width: 96 });
+    event.sender.startDrag({ file: list[0], files: list, icon });
+  } catch (e) {
+    console.error("[picnest-start-drag]", e);
+  } finally {
+    try {
+      if (!event.sender.isDestroyed()) event.sender.send("picnest-drag-out-end");
+    } catch (e) {}
+  }
+});
+
 /* 手动排序：把当前文件夹的可见顺序写进 images.sort_order（未排序=0 的排最后） */
 electron.ipcMain.handle("picnest-images-reorder", (_event, folderId, dirRel, orderedPaths) => {
   try {

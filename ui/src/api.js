@@ -54,6 +54,7 @@ export const api = {
   dirSort: (parentRel, parentAbsPath, mode) => invoke('picnestDirSort', parentRel, parentAbsPath, mode),
   dirSortRecursive: (rootAbsPath, rootRel, mode) => invoke('picnestDirSortRecursive', rootAbsPath, rootRel, mode),
   exportDir: (dirPath) => invoke('picnestExportDir', dirPath),
+  startDrag: (paths) => invoke('picnestStartDrag', paths),
 }
 
 // 本地文件（缩略图/原图）→ 可用的 img src
