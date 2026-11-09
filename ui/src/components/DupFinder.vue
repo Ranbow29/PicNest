@@ -135,6 +135,7 @@ function thumbOf(file) {
             <span v-if="f.ai.note" class="ai-note" :class="{ err: f.ai.noteErr }">{{ f.ai.note }}</span>
           </div>
           <div class="ai-hint">OpenAI 兼容 /chat/completions + /models，模型需支持图片输入。先本地 dHash 缩圈，再用 32×32 色块 + pHash 预筛（dHash≤4 的强结构对直接保留），最后把候选缩略图交给 AI 确认；AI 阶段 4 路并发，最多检查 {{ f.ai.maxPairs }} 对。</div>
+          <div class="ai-risk">注意：图片可能因暴露度较高或不符合所选 AI 的使用准则而被服务商拒绝/弹回；请自行甄别素材并确认该服务条款。</div>
         </div>
 
         <div v-if="!activeLoading && groups.length" class="df-bulk">
@@ -268,6 +269,7 @@ function thumbOf(file) {
 .ai-note { font-size: 11px; color: #4f7d5e; }
 .ai-note.err { color: #b4463b; }
 .ai-hint { margin-top: 7px; font-size: 10.5px; line-height: 1.5; color: var(--text-2); opacity: 0.85; }
+.ai-risk { margin-top: 5px; font-size: 10.5px; line-height: 1.5; color: #b8862e; }
 .df-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
 .df-btn.primary:disabled { opacity: 0.45; }
 .df-x {

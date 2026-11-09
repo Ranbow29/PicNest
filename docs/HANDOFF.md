@@ -110,6 +110,7 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 - **结果**：组带 AI 徽标；可省=sum−max（保留最大有意义，快捷「保留最大/最新/最旧」）；进度 `picnest-ai-dup-progress`（hash / ai 两阶段），可停止；只处理图片（跳过视频/文本），**只上传候选缩略图、不上传原图**；必须勾选允许上传才能开始；删除仍只走图巢回收站。
 - 实测（本地 mock 视觉 API）：3 张测试图（128/64 同图 + 噪声图）→ 1 候选对、1 次 AI 调用、正确成组；配置返回 encrypted:true。模型列表 mock 返回 2 个模型 → datalist 可选、选中写回模型框；401 路径提示 Key 与地址不匹配且 Key 已打码。
 - 实测 MiMo `mimo-v2.6-flash`（`https://api.xiaomimimo.com/v1`，7 个模型）：`/v1/models` 正常；视觉测试（两张异色 64×64）返回 `same:false`。此前 `max_tokens:80` 被思考阶段吃光，`content` 为空。
+- **风险提示（2026-11-09）**：AI 面板底部小字（琥珀色 10.5px）提示「图片可能因暴露度较高或不符合所选 AI 的使用准则而被服务商拒绝/弹回；请自行甄别素材并确认该服务条款」。
 - **费用/上传量预估**：AI 参数区「单价 ¥/1M tok」（可选，localStorage `picnest.aiPricePerM`）→ 按 maxPairs×2 张 384px 缩略图（≈45KB/张）与每对 ≈340 tokens 粗估「最多 N 对 · ≈X 张 / Y MB · ≈Z 元」；不填单价只显示上传量。结果头部在 `stats.capped` 时提示「候选超出上限，只查最接近的 N 对」。
 - 实测本地预筛（Fate Grand Order material 1~9，3,372 张；本地 mock 视觉 API）：dHash 候选 4,145 对 → 色块+pHash 筛掉 4,041 对 → 104 对进入 AI 队列（减少 97.5%）；整轮 7.8s（hash+色块+pHash+40 次本地 AI 调用）。只上色块时是 286 对（减少 93.1%），pHash 再砍掉 63.6%。
 
