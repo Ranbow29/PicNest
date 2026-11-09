@@ -166,9 +166,24 @@ function sortRecursive(mode) {
   const rootId = menuNode.value?.id
   run(() => (isLibrary ? lib.sortLibraryRecursive(rootId, mode) : lib.sortDirRecursive(rel, mode)))
 }
-function setColor(key) {
+function colorTargets() {
+  if (isLib.value) return ['']
   const rel = relOf(menu.value.rel)
-  run(() => lib.patchDirMemory(rel, { color: key }))
+  if (!rel) return []
+  return (lib.selectedDirs.length > 1 && lib.selectedDirs.includes(rel))
+    ? [...new Set(lib.selectedDirs.filter(Boolean))]
+    : [rel]
+}
+const colorCurrent = computed(() => {
+  const vals = colorTargets().map((r) => lib.dirMemory[r]?.color || '')
+  return vals.length && vals.every((v) => v === vals[0]) ? vals[0] : '__mixed__'
+})
+function setColor(key) {
+  const rels = colorTargets()
+  if (!rels.length) return
+  run(async () => {
+    for (const rel of rels) await lib.patchDirMemory(rel, { color: key })
+  })
 }
 const fmtSize = (n) => {
   if (!n) return '—'
@@ -263,7 +278,7 @@ const sortItems = [
         </div>
         <div v-if="colorOpen" class="swatch-row" @click.stop>
           <button v-for="c in FOLDER_COLORS" :key="c.key" class="sw"
-                  :class="{ on: (lib.dirMemory[menu.rel]?.color || '') === c.key }"
+                  :class="{ on: colorCurrent === c.key }"
                   :style="{ background: c.css }" :title="c.label || c.key"
                   @click="setColor(c.key)" />
         </div>
