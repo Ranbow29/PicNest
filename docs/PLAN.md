@@ -425,8 +425,8 @@ PicNest/
 
 71. **纯黑底 + 分级 N 图标（2026-11-09，Feb 指定「底变成最黑的黑色」「对比其他 logo 有点糊」）**：底板改为纯黑 `#000000`（不再保留 PSD 合成出的近黑边），并按显示尺寸分级缩放 N——**16/20/24/32/40/48px 用 88%**（小图标放大 N，避免黑边过厚糊成一团）、**64px 及以上用 76%**（保留 Feb 要的宽黑边）。从 PSD 可见层重新裁 1212 原生 tile，逐尺寸 LANCZOS 导出 2048/1024/512/256/128/96/64/48/40/32/24/20/16 PNG 与 `preview-icon.png`；手工组装 `picnest.ico` 10 档 PNG 帧（16/20/24/32/40/48/64/96/128/256），每帧直接从 1212 母本缩放，不从 256 帧二次缩。接入：`app/_internal_data/icon.png`（1024）与 `icon.ico`，resedit 把同份 ICO 写入 `PicNest.exe` PE 资源（VersionInfo 保留 PicNest / PicNest 图巢 / PicNest.exe）；中间备份 `PicNest.exe.prev` 已删，仅保留原件 `PicNest.exe.picrand.bak`。Windows 任务栏缓存：结束 explorer → 删 `%LOCALAPPDATA%\IconCache.db` 与 `Microsoft\Windows\Explorer\iconcache*.db` → 重启 explorer 与 PicNest。实测 exe VersionInfo 正确、UIAutomation 任务栏按钮 `PicNest - 1 个运行窗口`、截图任务栏图标为纯黑圆角 tile + 白 N + 金点（无旧图）。`branding/README.md` 补分级比例与清缓存说明。
 
-72. **关窗即退出 / 托盘菜单砍掉参考板（2026-11-09，Feb 报「关掉应用滞留在托盘，需要再次关闭」「图1 参考板没做，砍掉」）**：
+72. **两段式关闭：关窗隐藏到托盘 / 托盘退出彻底结束 + 托盘砍掉参考板（2026-11-09，Feb 指定「图1关闭后进入图2隐藏，从隐藏关闭才是彻底关闭」）**：
     ① **P12 托盘菜单移除参考板**：原 PicRand 托盘菜单有「新建参考板 / 隐藏所有参考板 / 显示所有参考板 / 关闭所有参考板」，PicNest 从未实现参考板窗口；现在托盘只剩「显示 PicNest 图巢 / 退出」。参考板相关函数与 IPC 还留在 bundle 里但无 UI 入口。
-    ② **P13a 关闭窗口直接放行**：原 `mainWindow.on("close")` 会 `preventDefault()` 再发 `confirm-close` 等渲染层回包；回包丢失/异常时窗口已消失但主进程、渲染进程和托盘都留在后台。改为 close 时只置 `allowClose = true`，不再拦截（PicNest 语义就是关窗=退出）。
-    ③ **P13b 退出顺序兜底**：原 `window-all-closed` 先跑 `cleanupOnExit()`/`closeDatabase()`，任何一步抛错都会跳过 `tray.destroy()` 和 `app.exit(0)`——这正是托盘图标滞留的根因。现在顺序改为：先销毁托盘 → 再 try/catch 兜底清理缓存/关库 → 无条件 `app.exit(0)`，保证图标和进程都不会挂后台。
-    ④ 实测：打补丁前关窗后主进程 + 渲染进程 + 托盘图标仍在（无窗口，CPU 持续增长）；打补丁后 `window.picrand.windowClose()` → 4s 内所有 `PicNest.exe` 进程消失，任务栏只剩固定的 `PicNest 已固定`，无运行窗口/托盘残留。
+    ② **P13a 关窗 = 隐藏到托盘**：`mainWindow.on("close")` 不再发 `confirm-close` 等渲染层回包，而是 `event.preventDefault()` + `mainWindow.hide()`——点主窗口 X 后主窗口/任务栏运行按钮消失，进程和托盘图标保留（图2 的隐藏区）。**这里不能置 `allowClose = true`**，否则关窗会直接退出，破坏两段式语义。
+    ③ **P13b 托盘「退出」才彻底结束**：托盘退出项先 `allowClose = true` 再 `app.quit()`；`window-all-closed` 的顺序改为**先 `tray.destroy()`**，再用 try/catch 兜底 `cleanupOnExit()` / `closeDatabase()`，最后无条件 `app.exit(0)`。原实现先清理，任一步抛错会跳过托盘销毁和退出，表现为“退出后图标/进程还挂着，需要再关一次”。
+    ④ 实测：`window.picrand.windowClose()` 后主窗口 HWND `IsWindowVisible=False`、5 个 `PicNest.exe` 进程仍在、任务栏只剩固定的 `PicNest 已固定`；随后模拟托盘退出路径（`allowClose=true` + `app.quit()`）→ 5s 内所有进程退出。托盘菜单模板只剩「显示 PicNest 图巢 / 退出」两项。
