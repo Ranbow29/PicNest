@@ -20,6 +20,10 @@ function triggerCheckUpdate() {
   window.dispatchEvent(new CustomEvent('picnest-check-update-trigger'))
 }
 
+function openGithubRepo() {
+  api.openExternal('https://github.com/Ranbow29/PicNest')
+}
+
 </script>
 
 <template>
@@ -224,7 +228,12 @@ function triggerCheckUpdate() {
 
           <div class="hp-foot">
             <div class="hp-version-row">
-              <span class="hp-ver-text">PicNest 图巢 v{{ appVer }} · 基于 GPL-3.0 纯净开源</span>
+              <div class="hp-ver-left">
+                <span class="hp-ver-text">PicNest 图巢 v{{ appVer }} · 基于 GPL-3.0 纯净开源</span>
+                <button class="hp-repo-link" @click="openGithubRepo" title="在浏览器中打开 GitHub 开源主页">
+                  开源主页：https://github.com/Ranbow29/PicNest ↗
+                </button>
+              </div>
               <button class="hp-update-btn" @click="triggerCheckUpdate">🚀 检查新版本</button>
             </div>
             提示：所有「删除」默认进图巢回收站；「应用为手动排序」和「排序同步文件名」是真实的磁盘改名操作，确认前请看清提示。
@@ -261,12 +270,32 @@ code { padding: 0 4px; border-radius: 4px; background: var(--bg-2); font-family:
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
   margin-bottom: 8px;
-  padding-bottom: 6px;
+  padding-bottom: 8px;
   border-bottom: 1px dashed var(--border);
+}
+.hp-ver-left {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
 }
 .hp-ver-text {
   font-weight: 600;
+  color: var(--accent);
+}
+.hp-repo-link {
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.hp-repo-link:hover {
   color: var(--accent);
 }
 .hp-update-btn {
