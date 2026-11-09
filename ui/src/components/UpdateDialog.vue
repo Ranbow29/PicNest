@@ -178,6 +178,14 @@
             </button>
           </template>
         </div>
+
+        <!-- 底部常驻引导小字与 GitHub 开源仓库跳转链接 -->
+        <div class="up-guide-bar">
+          <span class="up-guide-tip">💡 提示：手动「检查新版本」位于顶栏「?」帮助面板底部</span>
+          <button class="up-repo-link" @click="openRepoPage" title="在浏览器中打开 PicNest GitHub 开源主页">
+            https://github.com/Ranbow29/PicNest ↗
+          </button>
+        </div>
       </div>
     </div>
   </Teleport>
@@ -323,6 +331,10 @@ function skipVersion() {
 async function openReleasePage() {
   const url = updateInfo.value?.htmlUrl || 'https://github.com/Ranbow29/PicNest/releases'
   await api.openExternal(url)
+}
+
+async function openRepoPage() {
+  await api.openExternal('https://github.com/Ranbow29/PicNest')
 }
 
 async function startDownload() {
@@ -780,5 +792,40 @@ defineExpose({
 .up-btn-danger {
   background: #c25a4d;
   color: #fff;
+}
+
+.up-guide-bar {
+  padding: 8px 18px 10px;
+  background: var(--bg-2);
+  border-top: 1px dashed var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--text-2);
+}
+
+.up-guide-tip {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.up-repo-link {
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  flex-shrink: 0;
+}
+
+.up-repo-link:hover {
+  filter: brightness(1.1);
 }
 </style>
