@@ -1,8 +1,8 @@
 # PicNest 图巢 — 交接文档（写给下一个窗口）
 
-> **2026-11-09 第十一版·根内元数据 / 主题记忆 / 缩略图修复**（.picnest/meta.json 随根文件走、目录记忆按根隔离、主题写 config、缩略图缓存避开 Chromium Cache、批量补图、物理排序开关、左栏开合按钮、动效幅度加码、插件仓库设计、灯箱色板/裁剪交互修复）。
+> **2026-11-09 第十一版·根内元数据 / 主题记忆 / 缩略图 / 插件库**（.picnest/meta.json 随根文件走、目录记忆按根隔离、主题写 config、缩略图缓存避开 Chromium Cache、批量补图、物理排序开关、左栏开合按钮、动效幅度加码、插件仓库 P1/P2、灯箱色板/裁剪交互修复）。
 > 之前：第七版录入语义、第八版多选收尾、第九版收官、第十版查重收尾。本版按「开窗 → 现状 → 数据约束 → 未做 → 文件地图 → 纪律 → 验收」组织。
-> 最新提交 `7081017`；工作区干净；dist 已构建；dev 数据已清理（无测试目录、无手动封面残留）。
+> 最新提交 `474ec21`；工作区干净；dist 已构建；dev 数据已清理（无测试目录、无手动封面残留）。
 
 ## 〇、开窗三步走
 
@@ -155,6 +155,16 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 - **采集查重**：服务端写入前按「同根 + 同 file_size」筛候选（≤6）→ MD5 确认；命中则不落盘，返回 `duplicate` + matches（文件名/所在夹）。按住面板显示「图库里已有相同图片」+ **跳过 / 覆盖旧图 / 仍然保存**：覆盖=先写新图，成功后把旧匹配项软删（`deleted_at`，进图巢回收站）并发 unlink，物理文件保留可彻底删除；仍然保存=`force:true` 保留旧图再存一份。右键存图与页面截图只提示跳过（通知/文案）。只查目标根内、未软删；历史已有重复需用应用内查重清理。
 - 扩展 v0.1 边界：图片 + 可见区域截图；不支持整页滚动/视频/PDF；扩展暂不带标签（标签系统已有，采集链路未接线）；服务端下载不带 Cookie，防盗链图片可能失败；按住采集只支持主 frame 的 `<img>`（跨域 iframe、CSS 背景图暂不做）。
 
+### 插件（P1/P2，2026-11-09）
+- 入口：侧栏底部 **「插件库」**；面板两页签 **已安装 / 插件仓库**。数据在 `dataDir/plugins/<id>/`（dev：`app/_internal_data/plugins`）。
+- **theme 插件**：`plugin.json type=theme` + CSS 入口（≤512KB），启用后注入 `<style data-picnest-plugin=id>`（在应用样式之后）；停用/卸载移除。示例 `examples/plugins/mono-mint`。
+- **renderer 插件**：单文件 HTML 入口（≤2MB），宿主用 `<iframe sandbox="allow-scripts" srcdoc=…>`（**无 allow-same-origin、无 Node、无宿主 DOM**）+ postMessage 桥。协议见 `examples/plugins/README.md`：`ready / init / event / query-images / storage-get/set / fetch / close`。
+- **权限**（清单声明、宿主逐调用校验）：`ui.panel`（显示打开面板）、`data.images.read`（只读当前资料库 ≤500 行）、`events.read`（selection-changed / view-changed / image-opened / image-closed）、`storage`（插件私有 JSON ≤5MB）、`net:<origin>`（主进程代理 fetch，15s/2MB）。`query-images` 的 folderId 由宿主填当前活动库，插件不能跨库。
+- **安装**：文件夹安装（系统选目录）；registry 安装（http(s) 或本地 `registry.json`，download 支持 URL/绝对路径/相对 registry 路径，sha256 校验，zip 50MB / 解压 200MB / 路径穿越防护）。安装/更新直接替换 `plugins/<id>`；卸载删目录并从启用列表移除。
+- **主进程插件（type=main）只登记不运行**，管理页显示「P3 未启用」。
+- 示例与开发指南：`examples/plugins/`（`mono-mint` 主题、`view-stats` 沙箱面板、`registry.json`、zip、README）。
+- 实测：文件夹安装两例成功；theme CSS 437B 注入/停用移除；renderer 面板 srcdoc 5502B、bridge 收到 `ready` + `query-images#1/#2`；`query-images` 返回 3 行；storage set/get 正常；本地 registry 解析 2 条；zip 安装 + sha256 通过；最后已卸载示例，插件目录为空。
+
 ### 详情 / 视觉分层
 - 单选图片：预览/名称/注释/色板/评分/文件夹/操作（**URL 输入栏已删，DB url 字段保留**）。**图片的「文件夹」chip 必须由 `file_path` 反推**（`relOfImage`），不能用 `currentDirRel`——根文件夹开「显示子文件夹内容」或合并视图时，视图位置≠图片所在夹（否则子夹图片被标成库根）。
 - **灯箱详情是第二个 Inspector 实例**（`.insp-overlay` 新挂载）：`selectedPath` 的 meta/色板 watch 必须 `{ immediate: true }` 才能拿到当前选中项；`lib.palettes[p]` 的**空数组**必须视为未命中（`ensurePalettes` 用空数组标记 SKIP/失败），否则灯箱色板永远显示「—」。
@@ -162,7 +172,7 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 - 详情浮岛 right/bottom 10，竖向玻璃渐变（0.97 → 0.93@46% → 0.86@74% → 0.60）+ blur(22px)。**顶缘 top 40**（面板相对）：压进玻璃顶栏 2px、停在右上角窗控按钮下缘（39）之下；分层 `玻璃 20 < 详情 24 < 栏内容/窗控 26`——`.titlebar` 不再建 z 上下文，`.glass`/`::after` z20、`.bar-content` z26（Feb 指定「详情高于顶栏、低于右上角按钮」）。
 - **左栏开合（2026-11-09）**：窗控组最左（详情按钮左边）新增 sidebar 按钮，`AnimIcon name="sidebar"`（收起时分隔线左移、列内线段淡出；挂载/悬停/`iconShake` 集体晃动都走同一套弹簧）。`lib.sidebarCollapsed` 持久化 `localStorage['picnest.sidebarCollapsed']`；收起时 SideBar 宽度 0 + padding 0 + opacity 0，`ResizeHandle` 隐藏，主面板自动铺满；展开恢复 `sidebarWidth`。
 - **动效图标幅度（2026-11-09 加码）**：`grid` 四格上浮 2.8（原 1.3 被判不够）；`sidebar` 面板 1.4 / 分隔线 2.4 / 短线 1.2 / 收起位移 -5.4px。**Feb 口径：动效幅度宜大不宜小，第一版宁大勿小**（与滑尺波浪同教训）。
-- **插件系统**：设计定稿见 **`docs/PLUGIN.md`**（三种类型/清单/权限/仓库格式/四阶段路线）；未实现，P1 = theme 插件 + 管理页。
+- **插件系统**：P1/P2 已实现（theme + renderer 沙箱 + 插件库/registry zip 安装），详见上文「插件」小节与 `docs/PLUGIN.md`；main/P3、签名/在线默认仓库未做。
 - **三向尺寸拖拽**（InspResize）：左缘宽、顶边高、左上角自由变换；支点固定右下；高度 0=自适应满高，双击顶边/角柄恢复满高。
 - **窗口收缩时详情高度必须钳制（2026-11-09 修）**：`inspectorHeight` 是用户偏好（如最大化时 1137px），窗口变矮后不能直接套用，否则浮岛从底部往上顶出视口、顶部内容被窗控盖住。App 用 `ResizeObserver` 监听 `.browse` 高度，`--insp-h = min(偏好, browseH-50)` 只作用于显示（偏好值不改），窗口放大自动恢复；InspResize 起拖用当前显示高度而非偏好值，避免跳变。
 - **详情打开时正文真让位**：`.browse.insp-open` 提供 `--insp-reserve`，`.grid-viewport` padding-right 消费；**不要再给 ImageGrid 传 class（fragment 根会丢），也不要让卡片条二次扣详情宽**。
@@ -262,11 +272,13 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 | `ui/src/components/BriefMode.vue` | 简报模式：全屏、单击/右键、A/D、滚轮缩放/拖拽平移、灰度 |
 | `ui/src/components/ContextMenu.vue` · `DirContextMenu.vue` | 图片菜单（封面开关/查重/简报/灰度/未分类）/文件夹菜单 |
 | `ui/src/components/DupFinder.vue` | 查重结果分组面板（精确/AI 页签、精确停止、AI 设置/预估、快捷保留、勾选、软删） |
-| `docs/PLUGIN.md` | 插件系统设计定稿（三种插件类型/清单权限/沙箱/仓库格式/四阶段路线；未实现） |
+| `docs/PLUGIN.md` | 插件系统设计定稿 + 实现状态（theme/renderer 已实现；main/签名未做） |
+| `ui/src/components/PluginManager.vue` · `ui/src/lib/plugins.js` | 插件库面板（已安装/仓库/文件夹安装/启停/卸载）· 主题注入 + 插件事件总线 |
+| `examples/plugins/` | 示例插件（mono-mint 主题、view-stats 沙箱面板）、registry.json、zip、开发指南 |
 | `ui/src/components/ConfirmDialog.vue` · `NamePromptDialog.vue` · `DuplicateDialog.vue` · `ImportResultCard.vue` · `TrashMenu.vue` · `TaskProgress.vue` | 确认/命名/录入三选一/结果卡/回收站菜单/长任务进度浮条 |
 | `ui/src/components/FilterBar.vue` · `ColorPicker.vue` | 筛选 · HSV 取色 |
 | `ui/vite.config.js` | dev 绑定 127.0.0.1 + watch polling；build 输出到 app dist |
-| `tools/patches/apply.mjs` · `picnest-handlers.js` | 补丁 P1-P10 + 文件夹/录入/回收站/统计/排序/文本/查重/变换/根元数据/物理排序/缩略图修复 IPC + **M6 采集本地服务（127.0.0.1:41600）** |
+| `tools/patches/apply.mjs` · `picnest-handlers.js` | 补丁 P1-P10 + 文件夹/录入/回收站/统计/排序/文本/查重/变换/根元数据/物理排序/缩略图修复/插件 IPC + **M6 采集本地服务（127.0.0.1:41600）** |
 | `extension/` | 自研 MV3 采集扩展（右键存图/页面截图 + popup 选根/文件夹）；安装见 `extension/README.md` |
 | `tools/cdp-*.mjs` · `shot-prod.ps1` · `verify_counts.py` | CDP 探针/截屏 · 多库对账 |
 | `docs/MOTION.md` | 动效规格/调参 |
@@ -325,7 +337,7 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 - **封面**：设置后卡片换图；同夹另一图菜单显示 ✓，再按恢复自动。
 - **变换**：735×490 临时图保存后磁盘/DB 均 490×735，缩略图重生成、按钮复位、toast 正常。
 - **其它**：详情宽 289 时卡片 4 列；简报 1/370、滚轮 1→1.12、拖拽 50/30、右键菜单 z900>890；灯箱/简报 A/D 通过；大图透明顶栏/dock、安全区 70px 通过。
-- **最近提交**：`9cc6703` 查重+优化 → `47bd9b4` 简报/黑白/未分类 → `5063d7e` 去打开灯箱 → `5ace0a3` A/D+图片查重 → `32ec210` 卡片条/拖拽分类 → `c48e575` 拖入落点/封面 → `86539a3` 旋转翻转保存 + 封面开关 → `a61b86b` 网格图片浮岛化 → `e985fcf` 左栏顶部白色渐变 → `1a4c91c` 正文面板孤岛感加码 → `8eefc03` 详情浮岛升层 + 上/右缝收紧 → `5d44454` 色板索引跟随视图补建 → `4e28313` 灯箱/简报去浮岛 → `d6b3d4e` 移出根文件 → `57ed218` 主题系统 → `caab968` 根文件菜单「在文件管理器中打开」 → `f3ccc2f` 右键菜单统一「根文件」措辞 → `bc6735a` 清剩余可见「资料库」文案 → `20679c4` 两套低饱和黑白主题 → `dd25fcc` 再加「炭黑」档 → `61ae51f` 主题更名/跟随系统改灰白墨黑/炭黑提亮 → `504f50c` 顶栏三钮对齐 + 主题钮集体动效 → `18ec862` 详情文件夹 chip 反推修复 → `f780c65` M6 采集（自研扩展 + 本地服务） → `8132bd3` 网页内按住采集（长按面板） → `4f30cab` 采集面板固定白底 + Chrome 安装说明 → `2572965` 采集查重（跳过/仍然保存） → `94f5595` Pixiv Referer / Pinterest 覆盖层兜底 → `15d0c3a` 扩展上下文失效提示 + 重载后刷新纪律 → `d1857c4` 采集覆盖旧图 + 未分类 FolderIcon 动效 → `e2f0da1` 采集面板新建文件夹 → `6cfea18` 查重 AI 视觉二次查重（再往前见 `git log`：文本/视频、多选、视觉分层、详情缩放、大图透明栏等） → `b161ec5` 模型列表 → `74c6850` MiMo 思考额度 → `7abf1a7` 色块预筛 → `032b7e1` pHash 预筛 → `141fab9` 关思考/4 并发 → `13ba4bd` 一键保留/跨后缀/弹层修复 → `ba0be79` 查重收尾（精确取消/流式 MD5/进度浮条/AI 预估） → `9ac0c6b` 左栏图巢标签可拖窗 → `ac42e7c` 根内元数据/目录记忆按根/主题 config/缩略图缓存迁移+批量修复/物理排序开关 → `8946418` 左栏开合按钮 → `d9d8fee` 动效幅度加码 + `docs/PLUGIN.md` 插件仓库设计 → `61ebbf8` 灯箱详情色板 / 裁剪滚轮缩放 + 选区外平移修复 → `8978f37` 窗口收缩时详情高度钳制 → `e36bccc` 网格 1024 显示图 + 加载降级链 → `5543e30` 隐藏排序编号按钮（默认开） → `f10b118` 排序面板「应用为手动排序」 → `f8e2d67` 应用时真实重命名原文件 + 确认卡 → `a786393` 手动排序升为默认/首项 → `7081017` 一键清除根目录排序编号。
+- **最近提交**：`9cc6703` 查重+优化 → `47bd9b4` 简报/黑白/未分类 → `5063d7e` 去打开灯箱 → `5ace0a3` A/D+图片查重 → `32ec210` 卡片条/拖拽分类 → `c48e575` 拖入落点/封面 → `86539a3` 旋转翻转保存 + 封面开关 → `a61b86b` 网格图片浮岛化 → `e985fcf` 左栏顶部白色渐变 → `1a4c91c` 正文面板孤岛感加码 → `8eefc03` 详情浮岛升层 + 上/右缝收紧 → `5d44454` 色板索引跟随视图补建 → `4e28313` 灯箱/简报去浮岛 → `d6b3d4e` 移出根文件 → `57ed218` 主题系统 → `caab968` 根文件菜单「在文件管理器中打开」 → `f3ccc2f` 右键菜单统一「根文件」措辞 → `bc6735a` 清剩余可见「资料库」文案 → `20679c4` 两套低饱和黑白主题 → `dd25fcc` 再加「炭黑」档 → `61ae51f` 主题更名/跟随系统改灰白墨黑/炭黑提亮 → `504f50c` 顶栏三钮对齐 + 主题钮集体动效 → `18ec862` 详情文件夹 chip 反推修复 → `f780c65` M6 采集（自研扩展 + 本地服务） → `8132bd3` 网页内按住采集（长按面板） → `4f30cab` 采集面板固定白底 + Chrome 安装说明 → `2572965` 采集查重（跳过/仍然保存） → `94f5595` Pixiv Referer / Pinterest 覆盖层兜底 → `15d0c3a` 扩展上下文失效提示 + 重载后刷新纪律 → `d1857c4` 采集覆盖旧图 + 未分类 FolderIcon 动效 → `e2f0da1` 采集面板新建文件夹 → `6cfea18` 查重 AI 视觉二次查重（再往前见 `git log`：文本/视频、多选、视觉分层、详情缩放、大图透明栏等） → `b161ec5` 模型列表 → `74c6850` MiMo 思考额度 → `7abf1a7` 色块预筛 → `032b7e1` pHash 预筛 → `141fab9` 关思考/4 并发 → `13ba4bd` 一键保留/跨后缀/弹层修复 → `ba0be79` 查重收尾（精确取消/流式 MD5/进度浮条/AI 预估） → `9ac0c6b` 左栏图巢标签可拖窗 → `ac42e7c` 根内元数据/目录记忆按根/主题 config/缩略图缓存迁移+批量修复/物理排序开关 → `8946418` 左栏开合按钮 → `d9d8fee` 动效幅度加码 + `docs/PLUGIN.md` 插件仓库设计 → `61ebbf8` 灯箱详情色板 / 裁剪滚轮缩放 + 选区外平移修复 → `8978f37` 窗口收缩时详情高度钳制 → `e36bccc` 网格 1024 显示图 + 加载降级链 → `5543e30` 隐藏排序编号按钮（默认开） → `f10b118` 排序面板「应用为手动排序」 → `f8e2d67` 应用时真实重命名原文件 + 确认卡 → `a786393` 手动排序升为默认/首项 → `7081017` 一键清除根目录排序编号 → `474ec21` 插件库 P1/P2（theme/renderer 沙箱/管理页/registry zip/示例）。
 - **仍需 Feb 物理鼠标验收**：旋转/翻转保存、封面 ✓ 两段式、图片拖行边缘/根行/未分类、简报缩放平移右键与 A/D、灯箱右键/A/D、查重面板（精确停止 / 文件夹查重浮条与停止）、详情三向缩放、大图透明顶栏/底栏、框选/拖动排序。
 - dist 已构建；HANDOFF/PLAN 已同步（MOTION 未改）。
 

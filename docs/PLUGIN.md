@@ -13,6 +13,9 @@
 安装 = 下载 zip → 校验 → 解压到 dataDir/plugins/<id>/ → 清单声明的权限给用户过目 → 启用
 ```
 
+> **实现状态（2026-11-09）**：P1/P2 已落地——theme 插件（CSS 注入）、renderer 插件（`srcdoc` 单文件 HTML + `sandbox="allow-scripts"` + postMessage 桥 + query/storage/fetch/events）、插件库 UI（已安装/仓库页签、文件夹安装、registry zip 安装 + sha256、启停/卸载）。示例见 `examples/plugins/`（含 `registry.json` 与 zip）。
+> 未实现：main 插件（P3）、签名校验（P4）、`ui.contextMenu` 插槽、多文件资源（renderer 目前要求单文件 HTML，资源用 data URL）、默认在线 registry。**安全边界沿用本文：renderer 无同源/无 Node/无宿主 DOM；query 只读当前资料库；fetch 只放行声明 origin。**
+
 ## 一、三种插件类型（按风险从低到高）
 
 | 类型 | 运行环境 | 能力 | 风险 | 阶段 |
