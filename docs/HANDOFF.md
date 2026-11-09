@@ -35,6 +35,7 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 
 ### 根文件 / 文件夹
 - 侧栏区块名 **「根文件」**；资料库行的右键菜单用同一套词（重命名根文件…/复制根文件/粘贴到此根文件/移出根文件…），提示卡与 toast 也已统一。点击当前库也会回库根（全部视图 + `dir=null`）。
+- **根文件重命名 = 物理目录 rename**（2026-11-09）：同步 `folders.path`、该根所有 `images.file_path`、`picnest_trash_folders.abs_path`、`dirMemory.cover` 绝对路径；主进程先停 watcher，渲染层用新路径重新 `startWatcher`（不能复用旧 onAdd 闭包）；失败会回滚目录并恢复旧 watcher。显示名跟随新目录名。文件夹重命名本来就是物理 rename，并同步 `dirMemory` 的 rel/cover。Eagle 向导为避免同名根冲突只改显示名，走 `displayOnly` 分支不动磁盘。
 - **文件夹树不显示库根行**（2026-11-09）：根由「根文件」区选中/高亮；树只渲染根下子文件夹（顶层 depth=0，默认折叠，不再自动展开根）。根文件的编辑在「根文件」区（资料库行菜单：**在文件管理器中打开**/新建/重命名显示名/排序/导出/颜色/复制/粘贴/查找重复/**移出根文件**）。「打开」用 `openWithDefault`（`shell.openPath`）直接进目录本身；图片右键的「在文件管理器打开」是 `showItemInFolder`（选中文件），两者语义不同。
 - **移出根文件**（2026-11-09）：只解除图巢登记——删该根 `images` 行/`picnest_trash_folders`/`folders` 行、config 里 `folderId|*` 排序键；**磁盘文件夹与文件一律不动**，可重新添加。回收站非空时主进程拒绝（先清空/还原）；被移出根若正在被 watcher 监听则 `stopWatching()` + 清 `_addQueue`（否则 add 事件会 `getOrCreateFolder` 把根复活）；活动根被移出 → 切到 roots[0] 或空态，并重启新根的 watcher；浏览历史过滤掉该根位置。
 - 文件夹右键：新建子/同级、重命名、排序（当前层/全部层，名称/修改时间）、移动到…、导出、查找重复、图标颜色 8 色、删除。

@@ -286,9 +286,43 @@ export const useLibrary = defineStore('library', {
     },
 
     /* 资料库重命名：只改显示名（资料库区编辑入口；物理目录不动） */
-    async renameLibrary(id, name) {
-      const r = await api.renameLibrary(id, name)
-      if (r?.ok) this.roots = this.roots.map((x) => (x.id === id ? { ...x, display_name: name } : x))
+    async renameLibrary(id, name, opts = {}) {
+      const old = this.roots.find((x) => x.id === id)
+      const oldPath = old?.path || ''
+      const r = await api.renameLibrary(id, name, opts)
+      if (r?.ok) {
+        this.roots = this.roots.map((x) => (x.id === id
+          ? { ...x, path: r.path || x.path, display_name: r.display_name || r.name || name }
+          : x))
+        if (r.displayOnly) return r
+        if (this._watchStarted && oldPath && r.path && oldPath !== r.path) {
+          this._watchStarted.delete(oldPath)
+          this._watchStarted.add(r.path)
+        }
+        if (this.activeRootId === id && oldPath && r.path && oldPath !== r.path) {
+          const oldNorm = oldPath.replace(/[\\/]+$/, '').toLowerCase()
+          const next = {}
+          for (const [rel, mem] of Object.entries(this.dirMemory || {})) {
+            const cover = mem?.cover
+            if (typeof cover === 'string' && cover.toLowerCase().startsWith(oldNorm + '\\')) {
+              next[rel] = { ...mem, cover: r.path + cover.slice(oldPath.length) }
+            } else {
+              next[rel] = mem
+            }
+          }
+          this.dirMemory = next
+        }
+        if (r.path && (r.wasWatching || this.activeRootId === id)) {
+          try { await window.picrand.startWatcher(r.path) } catch { /* 静默 */ }
+        }
+        if (this.activeRootId === id) {
+          await this.refreshTree()
+          await this.loadImages()
+        }
+      } else if (oldPath && this.activeRootId === id) {
+        // 主进程在改名前已停掉 watcher；失败时恢复旧路径监听
+        try { await window.picrand.startWatcher(oldPath) } catch { /* 静默 */ }
+      }
       return r
     },
 
@@ -544,6 +578,17 @@ export const useLibrary = defineStore('library', {
       const fixSel = (x) => (x === rel ? newRel : (x || '').startsWith(rel + '/') ? newRel + x.slice(rel.length) : x)
       this.selectedDirs = this.selectedDirs.map(fixSel)
       if (this.dirAnchor != null) this.dirAnchor = fixSel(this.dirAnchor)
+      const oldNorm = oldAbs.replace(/[\\/]+$/, '').toLowerCase()
+      const nextMem = {}
+      for (const [k, v] of Object.entries(this.dirMemory || {})) {
+        const nk = fix(k)
+        let cover = v?.cover
+        if (typeof cover === 'string' && cover.toLowerCase().startsWith(oldNorm + '\\')) {
+          cover = r.path + cover.slice(oldAbs.length)
+        }
+        nextMem[nk] = cover !== v?.cover ? { ...v, cover } : v
+      }
+      this.dirMemory = nextMem
       await this.refreshTree()
       await this.loadImages()
       return { ...r, rel: newRel }

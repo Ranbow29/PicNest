@@ -1064,12 +1064,78 @@ electron.ipcMain.handle("picnest-trash-purge-all", async (_event, folderId) => {
 });
 
 /* 资料库重命名：只改显示名，不动物理目录（资料库区的编辑入口） */
-electron.ipcMain.handle("picnest-rename-library", (_event, id, name) => {
+electron.ipcMain.handle("picnest-rename-library", (_event, id, name, opts) => {
   try {
-    const clean = String(name || "").trim();
+    picnestMigrate();
+    const displayOnly = !!opts?.displayOnly;
+    const rawName = String(name || "").trim();
+    const clean = rawName.replace(/[\\/:*?"<>|]/g, "").replace(/[. ]+$/g, "");
     if (!clean) return { ok: false, error: "名称为空" };
-    getDb().prepare("UPDATE folders SET display_name = ? WHERE id = ?").run(clean, id);
-    return { ok: true, name: clean };
+    const db = getDb();
+    const root = db.prepare("SELECT id, path, display_name FROM folders WHERE id = ?").get(id);
+    if (!root) return { ok: false, error: "根文件不存在" };
+    if (displayOnly) {
+      // 仅显示名（Eagle 向导区分同名根等）；物理目录不动
+      db.prepare("UPDATE folders SET display_name = ? WHERE id = ?").run(rawName, id);
+      return { ok: true, path: root.path, name: rawName, display_name: rawName, displayOnly: true };
+    }
+    const oldPath = path.resolve(root.path);
+    const newPath = path.join(path.dirname(oldPath), clean);
+    const norm = (p) => String(p || "").replace(/[\\/]+$/, "").replace(/\//g, "\\").toLowerCase();
+    const samePath = norm(oldPath) === norm(newPath);
+    if (!samePath && fs.existsSync(newPath)) return { ok: false, error: "同名文件夹已存在" };
+
+    /* watcher 先停，改名后重启到新路径；否则 worker 可能把旧路径/根重新登记 */
+    let wasWatching = false, win = null, onAdd = null, onDelete = null;
+    try {
+      if (typeof watchedFolder === "string" && watchedFolder && norm(watchedFolder) === norm(oldPath)) {
+        wasWatching = true;
+        win = _mainWindow; onAdd = _onAddCb; onDelete = _onDeleteCb;
+        stopWatching();
+      }
+    } catch (e) {}
+
+    const oldPrefix = oldPath.replace(/[\\/]+$/, "");
+    const newPrefix = newPath.replace(/[\\/]+$/, "");
+    try {
+      if (!samePath) fs.renameSync(oldPath, newPath);
+      const tx = db.transaction(() => {
+        db.prepare("UPDATE folders SET path = ?, display_name = ? WHERE id = ?").run(newPath, clean, id);
+        const imgs = db.prepare("SELECT id, file_path FROM images WHERE folder_id = ?").all(id);
+        const updImg = db.prepare("UPDATE images SET file_path = ? WHERE id = ?");
+        for (const im of imgs) {
+          if (norm(im.file_path).startsWith(norm(oldPrefix) + "\\")) {
+            updImg.run(newPrefix + im.file_path.slice(oldPrefix.length), im.id);
+          }
+        }
+        const trashes = db.prepare("SELECT id, abs_path FROM picnest_trash_folders WHERE folder_id = ?").all(id);
+        const updTrash = db.prepare("UPDATE picnest_trash_folders SET abs_path = ? WHERE id = ?");
+        for (const t of trashes) {
+          if (norm(t.abs_path).startsWith(norm(oldPrefix) + "\\")) {
+            updTrash.run(newPrefix + t.abs_path.slice(oldPrefix.length), t.id);
+          }
+        }
+      });
+      tx();
+    } catch (e) {
+      if (!samePath) { try { fs.renameSync(newPath, oldPath); } catch (e2) {} }
+      return { ok: false, error: String(e?.message || e) };
+    }
+    /* 手动封面存的是绝对路径（dirMemory.cover），根改名后同步更新 */
+    try {
+      const c = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+      const mem = c.picnestDirMemory || {};
+      let changed = false;
+      for (const v of Object.values(mem)) {
+        if (v && typeof v.cover === "string" && norm(v.cover).startsWith(norm(oldPrefix) + "\\")) {
+          v.cover = newPrefix + v.cover.slice(oldPrefix.length);
+          changed = true;
+        }
+      }
+      if (changed) fs.writeFileSync(configPath, JSON.stringify(c, null, 2));
+    } catch (e) {}
+    // watcher 不在主进程重启：旧的 onAdd 闭包捕获的是旧路径。渲染层拿 wasWatching 后用新路径重新 startWatcher。
+    return { ok: true, path: newPath, name: clean, display_name: clean, wasWatching };
   } catch (e) {
     return { ok: false, error: String(e?.message || e) };
   }
@@ -1145,9 +1211,16 @@ electron.ipcMain.handle("picnest-rename-dir", (_event, oldPath, newName, oldRel,
     const mem = c.picnestDirMemory || {};
     if (oldRel && typeof oldRel === "string") {
       const newRel = parentRel ? parentRel + "/" + clean : clean;
+      const oldNorm = oldPath.replace(/[\\/]+$/, "").toLowerCase();
       for (const key of Object.keys(mem)) {
         if (key === oldRel) { mem[newRel] = mem[key]; delete mem[key]; }
         else if (key.startsWith(oldRel + "/")) { mem[newRel + key.slice(oldRel.length)] = mem[key]; delete mem[key]; }
+      }
+      // 文件夹封面存的是绝对路径，目录改名后同步
+      for (const v of Object.values(mem)) {
+        if (v && typeof v.cover === "string" && v.cover.toLowerCase().startsWith(oldNorm + "\\")) {
+          v.cover = newPath + v.cover.slice(oldPath.length);
+        }
       }
       c.picnestDirMemory = mem;
     }

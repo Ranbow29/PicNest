@@ -80,10 +80,10 @@ async function start() {
       phase.value = 'error'
       return
     }
-    // 同名根（旧好图 / 素材）自动加（Eagle）区分显示名，物理目录不动
+    // 同名根只改显示名区分，物理目录保持 <库名>
     const dupe = lib.roots.some((r) => r.id !== root.id && r.display_name === root.display_name)
     if (dupe) {
-      await lib.renameLibrary(root.id, root.display_name + '（Eagle）')
+      await lib.renameLibrary(root.id, root.display_name + '（Eagle）', { displayOnly: true })
       root = findRoot() || root
     }
     phase.value = 'meta'

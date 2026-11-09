@@ -72,9 +72,9 @@ function rename() {
 function renameLib() {
   const node = menuNode.value || {}
   if (!node.id) return
-  const current = node.display_name || node.name || ''
+  const current = String(node.path || '').split(/[\\/]/).pop() || node.display_name || node.name || ''
   run(() => {
-    ask.value = { title: '重命名根文件（仅显示名）', initial: current, selectBase: true, run: (name) => lib.renameLibrary(node.id, name) }
+    ask.value = { title: '重命名根文件夹（磁盘目录）', initial: current, selectBase: false, run: (name) => lib.renameLibrary(node.id, name) }
   })
 }
 /* 根文件 → 在文件管理器中打开（shell.openPath 打开目录本身，不是“显示所在位置”） */
