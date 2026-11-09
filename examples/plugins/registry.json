@@ -22,7 +22,7 @@
       "license": "MIT",
       "description": "沙箱界面插件示例：读取当前资料库元数据，显示前 20 张评分，并响应选择/视图变化事件。",
       "download": "zips/view-stats-1.0.0.zip",
-      "sha256": "ccd16c125884631a603fd34d79c5c973844d04ee39fed564e42ccfcedE0284a6"
+      "sha256": "ccd16c125884631a603fd34d79c5c973844d04ee39fed564e42ccfcede0284a6"
     }
   ]
 }

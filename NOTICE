@@ -27,8 +27,9 @@ Major modifications introduced in PicNest:
     prefixes, and `.picnest/meta.json` in-root metadata persistence.
   - Added an Eagle library migration wizard to reconstruct flat .library bundles
     back into hierarchical physical folders.
-  - Completely severed and removed Steam status reporting, Steamworks runtime
-    binaries, and proprietary telemetry to ensure 100% free software purity.
+  - Disabled Steam status reporting and Steam integration; no Steam DRM checks
+    or proprietary telemetry are active in PicNest. The inherited Steamworks
+    dependency remains only as an unused runtime package and is not initialized.
 
 ========================================================================
 2. Icons and Art Assets
@@ -52,7 +53,9 @@ PicNest bundles or depends on several open-source libraries and runtimes:
 - Electron / Chromium
   Copyright (c) Electron contributors / The Chromium Authors
   Licensed under the MIT License and BSD-style Licenses.
-  See app/LICENSE.electron.txt and app/LICENSES.chromium.html for details.
+  See the LICENSE.electron.txt and LICENSES.chromium.html files included in the
+  distributed app/ runtime (the source repository does not vendor those runtime
+  files; they are shipped with the portable package).
 
 - Vue.js / Pinia
   Copyright (c) 2014-present Evan You
@@ -85,3 +88,8 @@ PicNest bundles or depends on several open-source libraries and runtimes:
 - @xenova/transformers / onnxruntime-node
   Copyright (c) Xenova / Microsoft Corporation
   Licensed under the Apache License, Version 2.0 / MIT License.
+
+Additional transitive dependencies and their version constraints are declared in
+source/picrand-2.77.0/package.json and ui/package.json. The portable app runtime
+also ships the corresponding package license files under app/resources/licenses
+and app/LICENSES.chromium.html / app/LICENSE.electron.txt.

@@ -28,7 +28,7 @@
 - **直链索引（In-place Direct Link）**：直接以你的本地文件夹为根。PicNest **绝不复制、绝不搬迁、绝不打散**你的原图，物理目录就是分类树。
 - **数据随盘（In-root Metadata）**：根内隐藏 `.picnest/meta.json` 自动跟随硬盘漫游，标签、注释、评分与层级信息拔盘即走。
 - **移出不伤骨肉**：在 PicNest 中“移出根目录”只解除索引，磁盘文件永不触碰。
-- **自由与纯净**：开源遵循 **GPL-3.0**，彻底剥离第三方商业平台与遥测代码，无内购、无联网绑定，完全离线可用。
+- **自由与纯净**：开源遵循 **GPL-3.0**，彻底剥离第三方商业平台与遥测代码，无内购、无联网绑定；核心功能完全离线可用，只有可选的 AI 查重需要你自备 OpenAI 兼容 API。
 
 ---
 
@@ -63,7 +63,7 @@
 - **按住采集手势**：网页图片上按住 0.4 秒弹出环形分类面板，支持拖拽保存到指定文件夹或库根，支持覆盖/跳过查重。
 - 本地专用接口 `127.0.0.1:41600`，图片由主进程下载并自动附带页面 Referer 防盗链头。
 
-> #### 💡 浏览器采集扩展极速上手指南（保姆级教程）
+> #### 💡 浏览器采集扩展极速上手指南（画师专属保姆级教程）
 > 
 > **第一步：30 秒安装到浏览器（Edge / Chrome 通用）**
 > 1. 打开你的浏览器扩展管理页面：
@@ -74,14 +74,14 @@
 > 4. 选中解压出来的 **`浏览器采集扩展 (extension)`** 文件夹，点击“选择文件夹”即可安装完成！
 > 5. *(推荐)* 点击浏览器地址栏右侧的拼图小图标 🧩，将「PicNest 图巢采集」固定在工具栏，点开可以随时预设保存文件夹。
 > 
-> **第二步： 3 种神仙采集姿势**
+> **第二步：画师专属 3 种神仙采集姿势**
 > - **姿势 1 · 神仙长按手势（最爽）**：在网页任意图片上**按住鼠标左键约 0.4 秒**（光标处出现金色环形进度条）→ 弹出分类面板 → 直接拖进目标文件夹（或左侧大片「未分类/库根」）松开即可保存！
 > - **姿势 2 · 右键一键存图**：在网页图片上点击鼠标右键 → 选择 **「保存图片到图巢」**。
 > - **姿势 3 · 网页可见区截图**：在网页空白处点击鼠标右键 → 选择 **「保存页面截图到图巢」**。
 > 
-> **⚠️ 常见避坑提示**：
+> **⚠️ 画师常见避坑提示**：
 > - ❗ **请保持 PicNest 软件在后台运行**：扩展通过本地安全通道（`127.0.0.1:41600`）将图片交给软件下载；若软件未启动，扩展会提示“未连接”。
-> - ❗ **安装/更新扩展后，请先刷新（F5）一下已经打开的网页**：旧网页里的脚本还没激活，刷新网页后长按手势立刻生效。
+> - ❗ **安装/更新扩展后，建议先刷新（F5）一下已经打开的网页**：旧网页里的脚本还没激活。v0.1.5 起会自动探测并修复：旧脚本/监听器失效优先原地重建（不刷新），无 cleanup 的极旧脚本才在 Pinterest 自动刷新一次；其它站点可在扩展面板点「修复本页」。
 > - ❗ **遇到相同图片会自动提示**：扩展内置查重，若图库已有此图，按住面板会弹出提醒，可自由选择【跳过】、【覆盖旧图】或【仍然保存】。
 
 ### 🦅 Eagle 库无损物化迁移向导
@@ -98,6 +98,8 @@ PicNest 是专为创作者打造的绿色便携软件：
    `PicNest-v0.1.0-windows-x64.zip`
 2. 解压到你的电脑任意目录（如 `D:\PicNest`）。
 3. 双击运行 `PicNest.exe`，点击左侧添加你的本地图片文件夹，即刻开启极致看图体验！
+
+> 便携包发布在 [Releases](https://github.com/Ranbow29/PicNest/releases) 页面；源码以本仓库 + `source/` 镜像提供。
 
 > 💡 **绿色便携**：数据存储在本地，不写注册表。若想卸载，直接将软件目录扔进回收站即可，你的原始图片绝不受任何影响。
 
@@ -133,36 +135,55 @@ PicNest 是专为创作者打造的绿色便携软件：
 
 ---
 
-## 💻 开发者从零构建 (Developer Setup)
+## 💻 开发者构建 (Developer Setup)
 
-PicNest 采用 Electron 33 + Vite 6 + Vue 3.5 技术栈：
+本仓库包含 **UI 源码 + 主进程补丁 + PicRand 2.77.0 主进程/preload 源码镜像**，不包含便携运行时。
+`app/`（Electron/Chromium 运行时、`node_modules`、`PicNest.exe`、前端 dist）约 1.4 GB，已在 `.gitignore`
+中排除；**全新 clone 不能直接 `npm run dev`**，需要先准备运行时。
+
+### 1. 准备 app/ 运行时（二选一）
+
+- **只改 UI / 本地使用**：从 [Releases](https://github.com/Ranbow29/PicNest/releases) 下载便携包，
+  解压后把整个 `app/` 放到仓库根；或在已解压的 PicNest 目录旁开发。
+- **从源码重建主进程**：准备 PicRand 2.77.0 的原始 `app/` 运行时（可执行文件 + `app/resources/app/node_modules`）。
+  `source/picrand-2.77.0/` 只提供主进程/preload/worker 源码镜像，不包含 Electron 运行时与依赖。
+
+> `node tools/patches/apply.mjs` 在 `app/resources/app/out` 不存在时会从 `source/picrand-2.77.0`
+> 初始化源码并打补丁，但 Electron 运行时、原生依赖与可执行文件仍需由上面的 `app/` 提供。
+
+### 2. 构建 UI 与主进程补丁
 
 ```bash
-# 1. 克隆仓库
-git clone https://github.com/Ranbow29/PicNest.git
-cd PicNest
-
-# 2. 安装并构建前端界面 (产物自动同步至 app/resources/app/dist)
 cd ui
 npm ci
-npm run build
+npm run build          # 产物自动写入 app/resources/app/dist
 cd ..
-
-# 3. 运行主进程补丁 (自动从 source/ 源码镜像同步并幂等打补丁)
 node tools/patches/apply.mjs
+```
 
-# 4. (可选) 写入 exe 图标与 VersionInfo 资源
+### 3. 可选：写入 exe 图标与 VersionInfo
+
+```bash
+npm i -D resedit       # 仅首次
 node tools/patches/patch-exe-resources.mjs
+# 若运行时仍是 PicRand.exe：
+# node tools/patches/patch-exe-resources.mjs --exe app/PicRand.exe --out app/PicNest.exe
 ```
 
 ### 本地 Dev 调试模式
+
 ```bash
 # 终端 1: 启动 Vite 开发服务器
 cd ui && npm run dev
 
-# 终端 2: 启动 Electron (监听 9222 调试端口与本地开发服务)
+# 终端 2: 启动 Electron（需先准备 app/ 运行时）
 powershell "$env:PICNEST_DEV='1'; Start-Process 'app\PicNest.exe' -ArgumentList '--remote-debugging-port=9222' -WorkingDirectory 'app'"
 ```
+
+### 浏览器采集扩展
+
+`edge://extensions` / `chrome://extensions` 打开开发者模式 → 「加载解压缩的扩展」→ 选择 `extension/`。
+当前扩展版本 **0.1.5**；更新扩展后需重载。v0.1.5 会自动探测页面里的旧脚本/失效监听器：优先 cleanup + 原地重建，无 cleanup 的极旧脚本只在 Pinterest 页自动刷新一次；content script 每 2.5s 自检，页面清掉监听器也能自愈。扩展面板顶部可查看「本页采集」状态并点「修复本页」。回归测试：`npm run test:extension` / `npm run test:extension:e2e`。
 
 ---
 
