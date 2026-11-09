@@ -54,6 +54,7 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 - **「未分类」视图入口**（与回收站同款）：拖图经过金色虚线高亮 + 浮签「移入未分类」，松开物理移到库根、保留索引。
 - 文件夹拖拽 / 外部文件拖入仍保留上/下 30% 缝隙规则（文件夹排序 / 录入父级）。
 - **树根行已移除**：文件夹拖回库根用「根文件」当前库行承接（`dropOnDirs(..., '', 'into')`）；不再有根行 before/after，避免根名与同名子文件夹“好图”撞名。`dropOnDir` 对根行排序、自身/后代目标直接拒绝，`moveDir` 失败也不写 `dirOrder`。
+- **树行拖拽排序（before/after）**：`dropOnDirs` 必须先把被移动项从 names 过滤掉，但**目标名要保留**再 `indexOf(targetName)`；曾把 targetName 也过滤 → index=-1 → 永远插到末尾。拖到自身直接忽略（valid 过滤 `r !== targetRel`）。
 - **内部拖拽优先判定**：Chromium 自动附带 `text/uri-list`；所有落点用 `ui/src/lib/dnd.js` 的 `isExternalDT`：先认 `x-picnest-file/files/dir/dirs`，命中即内部。
 - 外部文件夹整包复制：同名目标合并；同名同大小按 MD5（同内容跳过/不同加序号）；空目录不落盘；隐藏项/Thumbs.db 忽略。
 - 汇总结果卡：录入/文件夹/跳过/不支持/替换/失败 + 明细，6.5s 收起；拖入浮签按住显示、松开/离开 450ms 消失。

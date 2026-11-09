@@ -267,30 +267,30 @@ async function dropOnLib(e, l) {
 .sidebar {
   /* 左侧栏 = 底层（不是浮岛卡）：主面板浮在它上面，ZCode 同构；宽度可拖 */
   flex: none; display: flex; flex-direction: column;
-  padding: 14px 8px 10px; overflow: hidden;
+  padding: 10px 8px 8px; overflow: hidden;
   /* 底子顶部白色渐变：从栏顶亮起，150px 内渐隐回 --bg（范围对齐品牌区+「全部」行） */
   background: linear-gradient(180deg, var(--sidebar-glow) 0, rgba(255, 255, 255, 0) 150px);
 }
-.brand { display: flex; align-items: baseline; gap: 10px; padding: 2px 10px 12px; border-bottom: 1px solid var(--border); }
-.brand h1 { font-family: var(--font-serif); font-size: 21px; margin: 0; letter-spacing: 6px; }
-.brand .sub { font-size: 11px; color: var(--text-2); letter-spacing: 2px; }
+.brand { display: flex; align-items: baseline; gap: 8px; padding: 1px 10px 9px; border-bottom: 1px solid var(--border); }
+.brand h1 { font-family: var(--font-serif); font-size: 19px; margin: 0; letter-spacing: 4px; }
+.brand .sub { font-size: 10px; color: var(--text-2); letter-spacing: 1.5px; }
 
-.views { display: flex; flex-direction: column; gap: 2px; padding: 8px 0; }
+.views { display: flex; flex-direction: column; gap: 1px; padding: 6px 0; }
 .view-item {
-  display: flex; align-items: center; height: 32px; padding: 0 10px;
-  border-radius: 9px; color: var(--text-2); transition: background 0.15s, color 0.15s;
+  display: flex; align-items: center; height: 28px; padding: 0 9px;
+  border-radius: 8px; color: var(--text-2); transition: background 0.15s, color 0.15s;
 }
 .view-item:hover:not(.disabled) { background: var(--accent-weak); color: var(--text); }
 .view-item.active { background: var(--accent-weak); color: var(--accent); font-weight: 600; }
 .view-item.drop-trash { background: rgba(194, 90, 77, 0.14); color: #cf6b5c; outline: 1.5px dashed #c25a4d; outline-offset: -2px; }
 .view-item.drop-uncat { background: var(--accent-weak); color: var(--accent); outline: 1.5px dashed var(--accent); outline-offset: -2px; }
 .view-item.disabled { opacity: 0.45; }
-.label { flex: 1; font-size: 13px; }
-.count { font-size: 11px; font-variant-numeric: tabular-nums; }
+.label { flex: 1; font-size: 12.5px; }
+.count { font-size: 10.5px; font-variant-numeric: tabular-nums; }
 
 .section-head {
-  display: flex; align-items: center; padding: 10px 10px 6px;
-  font-size: 11px; color: var(--text-2); letter-spacing: 1px;
+  display: flex; align-items: center; padding: 6px 10px 4px;
+  font-size: 10.5px; color: var(--text-2); letter-spacing: 1px;
 }
 .head-btns { margin-left: auto; display: flex; gap: 2px; }
 .add-btn {
@@ -302,10 +302,10 @@ async function dropOnLib(e, l) {
 .add-btn:hover { background: var(--accent-weak); color: var(--accent); }
 
 /* 资料库节点区 */
-.libs { display: flex; flex-direction: column; gap: 2px; padding: 0 4px 4px; }
+.libs { display: flex; flex-direction: column; gap: 1px; padding: 0 4px 2px; }
 .lib-item {
-  display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px;
-  border-radius: 9px; color: var(--text-2); cursor: pointer;
+  display: flex; align-items: center; gap: 7px; height: 29px; padding: 0 9px;
+  border-radius: 8px; color: var(--text-2); cursor: pointer;
   transition: background 0.15s, color 0.15s;
 }
 .lib-item:hover { background: var(--accent-weak); color: var(--text); }

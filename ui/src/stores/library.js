@@ -2000,7 +2000,7 @@ export const useLibrary = defineStore('library', {
     async dropOnDirs(srcRels, targetRel, pos) {
       const destParent = pos === 'into' ? targetRel : (targetRel.includes('/') ? targetRel.split('/').slice(0, -1).join('/') : '')
       const rels = this.topLevelDirs(srcRels).filter((r) => r !== '') // 父子同选只搬父级
-      const valid = rels.filter((r) => r !== destParent && !(destParent && (destParent + '/').startsWith(r + '/')))
+      const valid = rels.filter((r) => r !== destParent && r !== targetRel && !(destParent && (destParent + '/').startsWith(r + '/')))
       if (!valid.length) return { ok: true, moved: 0 }
 
       if (pos === 'into') {
@@ -2028,8 +2028,8 @@ export const useLibrary = defineStore('library', {
       if (!movedNames.length) return { ok: true, moved: 0 }
       await this.refreshTree()
       const node = destParent ? this.findNode(this.tree?.tree, destParent) : this.tree?.tree
-      const names = (node?.children || []).map((c) => c.name)
-        .filter((n) => n !== targetName && !movedNames.includes(n))
+      // 目标名必须留在 names 里才能算插入位；只过滤被移动项
+      const names = (node?.children || []).map((c) => c.name).filter((n) => !movedNames.includes(n))
       const at = names.indexOf(targetName)
       names.splice(at < 0 ? names.length : at + (pos === 'after' ? 1 : 0), 0, ...movedNames)
       await window.picrand.picnestDirOrderSet(this.activeRootId, destParent || '__root__', names)
