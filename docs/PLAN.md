@@ -455,3 +455,10 @@ PicNest/
     ① **根因**：拖动图片时 `.cell:hover .thumb` 仍有 `translateY(-3px)` + `0.26s var(--ease-overshoot)` 过渡；光标扫过每张卡都会触发抬起/落下，整片网格看起来在抖。排序插入线按「最近卡片中心左/右」即时翻边，光标停在中心附近时也会左右跳。
     ② **修法**（`ui/src/components/ImageGrid.vue`）：新增 `dragging` 状态，`dragstart` 置 true、`dragend`/drop 置 false；`.canvas.dragging` 下关闭 thumb 的 transition 和 hover 位移（保留选中环）。`onCanvasDragOver` 对同一张卡加 6–14px 中点死区，`path`/`before` 不变时直接 return，插入线不再反复赋值/跳边。
     ③ **验证**：构建后 CDP 合成 `dragstart` → `.canvas.dragging` 生效，`.thumb` computed `transition-property: none`；`dragend` 后 class 清除。实际拖动手感需 Feb 确认。
+
+77. **拖动跟手优化（2026-11-10，Feb 反馈「依然拖动不跟手，有时卡一下」）**：
+    ① **默认拖影太重**：HTML5 默认拖影会把整张卡片（大图 + hover 浮层）快照一遍，拖动开始和跟随光标都容易顿。改为在 `dragstart` 用 96×96 canvas 从显示图中心裁剪出小拖影（`setDragImage(c, 48, 48)`），不再让浏览器快照整张卡片。
+    ② **dragover 高频重算**：dragover 可能高于屏幕刷新率，原实现每次事件都重算最近卡片并写响应式 `reorderCtx`。改为 rAF 合并，每帧最多算一次；`drop` 前 `flushReorder()` 补算最后一帧，`dragleave`/`dragend` 取消挂起帧。
+    ③ **最近卡片只扫可视区**：从 `items`（全量，可能几万张）改为 `visible`（视口 + 400px 缓冲），大库拖动不再每帧遍历全部图片。
+    ④ **减少重绘**：拖动中隐藏 hover 信息条的透明度过渡（`.canvas.dragging .cell:hover .hover-overlay { opacity:0 }`）。
+    ⑤ **验证**：构建通过；CDP 合成 dragstart + dragover → `.canvas.dragging` 生效、`.reorder-line` 在 rAF 后出现（left/top/height 正确）、dragend 后清除；实际拖影跟手需 Feb 手动确认。

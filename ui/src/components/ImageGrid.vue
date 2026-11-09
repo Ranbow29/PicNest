@@ -68,6 +68,25 @@ function onViewportWheel(e) {
 }
 
 /* 拖拽：窗口内是普通 HTML5 内部排序/移动（高亮落点），拖出窗口由主进程升级为原生文件拖拽。 */
+/* 默认拖影会把整张卡片（大图 + 浮层）快照一遍，拖起来容易顿；用 96px 小画布当拖影更跟手。 */
+function setCellDragImage(e) {
+  try {
+    const el = e.currentTarget?.querySelector?.('.thumb img')
+    if (!el || !el.complete || !el.naturalWidth || !el.naturalHeight) return
+    const size = 96
+    const c = document.createElement('canvas')
+    c.width = c.height = size
+    const ctx = c.getContext('2d')
+    if (!ctx) return
+    const ar = el.naturalWidth / el.naturalHeight
+    let sx = 0, sy = 0, sw = el.naturalWidth, sh = el.naturalHeight
+    if (ar > 1) { sw = el.naturalHeight; sx = (el.naturalWidth - sw) / 2 }
+    else { sh = el.naturalWidth; sy = (el.naturalHeight - sh) / 2 }
+    ctx.drawImage(el, sx, sy, sw, sh, 0, 0, size, size)
+    e.dataTransfer.setDragImage(c, size / 2, size / 2)
+  } catch { /* 跨域/未解码时用浏览器默认拖影 */ }
+}
+
 function onCellDragStart(e, img) {
   dragging.value = true
   const group = (lib.selectedPaths.length > 1 && lib.selectedPaths.includes(img.file_path))
@@ -77,6 +96,7 @@ function onCellDragStart(e, img) {
   e.dataTransfer.setData('text/plain', img.file_path)
   if (group.length > 1) e.dataTransfer.setData('application/x-picnest-files', JSON.stringify(group))
   e.dataTransfer.effectAllowed = 'move'
+  setCellDragImage(e)
   /* 窗口内继续 HTML5 内部拖拽；主进程轮询光标，拖出窗口后升级为原生文件拖拽 */
   try { api.dragBegin(group.length > 1 ? group : [img.file_path]) } catch (err) { console.error('[drag-begin]', err) }
 }
@@ -619,16 +639,14 @@ function internalDirs(e) {
   const single = e.dataTransfer.getData('application/x-picnest-dir')
   return single ? [single] : []
 }
-/* 画布级排序：按光标最近图片算插入位置（不要求正落在格子上，缝隙也能排） */
-function onCanvasDragOver(e) {
-  if (!isInternalImageDT(e) || !lib.canReorder()) return
-  e.preventDefault()
-  e.stopPropagation()
-  e.dataTransfer.dropEffect = 'move'
-  const rect = e.currentTarget.getBoundingClientRect()
-  const cx = e.clientX - rect.left
-  const cy = e.clientY - rect.top
-  const list = items.value
+/* 画布级排序：按光标最近图片算插入位置（不要求正落在格子上，缝隙也能排）。
+   dragover 可能高于屏幕刷新率，重算插入线用 rAF 合并到每帧一次，拖起来更跟手。 */
+let reorderRAF = 0
+let reorderPointer = null
+
+function updateReorderAt(cx, cy) {
+  /* 只扫可视区（含 400px 缓冲）：大库几万张时不必每帧遍历全部 items */
+  const list = visible.value.length ? visible.value : items.value
   if (!list.length) { reorderCtx.value = null; return }
   let best = null, bestD = Infinity
   for (const item of list) {
@@ -659,9 +677,37 @@ function onCanvasDragOver(e) {
     h: best.h + 6,
   }
 }
+
+function flushReorder(clientX, clientY) {
+  if (reorderRAF) { cancelAnimationFrame(reorderRAF); reorderRAF = 0 }
+  reorderPointer = null
+  const el = canvasEl.value
+  if (!el) return
+  const rect = el.getBoundingClientRect()
+  updateReorderAt(clientX - rect.left, clientY - rect.top)
+}
+
+function onCanvasDragOver(e) {
+  if (!isInternalImageDT(e) || !lib.canReorder()) return
+  e.preventDefault()
+  e.stopPropagation()
+  e.dataTransfer.dropEffect = 'move'
+  reorderPointer = { x: e.clientX, y: e.clientY }
+  if (reorderRAF) return
+  reorderRAF = requestAnimationFrame(() => {
+    reorderRAF = 0
+    const p = reorderPointer
+    const el = canvasEl.value
+    if (!p || !el) return
+    const rect = el.getBoundingClientRect()
+    updateReorderAt(p.x - rect.left, p.y - rect.top)
+  })
+}
 function onCanvasDragLeave(e) {
   const rect = e.currentTarget.getBoundingClientRect()
   if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) {
+    if (reorderRAF) { cancelAnimationFrame(reorderRAF); reorderRAF = 0 }
+    reorderPointer = null
     reorderCtx.value = null
   }
 }
@@ -669,6 +715,8 @@ async function onCanvasDrop(e) {
   if (!isInternalImageDT(e)) return // 外部拖入交给全窗 shell
   e.preventDefault()
   e.stopPropagation()
+  /* 松手前把最后一帧的插入位置补算出来，避免 rAF 还没跑就 drop 导致插到旧位置 */
+  flushReorder(e.clientX, e.clientY)
   const ctx = reorderCtx.value
   const paths = internalImages(e)
   reorderCtx.value = null
@@ -723,6 +771,8 @@ async function onSubDrop(e, f) {
   }
 }
 function clearDragUi() {
+  if (reorderRAF) { cancelAnimationFrame(reorderRAF); reorderRAF = 0 }
+  reorderPointer = null
   reorderCtx.value = null
   subDropRel.value = null
   dragging.value = false
@@ -879,6 +929,7 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
 .canvas.dragging .cell.selected:hover .thumb {
   box-shadow: 0 0 0 2px var(--accent), 0 0 0 6px var(--accent-weak), var(--shadow-tile);
 }
+.canvas.dragging .cell:hover .hover-overlay { opacity: 0; }
 .reorder-line {
   position: absolute; width: 3px; border-radius: 2px;
   background: var(--accent);
