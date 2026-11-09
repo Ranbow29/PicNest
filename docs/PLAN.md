@@ -506,3 +506,10 @@ PicNest/
     ① **v0.1.2 漏掉的场景**：content.js 在 IIFE 最顶部就置 `__picnestHoldCollectLoaded`，若脚本执行到一半失败，后续补注入会被守卫拦住；`tabs.onActivated` 拿到的 tab 可能还在睡眠恢复/URL 为空，直接 executeScript 失败；窗口切换/标签高亮不一定触发 activation；扩展重载时若当前就在 Pinterest，`onInstalled` 不一定补到。刷新能重新走 manifest 注入，所以表现为“刷新就好”。
     ② **v0.1.3 修法**：content.js 把 `Loaded`/`Version` 移到所有监听器注册完成之后；background 先用 `executeScript(func)` 探测 `__picnestHoldCollectLoaded && Version`，未就绪才注入，失败按 350ms/1200ms 重试两次；监听 `tabs.onActivated`、`tabs.onUpdated`（complete/url）、`tabs.onHighlighted`、`windows.onFocusChanged`；service worker 启动时立即 `ensurePinterestTabs()`，并在 1.5s/4.5s 再补一次，不依赖 `onInstalled`。
     ③ **验证**：background/content 语法检查通过；扩展版本升 `0.1.3`，需在 `edge://extensions` 重载后刷新一次已打开的 Pinterest 页面，之后切标签应自动补注入。实际浏览器需 Feb 验证。
+
+86. **Pinterest 采集 v0.1.4：版本化接管 + 一次性自动刷新 + popup 诊断（2026-11-10）**：
+    ① **根因（补充）**：v0.1.3 的探测虽然会跑，但页面里仍是旧 content script（如 0.1.2）时，旧脚本已置 `Loaded=true` 而无 `Version`；后台判定“未就绪”后注入 0.1.3，新脚本顶部守卫看到 `Loaded` 直接 return，形成死锁。刷新页面让旧脚本消失才恢复——这与 Feb 的“刷新就好”完全吻合。
+    ② **content.js**：版本常量 `0.1.4`；同版本重复注入幂等；旧实例带 `__picnestHoldCollectCleanup` 时先清理（全部 document/window/chrome.storage 监听器 + host）再重建；无 cleanup 的极旧实例拒绝接管。新增 `__picnestHoldCollectHealth()`（`ticks/alive/enabled/disposed`）与私有探测事件 `picnest-collect-probe`，后台可确认 document 监听器是否仍活着。
+    ③ **background.js**：探测对象 `{loaded, version, cleanup, alive, healthy, enabled}`。处理分级：未加载→注入；旧版带 cleanup 且 runtime 存活→注入原地重建；无 cleanup / runtime 失效 / 监听器失效→仅 Pinterest 标签 `tabs.reload` 一次（`storage.session` 记 `tabId -> version|url`，2 小时过期，同一 tab 同 URL 不重复刷新；其它站点不自动刷新），刷新后 onUpdated 再注入。启动/安装时只补注入、不批量刷新后台标签。新增 `collect-status` / `collect-repair` 消息。
+    ④ **popup**：顶部「本页采集」显示 current/missing/stale/orphan/unhealthy/unavailable/unsupported（带版本号），异常时出现「修复本页」：优先注入/原地重建，注入无效才刷新；操作后自动复检。README 同步 v0.1.4 行为。
+    ⑤ **验证**：`node tools/test-collect-script.mjs`（版本一致、首次注入、同版本幂等、带 cleanup 接管、无 cleanup 拒绝、cleanup 解绑、孤立脚本 alive=false）与 `node tools/test-collect-background.mjs`（空白页注入、旧脚本一次刷新+防循环+刷新后注入、带 cleanup 不刷新、非 Pinterest 不刷新、孤立脚本刷新、popup missing→injected/就绪→none、chrome:// 不注入）全部通过。浏览器端仍需 Feb 在 `chrome://extensions` 重载到 0.1.4 后验证。

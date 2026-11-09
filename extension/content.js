@@ -2,28 +2,47 @@
 // 在网页图片上左键按住 → 光标处环形进度 → 弹出双栏面板（左：未分类/库根；右：全部文件夹）
 // 拖到目标松开即保存；松开在面板空白处则面板停留，可点击/滚动选择；Esc / 点外部取消。
 (() => {
-  if (window.__picnestHoldCollectLoaded) return
+  const VERSION = '0.1.4'
+  const prevLoaded = !!window.__picnestHoldCollectLoaded
+  const prevVersion = String(window.__picnestHoldCollectVersion || '')
+  /* 同版本重复注入：幂等返回。旧版本实例：0.1.4 起会挂 __picnestHoldCollectCleanup，
+     可原地清理后接管；更老的实例没有 cleanup，监听器无法移除，直接退出交给后台刷新页面。 */
+  if (prevLoaded && prevVersion === VERSION) return
+  if (prevLoaded) {
+    let cleaned = false
+    try {
+      if (typeof window.__picnestHoldCollectCleanup === 'function') {
+        window.__picnestHoldCollectCleanup()
+        cleaned = true
+      }
+    } catch { /* 清理失败按不可接管处理 */ }
+    if (!cleaned) return
+  }
 
   const HOLD_MS = 380
   const RING_DELAY = 120
   const MOVE_TOL = 6
   const HOST_ID = 'picnest-collect-host'
+  const PROBE_EVENT = 'picnest-collect-probe'
 
   let enabled = true
   let session = null
   let last = { rootId: null, rel: '' }
+  let probeTicks = 0
+  let disposed = false
 
+  function onStorageChanged(changes) {
+    if (changes.holdCollect) enabled = changes.holdCollect.newValue !== false
+    if (changes.rootId) last.rootId = changes.rootId.newValue ?? null
+    if (changes.rel) last.rel = changes.rel.newValue ?? ''
+    if (!enabled) closePanel()
+  }
   try {
     chrome.storage.local.get({ holdCollect: true, rootId: null, rel: '' }, (s) => {
       enabled = s.holdCollect !== false
       last = { rootId: s.rootId ?? null, rel: s.rel ?? '' }
     })
-    chrome.storage.onChanged.addListener((changes) => {
-      if (changes.holdCollect) enabled = changes.holdCollect.newValue !== false
-      if (changes.rootId) last.rootId = changes.rootId.newValue ?? null
-      if (changes.rel) last.rel = changes.rel.newValue ?? ''
-      if (!enabled) closePanel()
-    })
+    chrome.storage.onChanged.addListener(onStorageChanged)
   } catch { /* 扩展上下文失效时不影响页面 */ }
 
   const FOLDER_ICO = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M1.8 4.3h4l1.4 1.6h7v6.3H1.8z"/></svg>'
@@ -686,6 +705,13 @@
     closePanel()
   }
 
+  function onVisibility() {
+    if (document.hidden) closePanel()
+  }
+  function onProbe() {
+    probeTicks++
+  }
+
   document.addEventListener('pointerdown', onDown, true)
   document.addEventListener('pointermove', onMove, true)
   document.addEventListener('pointerup', onUp, true)
@@ -694,11 +720,46 @@
   document.addEventListener('dragstart', onDragStart, true)
   document.addEventListener('contextmenu', onCtx, true)
   document.addEventListener('pointerdown', onOutside, true)
+  document.addEventListener('visibilitychange', onVisibility)
+  document.addEventListener(PROBE_EVENT, onProbe)
   window.addEventListener('scroll', onScroll, true)
   window.addEventListener('blur', closePanel)
   window.addEventListener('resize', closePanel)
-  document.addEventListener('visibilitychange', () => { if (document.hidden) closePanel() })
+
+  /* 供后台/新版脚本接管：移除全部页面监听器与悬浮 UI。0.1.4 起每个版本都必须挂这个入口，
+     下次扩展更新后向仍打开的页面注入新 content.js 即可原地重建，不必刷新整页。 */
+  function cleanup() {
+    if (disposed) return
+    disposed = true
+    closePanel()
+    document.removeEventListener('pointerdown', onDown, true)
+    document.removeEventListener('pointermove', onMove, true)
+    document.removeEventListener('pointerup', onUp, true)
+    document.removeEventListener('pointercancel', closePanel, true)
+    document.removeEventListener('keydown', onKey, true)
+    document.removeEventListener('dragstart', onDragStart, true)
+    document.removeEventListener('contextmenu', onCtx, true)
+    document.removeEventListener('pointerdown', onOutside, true)
+    document.removeEventListener('visibilitychange', onVisibility)
+    document.removeEventListener(PROBE_EVENT, onProbe)
+    window.removeEventListener('scroll', onScroll, true)
+    window.removeEventListener('blur', closePanel)
+    window.removeEventListener('resize', closePanel)
+    try { chrome.storage.onChanged.removeListener(onStorageChanged) } catch { /* 静默 */ }
+    try { document.getElementById(HOST_ID)?.remove() } catch { /* 静默 */ }
+  }
+
+  /* 后台探测用：发一个私有事件，能收到就说明 document 监听器仍活着；
+     chrome.runtime.id 用来识别“扩展已更新、旧脚本被孤立”的页面。 */
+  function health() {
+    let alive = false
+    try { alive = !!chrome.runtime?.id } catch { alive = false }
+    return { version: VERSION, ticks: probeTicks, alive, enabled, disposed }
+  }
+
+  window.__picnestHoldCollectCleanup = cleanup
+  window.__picnestHoldCollectHealth = health
   /* 只有监听器全部注册成功后才置 Loaded：部分初始化失败的页面可以被后台补注入修复 */
   window.__picnestHoldCollectLoaded = true
-  window.__picnestHoldCollectVersion = '0.1.3'
+  window.__picnestHoldCollectVersion = VERSION
 })()

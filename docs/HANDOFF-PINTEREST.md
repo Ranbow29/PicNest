@@ -2,6 +2,9 @@
 
 > 给下一个窗口的专注交接。**这是目前唯一剩下的硬骨头。**
 > 阅读顺序：本文 → `extension/background.js` / `extension/content.js` → `docs/HANDOFF.md` 的「采集（M6）」小节 → `extension/README.md`。
+>
+> **2026-11-10 状态：已按方案 A+B+C 实现扩展 v0.1.4（`dev`），待 Feb 在 Chrome 重载扩展后物理验收。**
+> 实现细节与决策表见第 9 节；无头回归 `node tools/test-collect-script.mjs` / `node tools/test-collect-background.mjs`。
 
 ## 0. 一句话结论
 
@@ -181,3 +184,72 @@ window.__picnestHoldCollectCleanup = () => { /* remove all listeners + host */ }
 - 不要复制 Eagle 的代码/资源；本项目 GPL-3.0，Eagle 是闭源商业软件，只参考行为。
 - 不要在用户真实素材库上做采集写入测试；用临时根/测试图片。
 - 不要随便清 Chrome profile 或扩展数据；用户有登录态和配置。
+
+## 9. v0.1.4 已实现（2026-11-10）
+
+### 9.1 探测与决策表
+
+`background.js` 的 `probeCollect(tabId)` 向页面注入一个自包含函数，返回：
+
+| 字段 | 含义 |
+|---|---|
+| `loaded` | `__picnestHoldCollectLoaded` |
+| `version` | `__picnestHoldCollectVersion` |
+| `cleanup` | `__picnestHoldCollectCleanup` 是否为函数 |
+| `alive` | 页面里的 `chrome.runtime.id` 是否还在（扩展更新后旧脚本会失去它） |
+| `healthy` | 派发私有事件 `picnest-collect-probe` 前后 `__picnestHoldCollectHealth().ticks` 是否增加（document 监听器是否还活着） |
+| `enabled` | 用户是否开启了按住采集 |
+
+处理顺序：
+
+1. `loaded && version === 0.1.4 && alive && healthy` → 正常，什么都不做。
+2. `!loaded` → 注入 `content.js`，再探测一次。
+3. 旧版、`alive && cleanup` → 注入新 `content.js`；新版顶部看到版本不一致会调用旧实例的 cleanup，原地清理 + 重建，**不刷新页面**。
+4. 其余（无 cleanup 的极旧脚本 / `alive=false` 孤立脚本 / `healthy=false` 监听器失效）：
+   - **Pinterest 标签**：`chrome.tabs.reload` 自动刷新一次；
+   - 非 Pinterest：不自动刷新，留给 popup「修复本页」手动处理。
+5. 自动刷新用 `chrome.storage.session` 记 `tabId -> {key: "0.1.4|URL", at}`，同一 tab 同 URL 只刷一次（2 小时过期），防止循环；刷新完成后的 `tabs.onUpdated` 会重新注入并显示正常。
+6. `ensurePinterestTabs()`（SW 启动/安装）只补注入、传 `allowReload=false`，不会批量刷新后台标签；切到该标签时 `onActivated` 才允许刷新。
+
+### 9.2 content.js 侧
+
+- 新增 `const VERSION = '0.1.4'`；所有监听器注册完成后才写 `Loaded/Version`。
+- 新增 `__picnestHoldCollectCleanup()`：关闭面板、移除全部 document/window 监听器、移除 `chrome.storage.onChanged`、删除 host。
+- 新增 `__picnestHoldCollectHealth()`：返回 `{ version, ticks, alive, enabled, disposed }`；`ticks` 由私有事件 `picnest-collect-probe` 累加。
+- 顶部接管逻辑：同版本幂等返回；旧版本带 cleanup 先 `cleanup()` 再初始化；旧版本无 cleanup 直接 return（交给后台刷新）。
+- **以后每次升版本都必须保留 cleanup + health + 版本号三件套**，否则下一次更新又会退化成“只能刷新整页”。
+
+### 9.3 popup
+
+- 顶部新增「本页采集」：`已就绪 v0.1.4` / `未注入` / `旧版脚本 vX` / `需刷新页面` / `监听失效` / `页面未加载完成` / `此页面不支持`。
+- 异常时显示「修复本页」：缺脚本或带 cleanup 的旧版 → 注入/原地重建；否则刷新页面；操作后自动复检。
+- 新增后台消息：`collect-status`（返回 `state/tabId/version/contentVersion/...`）、`collect-repair`（返回 `action: injected|reloaded|none`）。
+
+### 9.4 回归测试
+
+```bash
+node tools/test-collect-script.mjs      # 守卫/幂等/接管/cleanup/health/孤立脚本
+node tools/test-collect-background.mjs  # 注入/一次刷新/防循环/非 Pinterest/popup 修复/chrome://
+```
+
+两套测试均用最小 DOM + chrome API 桩，在 Node 里加载真实 `content.js` / `background.js`；
+已覆盖：空白页注入、旧脚本（无 cleanup）刷新一次且重复激活不再刷新、刷新后自动注入、旧脚本（带 cleanup）原地接管、
+非 Pinterest 不刷新（status=stale）、孤立脚本（status=orphan + 刷新）、popup missing→injected / 就绪→none、chrome:// 不注入。
+
+### 9.5 待 Feb 验收（真实 Chrome）
+
+1. `chrome://extensions` 重载扩展，确认版本 **0.1.4**（**不需要**先刷新 Pinterest 页）。
+2. 切到已打开的 Pinterest 标签（旧脚本页）：
+   - 若旧脚本无 cleanup / 孤立 → 页面应自动刷新一次，并出现「Pinterest 页面已自动刷新」通知；
+   - 刷新后长按图片 → 面板正常；
+   - 再切走/切回，不再刷新，采集仍正常。
+3. 打开扩展面板：「本页采集」显示「已就绪 v0.1.4」；若显示异常，点「修复本页」应恢复。
+4. 多个 Pinterest 标签 / 两个 Chrome 窗口之间切换均正常；普通网页不被自动刷新。
+5. 关掉/重开 Chrome 后，已有 Pinterest 标签恢复，采集正常。
+
+### 9.6 剩余风险
+
+- 自动刷新只对 Pinterest 生效；其它站点遇到孤立/极旧脚本时不会自动刷新，需要 popup 手动「修复本页」或在扩展更新后刷新页面。
+- 自动刷新会丢失该 Pinterest 页的滚动位置（只发生一次；页面状态本来已失效）。
+- 0.1.4 之前的旧实例没有 cleanup，无法原地接管，只能刷新一次；0.1.4 之后应不再需要整页刷新。
+- 无头测试只覆盖状态机，真实 PointerEvent / Pinterest 覆盖层 / 睡眠标签恢复仍需物理验收。
