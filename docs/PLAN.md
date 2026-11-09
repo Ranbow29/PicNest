@@ -408,3 +408,5 @@ PicNest/
     ④ **示例**：`examples/plugins/mono-mint`（theme CSS 437B）、`view-stats`（单文件 renderer，query 前 20 张评分 + 事件）、`registry.json` + `zips/`（sha256）+ README（清单/权限/消息协议/打包/调试）。
     ⑤ **实测**：文件夹安装两例→list 正确；theme 启用注入 style、停用移除；renderer 面板 srcdoc 5502B、sandbox=allow-scripts，page message 捕获 `ready` + `query-images#1/#2`；`query-images` 3 行；storage set/get；本地 registry 2 条；zip 安装 + sha256 成功；示例已卸载，插件目录为空。
     ⑥ **未做**：main 插件（P3 utilityProcess + 网关）、在线签名（P4）、`ui.contextMenu` 插槽、多文件资源（renderer 目前单文件）、默认在线 registry。
+
+64. **帮助按钮 + 页头标题隐藏编号（2026-11-09，Feb 报）**：ImageGrid 的 `header.big` 对文件夹名补 `lib.dispName()`（此前只有面包屑/树/卡片走显示剥前缀，页头大标题仍显示 `03_ねぎまぷりん`）。顶栏新增 `?` 帮助按钮（`lib.helpOpen/openHelp/closeHelp`，App Esc 优先关帮助/插件库），`HelpDialog.vue` 分区说明：1 排序与文件名（重点：应用为手动排序会真实改名 `01_原名`；排序同步文件名开关；01 隐藏编号仅显示；根文件右键清除排序编号会去磁盘前缀且不改 sort_order；清除后若开关仍开会重新加；日期名不误伤）、2 浏览选择、3 录入拖拽复制、4 详情、5 大图裁剪旋转、6 筛选标签颜色、7 主题左栏、8 根元数据、9 查重缩略图插件、10 快捷键、底部风险提示。实测页头 hide 开=`ねぎまぷりん`、关=`03_ねぎまぷりん`；帮助含「清除排序编号」「01_」文案，Esc 可关。
