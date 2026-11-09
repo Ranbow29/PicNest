@@ -1,110 +1,204 @@
 <template>
-  <div v-if="visible" class="update-mask" @click.self="onMaskClick">
-    <div class="update-card" role="dialog" aria-modal="true">
-      <!-- 顶部装饰与图标 -->
-      <div class="card-header">
-        <div class="icon-bubble">
-          <svg viewBox="0 0 24 24" class="up-svg" fill="none" stroke="currentColor" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-          </svg>
-        </div>
-        <div class="title-group">
-          <div class="main-title">
-            发现新版本 <span>v{{ updateInfo?.latestVersion || '' }}</span>
+  <Teleport to="body">
+    <div v-if="visible" class="up-layer" @click.self="onMaskClick">
+      <div class="up-card" role="dialog" aria-modal="true" aria-label="图巢版本更新">
+        <!-- 顶部标题栏 -->
+        <div class="up-head">
+          <div class="up-icon" :class="mode">
+            <!-- 检查中旋转图标 -->
+            <svg v-if="mode === 'checking' || installing" viewBox="0 0 24 24" class="up-svg spin" fill="none" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            <!-- 已是最新勾号 -->
+            <svg v-else-if="mode === 'latest'" viewBox="0 0 24 24" class="up-svg" fill="none" stroke="currentColor" stroke-width="2.2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+            </svg>
+            <!-- 错误感叹号 -->
+            <svg v-else-if="mode === 'error'" viewBox="0 0 24 24" class="up-svg" fill="none" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+            <!-- 发现新版火箭/上传箭头 -->
+            <svg v-else viewBox="0 0 24 24" class="up-svg" fill="none" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+            </svg>
           </div>
-          <div class="sub-title">
-            当前版本 v{{ updateInfo?.currentVersion || '0.1.0' }}
-            <span v-if="updateInfo?.publishedAt" class="dot">·</span>
-            <span v-if="updateInfo?.publishedAt">{{ formatDate(updateInfo.publishedAt) }}</span>
+
+          <div class="up-titles">
+            <div v-if="mode === 'checking'" class="up-title">正在检查新版本…</div>
+            <div v-else-if="mode === 'latest'" class="up-title">当前已是最新版本</div>
+            <div v-else-if="mode === 'error'" class="up-title">检查更新遇到问题</div>
+            <div v-else class="up-title">
+              发现新版本 <span class="up-ver-badge">v{{ updateInfo?.latestVersion || '' }}</span>
+            </div>
+
+            <div class="up-sub">
+              <span>当前版本 v{{ updateInfo?.currentVersion || currentVer || '0.1.0' }}</span>
+              <template v-if="mode === 'available' && updateInfo?.publishedAt">
+                <span class="up-dot">·</span>
+                <span>发布于 {{ formatDate(updateInfo.publishedAt) }}</span>
+              </template>
+            </div>
+          </div>
+
+          <button class="up-close" :disabled="installing" @click="requestClose" title="关闭 (Esc)">✕</button>
+        </div>
+
+        <!-- 状态 1：正在检查 -->
+        <div v-if="mode === 'checking'" class="up-state-box">
+          <div class="up-state-text">正在连接 GitHub Releases 获取最新版本信息，请稍候…</div>
+        </div>
+
+        <!-- 状态 2：已是最新版本 -->
+        <div v-else-if="mode === 'latest'" class="up-state-box">
+          <div class="up-state-text">
+            你正在使用的 <b>PicNest 图巢 v{{ updateInfo?.currentVersion || currentVer }}</b> 已经是最新正式版。
+          </div>
+          <div v-if="updateInfo?.message" class="up-state-hint">{{ updateInfo.message }}</div>
+        </div>
+
+        <!-- 状态 3：检查失败 -->
+        <div v-else-if="mode === 'error'" class="up-state-box">
+          <div class="up-err-banner">⚠️ {{ errorMessage || '无法连接到 GitHub 更新服务器' }}</div>
+          <div class="up-state-hint">
+            若处于无代理或受限网络环境，可直接点击下方「前往 GitHub 手动下载」在浏览器中查看最新便携包。
           </div>
         </div>
-        <button class="close-btn" @click="close" title="稍后提醒">✕</button>
-      </div>
 
-      <!-- 更新日志展示区 -->
-      <div class="changelog-box">
-        <div class="changelog-title">更新说明</div>
-        <div class="changelog-content" v-html="renderedNotes"></div>
-      </div>
+        <!-- 状态 4：发现新版本（含下载与安装流程） -->
+        <template v-else-if="mode === 'available'">
+          <!-- 更新日志 -->
+          <div class="up-notes-wrap">
+            <div class="up-notes-label">
+              <span>{{ updateInfo?.releaseName || '版本更新说明' }}</span>
+              <span v-if="updateInfo?.assetSize" class="up-size-tag">
+                便携包 {{ formatBytes(updateInfo.assetSize) }}
+              </span>
+            </div>
+            <div class="up-notes-body" v-html="renderedNotes"></div>
+          </div>
 
-      <!-- 资产包信息 -->
-      <div v-if="updateInfo?.assetSize" class="asset-meta">
-        便携安装包大小: {{ formatBytes(updateInfo.assetSize) }}
-      </div>
+          <!-- SHA-256 摘要提示 -->
+          <div v-if="updateInfo?.expectedSha256" class="up-sha-row" :title="updateInfo.expectedSha256">
+            <span class="up-sha-tag">SHA-256 校验保护</span>
+            <code>{{ updateInfo.expectedSha256.slice(0, 16) }}…{{ updateInfo.expectedSha256.slice(-8) }}</code>
+          </div>
 
-      <!-- 下载进度展示区 -->
-      <div v-if="downloading || downloadFinished" class="progress-section">
-        <div class="progress-bar-bg">
-          <div
-            class="progress-bar-fill"
-            :style="{ width: `${progress.percent}%` }"
-            :class="{ finished: downloadFinished }"
-          ></div>
+          <!-- 下载进度条与解压状态 -->
+          <div v-if="downloading || downloadFinished || installing" class="up-prog-wrap">
+            <div class="up-prog-track">
+              <div
+                class="up-prog-bar"
+                :class="{ done: downloadFinished, busy: installing }"
+                :style="{ width: installing ? '100%' : `${progress.percent}%` }"
+              ></div>
+            </div>
+            <div class="up-prog-meta">
+              <span v-if="installing" class="up-status-text">
+                ⏳ {{ installStageText || '正在解压并启动热替换跳板…' }}
+              </span>
+              <span v-else-if="downloadFinished" class="up-done-text">
+                ✓ 下载完成并通过完整性校验，可随时重启替换
+              </span>
+              <span v-else>
+                已下载 {{ formatBytes(progress.received) }}
+                <template v-if="progress.total > 0"> / {{ formatBytes(progress.total) }} ({{ progress.percent }}%)</template>
+              </span>
+
+              <span v-if="downloading && !downloadFinished && progress.speed > 0" class="up-speed">
+                {{ formatBytes(progress.speed) }}/s
+              </span>
+            </div>
+          </div>
+
+          <!-- 错误横幅 -->
+          <div v-if="errorMessage" class="up-err-banner up-err-inline">
+            ⚠️ {{ errorMessage }}
+          </div>
+
+          <!-- 取消下载二次确认条 -->
+          <div v-if="confirmingCancel" class="up-confirm-bar">
+            <span>正在下载更新包，确定要中止下载吗？</span>
+            <div class="up-confirm-btns">
+              <button class="up-btn up-btn-sec up-btn-sm" @click="confirmingCancel = false">继续下载</button>
+              <button class="up-btn up-btn-danger up-btn-sm" @click="confirmAbortAndClose">中止并关闭</button>
+            </div>
+          </div>
+        </template>
+
+        <!-- 底部按钮栏 -->
+        <div class="up-foot">
+          <!-- 检查中 -->
+          <template v-if="mode === 'checking'">
+            <div class="up-spacer"></div>
+            <button class="up-btn up-btn-sec" @click="closeImmediate">后台运行</button>
+          </template>
+
+          <!-- 已是最新 -->
+          <template v-else-if="mode === 'latest'">
+            <button class="up-btn up-btn-text" @click="openReleasePage">前往 GitHub Releases ↗</button>
+            <div class="up-spacer"></div>
+            <button class="up-btn up-btn-prim" @click="closeImmediate">知道了</button>
+          </template>
+
+          <!-- 检查错误 -->
+          <template v-else-if="mode === 'error'">
+            <button class="up-btn up-btn-text" @click="openReleasePage">前往 GitHub 手动下载 ↗</button>
+            <div class="up-spacer"></div>
+            <button class="up-btn up-btn-sec" @click="closeImmediate">关闭</button>
+            <button class="up-btn up-btn-prim" @click="runManualCheck()">重试检查</button>
+          </template>
+
+          <!-- 发现新版本：阶段 1 待下载 -->
+          <template v-else-if="!downloading && !downloadFinished && !installing">
+            <button class="up-btn up-btn-text" @click="skipVersion">跳过此版本</button>
+            <button class="up-btn up-btn-text" @click="openReleasePage" title="在浏览器中打开 GitHub Release 页面手动下载">
+              浏览器下载 ↗
+            </button>
+            <div class="up-spacer"></div>
+            <button class="up-btn up-btn-sec" @click="closeImmediate">稍后提醒</button>
+            <button class="up-btn up-btn-prim" @click="startDownload">
+              {{ errorMessage ? '重新下载更新' : '立即下载更新' }}
+            </button>
+          </template>
+
+          <!-- 发现新版本：阶段 2 下载中 -->
+          <template v-else-if="downloading && !downloadFinished">
+            <button class="up-btn up-btn-text" @click="openReleasePage">浏览器下载 ↗</button>
+            <div class="up-spacer"></div>
+            <button class="up-btn up-btn-sec" @click="cancelDownload">取消下载</button>
+            <button class="up-btn up-btn-prim" disabled>正在下载 ({{ progress.percent }}%)…</button>
+          </template>
+
+          <!-- 发现新版本：阶段 3 下载完成 / 正在安装重启 -->
+          <template v-else-if="downloadFinished || installing">
+            <button class="up-btn up-btn-sec" :disabled="installing" @click="closeImmediate">稍后重启</button>
+            <div class="up-spacer"></div>
+            <button class="up-btn up-btn-prim up-btn-ready" :disabled="installing" @click="installAndRestart">
+              {{ installing ? '正在解压并重启…' : '立即重启并替换新版本 🚀' }}
+            </button>
+          </template>
         </div>
-        <div class="progress-labels">
-          <span v-if="!downloadFinished">
-            {{ formatBytes(progress.received) }} / {{ formatBytes(progress.total) }} ({{ progress.percent }}%)
-          </span>
-          <span v-else class="finish-text">✨ 下载完成，准备就绪</span>
-          <span v-if="!downloadFinished && progress.speed > 0" class="speed">
-            {{ formatBytes(progress.speed) }}/s
-          </span>
-        </div>
-      </div>
-
-      <!-- 错误提示 -->
-      <div v-if="errorMessage" class="error-tip">
-        ⚠️ {{ errorMessage }}
-      </div>
-
-      <!-- 底部操作按钮 -->
-      <div class="card-actions">
-        <!-- 阶段 1: 待下载 -->
-        <template v-if="!downloading && !downloadFinished">
-          <button class="action-btn text-btn" @click="skipVersion">跳过此版本</button>
-          <div class="action-spacer"></div>
-          <button class="action-btn sec-btn" @click="close">稍后提醒</button>
-          <button class="action-btn prim-btn" @click="startDownload">
-            立即下载更新
-          </button>
-        </template>
-
-        <!-- 阶段 2: 下载中 -->
-        <template v-else-if="downloading && !downloadFinished">
-          <div class="action-spacer"></div>
-          <button class="action-btn sec-btn" @click="cancelDownload">取消</button>
-          <button class="action-btn prim-btn disabled" disabled>
-            正在下载...
-          </button>
-        </template>
-
-        <!-- 阶段 3: 下载完成，准备重启 -->
-        <template v-else-if="downloadFinished">
-          <button class="action-btn sec-btn" @click="close">稍后重启</button>
-          <div class="action-spacer"></div>
-          <button class="action-btn prim-btn finish-btn" @click="installAndRestart">
-            立即重启生效 🚀
-          </button>
-        </template>
       </div>
     </div>
-  </div>
+  </Teleport>
 </template>
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { api } from '../api.js'
 
-const props = defineProps({
-  // 可外部传入，也可由内部 store/全局事件驱动
-})
-
 const visible = ref(false)
+// mode: 'checking' | 'latest' | 'error' | 'available'
+const mode = ref('available')
+const currentVer = ref('0.1.0')
 const updateInfo = ref(null)
 const downloading = ref(false)
 const downloadFinished = ref(false)
+const installing = ref(false)
+const installStageText = ref('')
 const downloadedFilePath = ref('')
 const errorMessage = ref('')
+const confirmingCancel = ref(false)
 
 const progress = ref({
   received: 0,
@@ -113,12 +207,11 @@ const progress = ref({
   speed: 0
 })
 
-// 格式化字节
 function formatBytes(bytes) {
   if (!bytes || bytes <= 0) return '0 B'
   const units = ['B', 'KB', 'MB', 'GB']
   let i = 0
-  let n = bytes
+  let n = Number(bytes)
   while (n >= 1024 && i < units.length - 1) {
     n /= 1024
     i++
@@ -130,78 +223,124 @@ function formatDate(isoStr) {
   if (!isoStr) return ''
   try {
     const d = new Date(isoStr)
+    if (Number.isNaN(d.getTime())) return isoStr
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
   } catch {
     return isoStr
   }
 }
 
-// 简单的 Markdown 转 HTML 渲染
 const renderedNotes = computed(() => {
-  const raw = updateInfo.value?.releaseNotes || '暂无详细更新说明。'
-  let html = raw
+  const raw = String(updateInfo.value?.releaseNotes || '暂无详细更新说明。')
+  return raw
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
-    // 粗体
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
     .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-    // 标题
+    .replace(/^#### (.*$)/gim, '<div class="md-h3">$1</div>')
     .replace(/^### (.*$)/gim, '<div class="md-h3">$1</div>')
     .replace(/^## (.*$)/gim, '<div class="md-h2">$1</div>')
-    // 列表项
-    .replace(/^\s*-\s+(.*$)/gim, '<div class="md-li">• $1</div>')
-    // 换行
-    .replace(/\n/g, '<br>')
-  return html
+    .replace(/^\s*[-*]\s+(.*$)/gim, '<div class="md-li">• $1</div>')
+    .replace(/\r?\n/g, '<br>')
 })
 
-// 打开弹窗
-function open(info) {
-  updateInfo.value = info
+function resetDownloadState() {
   downloading.value = false
   downloadFinished.value = false
+  installing.value = false
+  installStageText.value = ''
   downloadedFilePath.value = ''
   errorMessage.value = ''
+  confirmingCancel.value = false
   progress.value = { received: 0, total: 0, percent: 0, speed: 0 }
+}
+
+// 静默检查发现新版本时直接打开 available 视图
+function open(info) {
+  resetDownloadState()
+  updateInfo.value = info
+  if (info?.currentVersion) currentVer.value = info.currentVersion
+  mode.value = 'available'
   visible.value = true
 }
 
-// 关闭弹窗
-function close() {
-  if (downloading.value) {
-    if (!confirm('正在下载更新包，确认退出下载吗？')) return
-    cancelDownload()
+// 手动检查更新：完整流转 checking -> available / latest / error
+async function runManualCheck(opts = {}) {
+  resetDownloadState()
+  mode.value = 'checking'
+  visible.value = true
+  try {
+    const res = await api.checkUpdate({ manual: true, ...opts })
+    if (res?.currentVersion) currentVer.value = res.currentVersion
+    updateInfo.value = res || null
+    if (res?.ok) {
+      mode.value = res.hasUpdate ? 'available' : 'latest'
+    } else {
+      mode.value = 'error'
+      errorMessage.value = res?.error || '检查更新失败，请稍后重试'
+    }
+    return res
+  } catch (err) {
+    mode.value = 'error'
+    errorMessage.value = String(err?.message || err)
+    return { ok: false, error: errorMessage.value }
   }
+}
+
+function closeImmediate() {
+  confirmingCancel.value = false
+  visible.value = false
+}
+
+function requestClose() {
+  if (installing.value) return
+  if (downloading.value) {
+    confirmingCancel.value = true
+    return
+  }
+  closeImmediate()
+}
+
+async function confirmAbortAndClose() {
+  confirmingCancel.value = false
+  await cancelDownload()
   visible.value = false
 }
 
 function onMaskClick() {
-  // 下载中不误关
-  if (downloading.value) return
-  close()
+  if (downloading.value || installing.value) return
+  closeImmediate()
 }
 
-// 跳过此版本
 function skipVersion() {
   if (updateInfo.value?.latestVersion) {
     localStorage.setItem('picnest.skipUpdateTag', updateInfo.value.latestVersion)
   }
-  visible.value = false
+  closeImmediate()
 }
 
-// 开始下载
+async function openReleasePage() {
+  const url = updateInfo.value?.htmlUrl || 'https://github.com/Ranbow29/PicNest/releases'
+  await api.openExternal(url)
+}
+
 async function startDownload() {
   if (!updateInfo.value?.assetUrl) {
-    errorMessage.value = '未找到可下载的更新包，请前往官网手动下载'
+    errorMessage.value = '该版本暂未附带自动更新 ZIP 包，请点击「浏览器下载」手动获取'
     return
   }
   downloading.value = true
+  downloadFinished.value = false
   errorMessage.value = ''
+  confirmingCancel.value = false
+  progress.value = { received: 0, total: updateInfo.value.assetSize || 0, percent: 0, speed: 0 }
 
   try {
     const res = await api.downloadUpdate({
       url: updateInfo.value.assetUrl,
-      fileName: updateInfo.value.assetName || `PicNest-v${updateInfo.value.latestVersion}-windows-x64.zip`
+      fileName: updateInfo.value.assetName || `PicNest-v${updateInfo.value.latestVersion}-windows-x64.zip`,
+      expectedSha256: updateInfo.value.expectedSha256 || null
     })
 
     if (res?.ok) {
@@ -210,7 +349,9 @@ async function startDownload() {
       downloadedFilePath.value = res.filePath
     } else {
       downloading.value = false
-      errorMessage.value = res?.error || '下载更新包失败'
+      if (!res?.cancelled) {
+        errorMessage.value = res?.error || '下载更新包失败'
+      }
     }
   } catch (err) {
     downloading.value = false
@@ -218,300 +359,426 @@ async function startDownload() {
   }
 }
 
-// 取消下载
 async function cancelDownload() {
   try {
     await api.cancelDownloadUpdate()
   } catch (e) {}
   downloading.value = false
+  confirmingCancel.value = false
   errorMessage.value = '已取消下载'
 }
 
-// 重启安装
 async function installAndRestart() {
-  if (!downloadedFilePath.value) return
+  if (!downloadedFilePath.value || installing.value) return
+  installing.value = true
+  installStageText.value = '正在校验并异步解压更新包…'
+  errorMessage.value = ''
+
   try {
     const res = await api.quitAndInstall({
       zipPath: downloadedFilePath.value
     })
     if (!res?.ok) {
-      errorMessage.value = res?.error || '启动替换进程失败'
+      installing.value = false
+      errorMessage.value = res?.error || '启动热替换进程失败'
     }
   } catch (err) {
+    installing.value = false
     errorMessage.value = String(err?.message || err)
   }
 }
 
-// 监听下载进度
 let unbindProgress = null
-onMounted(() => {
+let unbindStatus = null
+
+onMounted(async () => {
+  try {
+    const vRes = await api.appVersion()
+    if (vRes?.version) currentVer.value = vRes.version
+  } catch (e) {}
+
   if (api.onUpdateProgress) {
     unbindProgress = api.onUpdateProgress((p) => {
-      progress.value = p
+      if (p) progress.value = p
+    })
+  }
+  if (api.onUpdateStatus) {
+    unbindStatus = api.onUpdateStatus((s) => {
+      if (s?.text) installStageText.value = s.text
     })
   }
 })
 
 onUnmounted(() => {
   if (typeof unbindProgress === 'function') unbindProgress()
+  if (typeof unbindStatus === 'function') unbindStatus()
 })
 
-// 暴露给父组件通过 ref 调用
 defineExpose({
   open,
-  close
+  runManualCheck,
+  close: requestClose,
+  isOpen: () => visible.value
 })
 </script>
 
 <style scoped>
-.update-mask {
+.up-layer {
   position: fixed;
   inset: 0;
-  z-index: 9999;
-  background: rgba(0, 0, 0, 0.45);
-  backdrop-filter: blur(8px);
+  z-index: 960;
+  background: rgba(20, 18, 14, 0.42);
+  backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
   justify-content: center;
-  animation: fadeIn 0.22s ease-out;
 }
 
-.update-card {
-  width: 480px;
-  max-width: 90vw;
-  background: var(--bg-panel, #ffffff);
-  border: 1px solid var(--border-soft, rgba(0, 0, 0, 0.08));
-  border-radius: 14px;
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.22), 0 0 0 1px rgba(255, 255, 255, 0.15) inset;
+.up-card {
+  width: min(500px, 92vw);
+  background: var(--panel-strong);
+  backdrop-filter: blur(var(--blur)) saturate(1.1);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: var(--shadow-float);
+  color: var(--text);
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  animation: popIn 0.25s cubic-bezier(0.18, 0.89, 0.32, 1.28);
+  animation: up-pop 0.2s var(--ease-overshoot);
 }
 
-.card-header {
-  padding: 18px 20px 14px;
+@keyframes up-pop {
+  from { opacity: 0; transform: translateY(10px) scale(0.97); }
+  to { opacity: 1; transform: none; }
+}
+
+.up-head {
+  padding: 16px 18px 13px;
   display: flex;
   align-items: center;
-  gap: 14px;
-  border-bottom: 1px solid var(--border-soft, rgba(0, 0, 0, 0.06));
+  gap: 12px;
+  border-bottom: 1px solid var(--border);
 }
 
-.icon-bubble {
-  width: 40px;
-  height: 40px;
+.up-icon {
+  width: 38px;
+  height: 38px;
   border-radius: 10px;
-  background: var(--accent-light, #fef4e2);
-  color: var(--accent, #d49a37);
+  background: var(--accent-weak);
+  color: var(--accent);
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
 }
-.up-svg {
-  width: 22px;
-  height: 22px;
+.up-icon.latest {
+  background: rgba(46, 160, 110, 0.14);
+  color: #2ea06e;
+}
+.up-icon.error {
+  background: rgba(194, 90, 77, 0.14);
+  color: #c25a4d;
 }
 
-.title-group {
+.up-svg {
+  width: 20px;
+  height: 20px;
+}
+.up-svg.spin {
+  animation: up-spin 1.2s linear infinite;
+}
+@keyframes up-spin {
+  to { transform: rotate(360deg); }
+}
+
+.up-titles {
   flex: 1;
   min-width: 0;
 }
-.main-title {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--text-main, #222);
+.up-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
-.main-title span {
-  color: var(--accent, #d49a37);
-  margin-left: 4px;
-}
-
-.sub-title {
+.up-ver-badge {
   font-size: 12px;
-  color: var(--text-muted, #888);
+  font-weight: 600;
+  padding: 1px 8px;
+  border-radius: 99px;
+  background: var(--accent-weak);
+  color: var(--accent);
+  border: 1px solid var(--border);
+}
+.up-sub {
+  font-size: 11.5px;
+  color: var(--text-2);
   margin-top: 2px;
 }
-.dot {
-  margin: 0 4px;
+.up-dot {
+  margin: 0 5px;
 }
 
-.close-btn {
-  background: transparent;
+.up-close {
+  width: 28px;
+  height: 28px;
   border: none;
-  font-size: 16px;
-  color: var(--text-muted, #999);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 13px;
   cursor: pointer;
-  padding: 6px;
-  border-radius: 6px;
-  line-height: 1;
 }
-.close-btn:hover {
-  background: var(--bg-hover, rgba(0, 0, 0, 0.05));
-  color: var(--text-main, #333);
+.up-close:hover:not(:disabled) {
+  background: var(--accent-weak);
+  color: var(--text);
+}
+.up-close:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
-.changelog-box {
-  padding: 14px 20px;
-  max-height: 220px;
+.up-state-box {
+  padding: 20px 20px 18px;
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--text);
+}
+.up-state-text b {
+  color: var(--accent);
+}
+.up-state-hint {
+  margin-top: 8px;
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+
+.up-notes-wrap {
+  padding: 14px 18px 10px;
   display: flex;
   flex-direction: column;
 }
-.changelog-title {
-  font-size: 12.5px;
+.up-notes-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
   font-weight: 600;
-  color: var(--text-muted, #777);
-  margin-bottom: 8px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+  color: var(--text-2);
+  margin-bottom: 7px;
 }
-.changelog-content {
-  flex: 1;
+.up-size-tag {
+  font-weight: 500;
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 6px;
+  background: var(--bg-2);
+  color: var(--text-2);
+}
+
+.up-notes-body {
+  max-height: 210px;
   overflow-y: auto;
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--text-main, #333);
-  padding: 10px 12px;
-  background: var(--bg-input, rgba(0, 0, 0, 0.03));
-  border-radius: 8px;
+  font-size: 12.5px;
+  line-height: 1.68;
+  color: var(--text);
+  padding: 10px 13px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
   user-select: text;
+  scrollbar-width: thin;
 }
 :deep(.md-h2) {
-  font-weight: 600;
-  font-size: 13.5px;
-  margin: 6px 0 2px;
-  color: var(--accent, #d49a37);
+  font-weight: 700;
+  font-size: 13px;
+  margin: 6px 0 3px;
+  color: var(--accent);
 }
 :deep(.md-h3) {
   font-weight: 600;
-  font-size: 13px;
-  margin: 4px 0 2px;
+  font-size: 12.5px;
+  margin: 5px 0 2px;
+  color: var(--text);
 }
 :deep(.md-li) {
   padding-left: 6px;
 }
-
-.asset-meta {
-  padding: 0 20px 10px;
-  font-size: 12px;
-  color: var(--text-muted, #888);
-}
-
-.progress-section {
-  padding: 4px 20px 14px;
-}
-.progress-bar-bg {
-  width: 100%;
-  height: 8px;
-  background: var(--border-soft, rgba(0, 0, 0, 0.08));
+:deep(code) {
+  padding: 1px 5px;
   border-radius: 4px;
-  overflow: hidden;
-}
-.progress-bar-fill {
-  height: 100%;
-  background: linear-gradient(90deg, var(--accent, #d49a37), #f5be58);
-  border-radius: 4px;
-  transition: width 0.2s ease;
-}
-.progress-bar-fill.finished {
-  background: #39c5bb;
-}
-.progress-labels {
-  display: flex;
-  justify-content: space-between;
-  font-size: 11.5px;
-  color: var(--text-muted, #777);
-  margin-top: 6px;
-}
-.finish-text {
-  color: #2bb1a7;
-  font-weight: 500;
+  background: var(--panel-strong);
+  font-family: Consolas, monospace;
+  font-size: 11px;
 }
 
-.error-tip {
-  margin: 0 20px 12px;
-  padding: 8px 12px;
-  background: rgba(220, 53, 69, 0.1);
-  color: #dc3545;
-  border-radius: 6px;
-  font-size: 12px;
-}
-
-.card-actions {
-  padding: 14px 20px;
-  background: var(--bg-sub, rgba(0, 0, 0, 0.02));
-  border-top: 1px solid var(--border-soft, rgba(0, 0, 0, 0.06));
+.up-sha-row {
+  padding: 0 18px 10px;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-2);
+}
+.up-sha-tag {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(46, 160, 110, 0.13);
+  color: #2ea06e;
+  font-weight: 600;
+}
+.up-sha-row code {
+  font-family: Consolas, monospace;
+  color: var(--text-2);
 }
 
-.action-spacer {
+.up-prog-wrap {
+  padding: 4px 18px 12px;
+}
+.up-prog-track {
+  width: 100%;
+  height: 7px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  overflow: hidden;
+}
+.up-prog-bar {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 99px;
+  transition: width 0.2s ease;
+}
+.up-prog-bar.done {
+  background: #2ea06e;
+}
+.up-prog-bar.busy {
+  background: linear-gradient(90deg, var(--accent), #2ea06e, var(--accent));
+  background-size: 200% 100%;
+  animation: up-shimmer 1.4s linear infinite;
+}
+@keyframes up-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: 0 0; }
+}
+
+.up-prog-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11.5px;
+  color: var(--text-2);
+  margin-top: 6px;
+}
+.up-done-text {
+  color: #2ea06e;
+  font-weight: 600;
+}
+.up-status-text {
+  color: var(--accent);
+  font-weight: 600;
+}
+.up-speed {
+  font-family: Consolas, monospace;
+}
+
+.up-err-banner {
+  padding: 9px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(194, 90, 77, 0.35);
+  background: rgba(194, 90, 77, 0.09);
+  color: #c25a4d;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.up-err-inline {
+  margin: 0 18px 12px;
+}
+
+.up-confirm-bar {
+  margin: 0 18px 12px;
+  padding: 9px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+}
+.up-confirm-btns {
+  display: flex;
+  gap: 6px;
+}
+
+.up-foot {
+  padding: 12px 18px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.up-spacer {
   flex: 1;
 }
 
-.action-btn {
-  padding: 7px 15px;
-  font-size: 13px;
+.up-btn {
+  padding: 6px 13px;
+  font-size: 12px;
+  font-weight: 600;
   border-radius: 8px;
-  cursor: pointer;
   border: 1px solid transparent;
-  font-weight: 500;
-  transition: all 0.18s ease;
+  cursor: pointer;
+  transition: all 0.15s ease;
 }
-
-.text-btn {
-  background: transparent;
-  color: var(--text-muted, #888);
-  padding: 7px 8px;
+.up-btn-sm {
+  padding: 4px 10px;
+  font-size: 11.5px;
 }
-.text-btn:hover {
-  color: var(--text-main, #333);
-}
-
-.sec-btn {
-  background: var(--bg-hover, rgba(0, 0, 0, 0.05));
-  border-color: var(--border-soft, rgba(0, 0, 0, 0.08));
-  color: var(--text-main, #444);
-}
-.sec-btn:hover {
-  background: var(--bg-active, rgba(0, 0, 0, 0.09));
-}
-
-.prim-btn {
-  background: linear-gradient(135deg, var(--accent, #d49a37), #bf8426);
-  color: #fff;
-  box-shadow: 0 2px 8px rgba(212, 154, 55, 0.35);
-}
-.prim-btn:hover {
-  filter: brightness(1.08);
-  transform: translateY(-1px);
-}
-.prim-btn:active {
-  transform: translateY(0);
-}
-.prim-btn.disabled {
-  opacity: 0.6;
+.up-btn:disabled {
+  opacity: 0.55;
   cursor: not-allowed;
-  transform: none;
-}
-.finish-btn {
-  background: linear-gradient(135deg, #39c5bb, #25a097);
-  box-shadow: 0 2px 10px rgba(57, 197, 187, 0.4);
 }
 
-@keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
+.up-btn-text {
+  background: transparent;
+  color: var(--text-2);
+  padding: 6px 8px;
 }
-@keyframes popIn {
-  from {
-    opacity: 0;
-    transform: scale(0.94) translateY(8px);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1) translateY(0);
-  }
+.up-btn-text:hover {
+  color: var(--text);
+  background: var(--accent-weak);
+}
+
+.up-btn-sec {
+  background: var(--bg-2);
+  border-color: var(--border);
+  color: var(--text);
+}
+.up-btn-sec:hover:not(:disabled) {
+  background: var(--accent-weak);
+  border-color: var(--accent);
+}
+
+.up-btn-prim {
+  background: var(--accent);
+  color: #fff;
+}
+.up-btn-prim:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.up-btn-ready {
+  background: #2ea06e;
+  color: #fff;
+}
+
+.up-btn-danger {
+  background: #c25a4d;
+  color: #fff;
 }
 </style>

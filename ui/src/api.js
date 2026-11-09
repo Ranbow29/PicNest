@@ -59,11 +59,14 @@ export const api = {
   psdPreview: (filePath) => invoke('picnestPsdPreview', filePath),
   viewPreview: (filePath) => invoke('picnestViewPreview', filePath),
   // 自动更新
+  appVersion: () => invoke('picnestAppVersion'),
+  openExternal: (url) => invoke('picnestOpenExternal', url),
   checkUpdate: (opts) => invoke('picnestCheckUpdate', opts),
   downloadUpdate: (opts) => invoke('picnestDownloadUpdate', opts),
   cancelDownloadUpdate: () => invoke('picnestCancelDownloadUpdate'),
   quitAndInstall: (opts) => invoke('picnestQuitAndInstall', opts),
   onUpdateProgress: (cb) => p().onPicnestUpdateProgress?.(cb),
+  onUpdateStatus: (cb) => p().onPicnestUpdateStatus?.(cb),
 }
 
 // 本地文件（缩略图/原图）→ 可用的 img src

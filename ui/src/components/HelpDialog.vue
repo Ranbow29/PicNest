@@ -4,9 +4,20 @@ import { useLibrary } from '../stores/library'
 
 const lib = useLibrary()
 
+import { ref, onMounted } from 'vue'
+import { api } from '../api.js'
+
+const appVer = ref('0.1.0')
+onMounted(async () => {
+  try {
+    const r = await api.appVersion()
+    if (r?.version) appVer.value = r.version
+  } catch (e) {}
+})
+
 function triggerCheckUpdate() {
-  lib.closeHelp();
-  window.dispatchEvent(new CustomEvent('picnest-check-update-trigger'));
+  lib.closeHelp()
+  window.dispatchEvent(new CustomEvent('picnest-check-update-trigger'))
 }
 
 </script>
@@ -213,7 +224,7 @@ function triggerCheckUpdate() {
 
           <div class="hp-foot">
             <div class="hp-version-row">
-              <span class="hp-ver-text">PicNest 图巢 v0.1.0 · 基于 GPL-3.0 纯净开源</span>
+              <span class="hp-ver-text">PicNest 图巢 v{{ appVer }} · 基于 GPL-3.0 纯净开源</span>
               <button class="hp-update-btn" @click="triggerCheckUpdate">🚀 检查新版本</button>
             </div>
             提示：所有「删除」默认进图巢回收站；「应用为手动排序」和「排序同步文件名」是真实的磁盘改名操作，确认前请看清提示。

@@ -28,10 +28,12 @@ import InspResize from './components/InspResize.vue'
 const lib = useLibrary()
 
 const updateDialogRef = ref(null)
+let silentUpdateTimer = null
 
 // 自动检测更新 (启动 5 秒后静默检测)
 async function checkForUpdatesSilently() {
   try {
+    if (updateDialogRef.value?.isOpen?.()) return
     const res = await api.checkUpdate()
     if (res?.ok && res.hasUpdate) {
       const skipped = localStorage.getItem('picnest.skipUpdateTag')
@@ -41,26 +43,13 @@ async function checkForUpdatesSilently() {
   } catch (e) {}
 }
 
-// 手动检查更新 (由帮助页或全局触发)
-async function checkForUpdatesManual() {
-  try {
-    const res = await api.checkUpdate({ manual: true })
-    if (res?.ok) {
-      if (res.hasUpdate) {
-        updateDialogRef.value?.open(res)
-      } else {
-        alert(`当前已是最新版本 (v${res.currentVersion || '0.1.0'}) ~ ✨`)
-      }
-    } else {
-      alert(`检查更新失败: ${res?.error || '网络连接异常'}`)
-    }
-  } catch (err) {
-    alert(`检查更新异常: ${String(err?.message || err)}`)
-  }
+// 手动检查更新 (由帮助页或全局触发，全程使用奶玻璃 UpdateDialog 展示状态)
+async function checkForUpdatesManual(ev) {
+  const opts = (ev && typeof ev === 'object' && 'detail' in ev) ? (ev.detail || {}) : (ev || {})
+  return await updateDialogRef.value?.runManualCheck?.(opts)
 }
 
 window.__picnestCheckUpdate__ = checkForUpdatesManual
-window.addEventListener('picnest-check-update-trigger', checkForUpdatesManual)
 
 /* 详情固定高度 = 用户偏好，但必须随窗口收缩钳制：否则最大化时设的 1137px 在窗口变矮后
    会从底部往上顶出视口（顶部内容被窗控盖住）。只影响显示，不改用户存的值；窗口放大后恢复。 */
@@ -95,6 +84,7 @@ function onKeydown(e) {
   if (key === 'escape') {
     /* 分层退出：输入框/灯箱/弹窗/右键菜单各有其主，都没有才清空选中 */
     if (isTypingTarget(e.target)) return
+    if (updateDialogRef.value?.isOpen?.()) { e.preventDefault(); updateDialogRef.value.close(); return }
     if (lib.helpOpen) { e.preventDefault(); lib.closeHelp(); return }
     if (lib.pluginsOpen) { e.preventDefault(); lib.closePlugins(); return }
     if (lib.lightbox.open) return // Lightbox 自己处理（含裁剪态）
@@ -139,6 +129,8 @@ function onNativeDragOutOver(e) {
 onMounted(() => {
   lib.init()
   refreshPluginThemes().catch(() => {}) // 启动时应用已启用的主题插件
+  window.addEventListener('picnest-check-update-trigger', checkForUpdatesManual)
+  silentUpdateTimer = setTimeout(checkForUpdatesSilently, 5000)
   window.addEventListener('keydown', onKeydown)
   window.addEventListener('drop', clearDropUi, true)
   window.addEventListener('dragend', clearDropUi, true)
@@ -166,6 +158,8 @@ onBeforeUnmount(() => {
   window.removeEventListener('dragenter', onNativeDragOutOver, true)
   window.removeEventListener('dragover', onNativeDragOutOver, true)
   window.removeEventListener('drop', onNativeDragOutOver, true)
+  if (silentUpdateTimer) clearTimeout(silentUpdateTimer)
+  window.removeEventListener('picnest-check-update-trigger', checkForUpdatesManual)
   browseRO?.disconnect()
 })
 
