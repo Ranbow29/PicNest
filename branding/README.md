@@ -55,15 +55,13 @@
 
 ## 终稿方向：黑底 N 标（`final/`）
 
-按你给的黑底 N 截图重做了一版，保留「黑底 + 纸白 N + 金色蛋点」的结构，细节按我的方式收了：
+最终采用你在 `PicNest-logo-template.psd` 里保留的 C 层（黑底 N + 金点）。仓库里保存了这份 PSD 原件，图标由它的可见层导出：
 
-- 暖黑 tile `#1B1A18`，22.5% 圆角；纸白 N `#F5EFE3`，金点 `#C18B3F`。
-- N 由三笔组成：左竖、与左竖留一道小缝的上挑斜线、右竖；右竖圆头压住金点左下，金点像巢里的蛋。
-- 1024 画布，80% 安全区；16px 仍能读出 N + 金点。
-- 文件：
-  - `final/picnest-icon.svg`（矢量源）
-  - `final/picnest-icon-1024.png` 及 512/256/128/64/48/32/16
-  - `final/picnest.ico`（16/24/32/48/64/128/256 多尺寸，Windows 用）
-  - `final/preview-icon.png`（浅底/深底缩小检查）
+- `final/PicNest-logo.psd`（最终母版，2048 × 2048，参考层均已隐藏）
+- `final/picnest-icon-2048.png` / 1024 / 512 / 256 / 128 / 64 / 48 / 32 / 16
+- `final/picnest.ico`（16/24/32/48/64/128/256 多尺寸，Windows 用）
+- `final/preview-icon.png`（浅底/深底 + 缩小可读性检查）
 
-这版是 app 图标方向；要接入 PicNest 的窗口图标 / exe 资源时，用 1024 PNG 和 `picnest.ico` 即可。侧栏品牌字标仍保持「图巢 / PicNest」文字，不混入图标。
+终稿已接入 PicNest 的窗口/任务栏图标（`app/_internal_data/icon.png` 与 `icon.ico`，原件备份为 `icon-old.*`）。`PicNest.exe` 文件本身的内嵌图标仍是旧图，需用 rcedit/Resource Hacker 之类工具改 exe 资源；窗口与任务栏已生效。
+
+几何版 N（无笔刷细节）保留为备选矢量：`concepts/monogram-geometric-draft.svg`，只在需要重新矢量化时参考。侧栏品牌字标仍保持「图巢 / PicNest」文字，不混入图标。
