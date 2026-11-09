@@ -156,13 +156,25 @@ function onWheel(e) {
   const s0 = b.scale || 1
   const s1 = Math.min(8, Math.max(0.2, s0 * (e.deltaY < 0 ? 1.12 : 1 / 1.12)))
   if (s1 === s0) return
-  /* 以光标为锚点缩放 */
+  const wasPan = pan.active
+  /* 拖动中滚轮：先落当前位移，锚点缩放后重设 pan 基准，避免下一次 pointermove 用旧 base 回弹 */
+  if (wasPan) { b.tx = pan.tx; b.ty = pan.ty }
   const rect = e.currentTarget.getBoundingClientRect()
   const px = e.clientX - (rect.left + rect.width / 2)
   const py = e.clientY - (rect.top + rect.height / 2)
   b.tx = px - (s1 / s0) * (px - (b.tx || 0))
   b.ty = py - (s1 / s0) * (py - (b.ty || 0))
   b.scale = s1
+  if (wasPan) {
+    if (pan.raf) { cancelAnimationFrame(pan.raf); pan.raf = 0 }
+    pan.x0 = e.clientX
+    pan.y0 = e.clientY
+    pan.tx0 = b.tx
+    pan.ty0 = b.ty
+    pan.tx = b.tx
+    pan.ty = b.ty
+    applyPan(pan.tx, pan.ty)
+  }
 }
 function onContext(e) {
   const m = lib.images.find((i) => i.file_path === lib.brief.path)

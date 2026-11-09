@@ -496,3 +496,8 @@ PicNest/
     ③ **预览/原图阈值**沿用 2048：Lightbox `scale×max(w,h)>2200` 或裁剪才用 full；Brief `scale≥2`。canvas 不依赖 DOM 大图纹理，1:1/2× 下仍只画可视区域。
     ④ **实测**（PSD 4203×5939）：Lightbox canvas 适配与 1:1 平移均 1000+ 帧 / 6s，avg 5.7ms、p95 ≈6.2–6.3ms、0 帧 >33ms；Brief canvas 适配与 2× 平移同样 avg 5.7ms、p95 ≈6.1–6.2ms、0 帧 >33ms。截图确认 canvas 正常出图、PSD 预览/整幅切换无空白。
     ⑤ **限制**：当前是单 canvas + 可视源裁剪，不是 Eagle 的多级 tile cache/worker；超大图首次加载 full 仍有一次解码开销，裁剪/旋转回退 `<img>` 时高倍平移可能仍抖。
+
+84. **拖动中滚轮缩放抽搐修复（2026-11-10，Feb 报「拖动的时候滚轮加减大小有抽搐感」）**：
+    ① **根因**：pan 在 pointerdown 时冻结 `baseTx/baseTy`；滚轮改变 scale/tx/ty 后，下一次 pointermove 仍用旧 base 计算 `tx = base + delta`，把锚点缩放的结果顶回去；CanvasStage 的 props watch 又会把内部 view 拉回 store 的旧 tx/ty，形成一帧回弹/抽搐。
+    ② **解法**（与网上通用 pan/zoom 状态驱动做法一致）：滚轮时如果 `pan.active`，先把当前拖动位移写进 store → 以光标为锚点计算新的 tx/ty/scale → **把 pan 的 start/base 重设到当前光标与新 tx/ty** → 取消挂起的 rAF 并立即重绘；之后 pointermove 从新基准继续。Lightbox 同时补上光标锚点缩放（此前滚轮只改 scale，中心缩放）。Brief 原有锚点缩放也补同样的 pan 重基准。
+    ③ **参考**：状态驱动/逆变换、zoom-to-cursor、避免 stale translation 的通用做法（CSDN、Stack Overflow、php.cn 等；不引入第三方库）。
