@@ -386,3 +386,9 @@ PicNest/
     ④ 坑：改 Inspector 时删掉 `const palette = ref([])`/`paletteLoading` 会直接让整个 `<aside class="inspector">` 渲染失败（Vue 捕获 ReferenceError → DOM 里连 `.inspector` 都没有），排查时先看 console.error。
 
 57. **窗口收缩后详情浮岛溢出（2026-11-09，Feb 报）**：详情固定高度存在 localStorage（`inspectorHeight`，如最大化时设到 1137px）；窗口从大框缩小时 CSS 仍用 `--insp-h: 1137px` + `bottom:10`，浮岛向上顶出视口、顶部被窗控盖住。修法：App.vue 用 `ResizeObserver` 监听 `.browse` 高度，渲染用 `inspEffH = min(inspectorHeight, browseH - 50)` 写进 `--insp-h`（偏好值保留，窗口放大自动恢复）；`.insp-overlay` 同值。`InspResize` 起拖的 `h0` 改用当前显示高度（`insp.height`）而不是偏好值，避免钳制后拖拽跳变。实测 1400×901 → 1000×651：偏好 1137 不变，`--insp-h` 821→570，浮岛 y=48/h=570/bottom=618 不越界；恢复窗口后回到 820。
+
+58. **手动排序新图置顶 + 图片加载失败优化（2026-11-09，Feb 问）**：
+    ① **新图置顶本来就是既有语义**：`insertImage`/`insertImagesBatch` 默认 `sort_order=0`，`picnest-move-image` 显式置 0；manual SQL `(sort_order=0) DESC, sort_order ASC, id DESC`。临时根实测：手动排序后外部复制 `c.png` → watcher/sync 入库 → 列表 `c,01_b,02_a`（顶部）；多条新图按 id DESC。唯一例外：全量 `scan-folder`（新增根时）会按遍历序号写 sort_order。
+    ② **网格不再直链原图**：`picnest-display-thumbs` 生成 1024px `-d1024.webp`（sharp `failOn:'none'`、并发 2、缓存名含 modify_time），store `displayThumbs` 按 `{p,m}` 缓存；cells 取源顺序 = 显示图 → 400 thumb → 原图（gif 大格例外）。实测临时根 3 张有效大图 src 全部 `-d1024.webp`，`srcHasOriginal=0`。
+    ③ **失败降级链**：`imgFix` 状态机 显示图/原图失败→400 thumb；thumb 失败→原图带 `&r=n` 重试一次；再失败→`.noimg.broken`（点击重试）。灯箱 `stageUrl` 与 Inspector 预览也做「原图→缩略图→占位」，灯箱两端都失败显示“图片加载失败”。损坏 PNG 探针：`bad.png` 入库后 1 个 broken 占位，不裂图。
+    ④ **依据**（WebSearch）：Chromium decoded-image 工作集默认约 128MB，RGBA 2700×4000 单张 40MB+，并行解码触顶会 `EncodingError`；`decode()` 拒绝 ≠ 文件损坏；最佳实践 = 网格只加载有界缩略图、原图仅显式预览、onerror 降级。命令 `img.loading=lazy` + `decoding=async`。
