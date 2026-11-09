@@ -436,3 +436,10 @@ PicNest/
     ② **新增 `docs/HANDOFF-GEMINI.md`**：面向开源接手者的独立交接，含仓库现状（无 remote、根 README/LICENSE 缺失、`app/` 1.4GB 被 ignore、121 个跟踪文件）、GPL-3.0 义务与 PicRand 归属、**主进程/preload 对应源码缺口与两种补救方案**、隐私脱敏（docs 含真实路径/素材统计，建议新建公开仓库或重写历史）、第三方许可证/资产、已实现功能验收基线、已知限制、P0/P1/P2 开源 TODO、smoke 命令与交接结论。
     ③ **仓库状态**：`docs/HANDOFF.md` 顶部与 P0 段加入指向新文档的链接；最终检查点标签 `checkpoint-2026-11-09-final`。功能封版，后续新功能走插件或新分支。
     ④ 未做（留给 Gemini）：根 README/LICENSE/NOTICE、主进程源码入库、exe resedit 脚本固化、CI/Release、采集 token、扩展上架、插件 registry 签名。
+
+74. **浏览页直接拖到 CSP / PS（2026-11-09，Feb 指定「把图拖进 CSP 或 PS，我电脑只装了 CSP」）**：
+    ① **交互**：普通拖动保持图巢内部排序/移动；**Alt+拖动图片**，或从卡片右上角悬停出现的 **↗ 手柄**起拖 = Electron 原生文件拖拽，可拖进 Clip Studio Paint / Photoshop / 资源管理器；多选后拖其中一张会带上全部选中文件。帮助第 3 节补了说明。
+    ② **主进程**：新增 `picnest-start-drag`（`tools/patches/picnest-handlers.js`）→ `event.sender.startDrag({ file, files, icon })`；路径先 `fs.existsSync` 过滤，拖拽预览优先用首图（png/jpg/webp/gif/bmp）缩到 96px，失败回退 `_internal_data/icon.png`。preload 桥 `picnestStartDrag` + `onPicnestDragOutEnd`。
+    ③ **Windows 限制**：Electron 的 `startDrag` 与 HTML5 内部拖拽互斥（electron#7118），不能一个手势同时做两件事；所以用 Alt / ↗ 手柄明确分流，普通拖动不受影响。
+    ④ **落回保护**：原生拖出期间 `markNativeDragOut()`；App 在捕获阶段吞掉 `dragenter/dragover/drop` 的 Files，避免把刚拖出的文件落回 PicNest 时又当外部文件导入（会弹「重复添加」）。主进程 `startDrag` 结束（含失败/取消）在 finally 发 `picnest-drag-out-end`，渲染层延迟 500ms 清标记，60s 兜底。
+    ⑤ **实测**：build/apply 0 失败；CDP 确认 bridge `picnestStartDrag`/`onPicnestDragOutEnd` 均为 function、网格每张卡有 `.drag-out` 手柄、帮助文案已编译；Alt+拖动落回 PicNest 时，抑制前会弹重复添加（证明原生拖拽确实携带真实文件），抑制后不再弹。**实际拖入 CSP 画布需 Feb 手动确认**（未自动操作 CSP，避免动到正在编辑的画布）。
