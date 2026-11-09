@@ -122,6 +122,7 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 - 资料库右键新增 **「修复缩略图…」**：先统计缺失数并确认，再 `picnest-repair-thumbs` 用 `ensureQuickThumb`（sharp / PSD / 视频）并发 2 生成，进度走 `picnest-thumb-repair-progress` + 底部浮条（可停止）；完事刷新列表。可见格子仍保留按需补图（一次最多 80 张）。
 - 实测：4 张缺失 → 4 张补成 / 0 剩；全库 10,764 行从 10,450 个死路径清空后按需/批量重建。
 - **网格显示图（2026-11-09）**：网格不再直接解码原图（>500px 大格原图可能 10MB+，Chromium 解码缓存预算会偶发 `EncodingError`/裂图）。大格优先 `picnest-display-thumbs` 生成的 1024px 有界缓存（`md5(path|d1024|modify_time)-d1024.webp`，sharp 生成、并发 2、失败返回空串），没有就先显示 400 缩略图；加载失败链：显示图/400 → 原图带 nonce 重试一次 → `.noimg.broken`（点击重试）。灯箱/详情预览也有「原图→缩略图→无法预览」降级。`img` 统一 `loading="lazy" decoding="async"`；gif 大格仍保留原图动画。
+- **PSD 灯箱原图（2026-11-10）**：灯箱对 `.psd` 不再把原文件塞给 `<img>`（Chromium 解不了 PSD，只会 onerror 退回 400 缩略图）。新增 `picnest-psd-preview`：复用 `ensurePsdPng` 的整幅合成 PNG（ag-psd worker），缓存 PNG 比源 PSD 旧时先删再重建；`path.resolve` 统一路径避免同一 PSD 出现两套缓存。Lightbox 先显示缩略图占位，IPC 返回后切整幅 PNG；失败提示并回退缩略图。实测 `1.psd` 4203×5939，灯箱 natural 4203×5939，src 为 `psd-419e…png`（49MB）。缓存清理会保留 `psd-*` 文件。
 - **网页检索结论（2026-11-09）**：Chromium 的 decoded-image 工作集默认约 128MB，单张 2700×4000 RGBA ≈ 40MB+，并行多张会触顶；`img.decode()` 的 `EncodingError` 不能当作文件损坏的可靠信号；最佳实践是网格只加载有界缩略图、原图只留给显式预览（灯箱），并用 onerror 做降级而不是把 decode 失败当永久坏图。
 
 ### 标签（2026-11-09）

@@ -467,3 +467,9 @@ PicNest/
     ① **根因**：旧方案在渲染层每个 mousemove 都 IPC 到主进程，主进程用 `setBounds` 逐帧改窗口位置；非 100% DPI 下每次 setBounds 都可能触发尺寸重算/内容重排，窗口移动也不与合成器同步，所以拖窗口明显掉帧。Eagle 的窗口拖动是系统原生循环，自然顺。
     ② **修法**：改用 Chromium/Windows 原生拖拽区——`.bar-content`、`.brand`、`.page-head` 设 `-webkit-app-region: drag`；所有交互控件（button/input/a、`.vo-wrap`、`.zoom-slider`、`.search`、`.bar-controls`、`[data-no-drag]`）设 `no-drag`。删除渲染层 `startWindowDrag` mousedown 路径与 `winDrag.js`；Windows 原生移动循环负责跟手、DPI 与双击最大化。
     ③ **验证**：注入 app-region 后拖动标题栏窗口位移 46px；no-drag 按钮能收到点击且窗口不动；最终构建计算样式 `bar-content=drag / theme-btn=no-drag / bar-controls=no-drag`，真实拖动窗口位移 47px（+60 物理 /1.25）。拖动手感需 Feb 确认。
+
+79. **PSD 灯箱显示原图（2026-11-10，Feb 报「PSD 只在灯箱里显示缩略图，没有原图」）**：
+    ① **根因**：Lightbox 的 `url` 是原文件 `file://...psd`，Chromium 不能解码 PSD，`onStageError` 于是回退到 400 缩略图；而 `ensurePsdPng` 早就用 ag-psd worker 合成了整幅 PNG（`cacheDir/psd-<md5>.png`），只是没给灯箱用。
+    ② **修法**：新增主进程 `picnest-psd-preview`（handlers）：`path.resolve` 统一路径 → 若缓存 PNG 比源 PSD 旧先删 → `ensurePsdPng` 返回整幅 PNG；preload `picnestPsdPreview` + api `psdPreview`。Lightbox 增加 `isPsd/psdFull/psdLoading/psdError`：打开 PSD 时先显示 400 缩略图 + 「PSD 原图渲染中」提示，IPC 返回后切整幅 PNG；失败显示提示并回退缩略图。stageUrl 对 PSD 不再返回原 `.psd`。
+    ③ **实测**：`1.psd` → `picnest-psd-preview` 返回 49MB `psd-419e…png`；灯箱 `<img>` natural **4203×5939**，与 meta 尺寸一致，src 指向整幅 PNG，不是缩略图。首次 IPC 约 2.4s（随后缓存命中）。
+    ④ **代价**：整幅 PSD PNG 13–51MB/张，`cleanupOnExit` 会保留 `psd-*`；若后续 PSD 特别多，可考虑 6k 上限或 LRU（当前先保证“原图”）。

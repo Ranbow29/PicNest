@@ -26,25 +26,62 @@ const url = computed(() => {
 })
 const fileName = computed(() => String(lib.lightbox.path || '').split(/[\\/]/).pop())
 const hasTransform = computed(() => lib.viewer.rot % 360 !== 0 || lib.viewer.flopX)
+const isPsd = computed(() => extOf(lib.lightbox.path) === '.psd')
+/* PSD 原图：主进程用 ag-psd 合成整幅 PNG（不是 400/1024 缩略图），先显示缩略图占位 */
+const psdFull = ref('')
+const psdLoading = ref(false)
+const psdError = ref('')
 /* 大图加载兜底：原图失败→缩略图；都失败→错误提示（不显示裂图） */
 const stageFallback = ref(false)
 const stageDead = ref(false)
 const stageUrl = computed(() => {
   const img = meta.value
+  if (isPsd.value && psdFull.value && !stageFallback.value) {
+    return fileUrl(psdFull.value) + '?v=' + (img?.modify_time || 0)
+  }
   if (stageFallback.value && img?.thumbnail_path && img.thumbnail_path !== 'SKIP') {
     return fileUrl(img.thumbnail_path) + '?v=' + (img.modify_time || 0)
+  }
+  if (isPsd.value) {
+    if (img?.thumbnail_path && img.thumbnail_path !== 'SKIP') {
+      return fileUrl(img.thumbnail_path) + '?v=' + (img.modify_time || 0)
+    }
+    return ''
   }
   return url.value
 })
 function onStageError() {
   const img = meta.value
+  if (isPsd.value && psdLoading.value) return
+  if (isPsd.value && psdFull.value && !stageFallback.value) {
+    psdError.value = 'PSD 原图加载失败，显示缩略图'
+    stageFallback.value = true
+    return
+  }
   if (!stageFallback.value && img?.thumbnail_path && img.thumbnail_path !== 'SKIP') {
     stageFallback.value = true
     return
   }
   stageDead.value = true
 }
-watch(() => lib.lightbox.path, () => { stageFallback.value = false; stageDead.value = false })
+watch(() => lib.lightbox.path, async (p) => {
+  stageFallback.value = false
+  stageDead.value = false
+  psdFull.value = ''
+  psdError.value = ''
+  psdLoading.value = extOf(p) === '.psd'
+  if (!psdLoading.value) return
+  try {
+    const res = await api.psdPreview(p)
+    if (lib.lightbox.path !== p) return
+    if (res?.ok && res.path) psdFull.value = res.path
+    else psdError.value = res?.error || 'PSD 原图渲染失败'
+  } catch (e) {
+    if (lib.lightbox.path === p) psdError.value = String(e?.message || e)
+  } finally {
+    if (lib.lightbox.path === p) psdLoading.value = false
+  }
+}, { immediate: true })
 
 function fitToWindow() {
   if (!stageEl.value || kind.value === 'text') return
@@ -651,6 +688,9 @@ function onKey(e) {
       @error="onStageError"
       @dblclick="dblClick"
     />
+    <div v-if="isPsd && (psdLoading || psdError)" class="psd-note">
+      {{ psdError || 'PSD 原图渲染中，先显示缩略图…' }}
+    </div>
     <!-- 专业裁切层：覆盖在图片上（外部压暗 + 三分网格 + 手柄） -->
     <div v-if="lib.viewer.cropMode && layerRect" ref="cropLayer" class="crop-layer"
          :style="{ left: layerRect.left + 'px', top: layerRect.top + 'px', width: layerRect.width + 'px', height: layerRect.height + 'px' }"
@@ -899,5 +939,11 @@ function onKey(e) {
 .ask-btn b { font-size: 13px; }
 .ask-btn span { font-size: 11.5px; color: var(--text-2); }
 .ask-btn.ghost { align-items: center; color: var(--text-2); border-style: dashed; }
+.psd-note {
+  position: absolute; left: 50%; top: 78px; transform: translateX(-50%); z-index: 26;
+  padding: 5px 10px; border-radius: 8px; pointer-events: none;
+  background: rgba(20, 18, 14, 0.58); color: #fff; font-size: 11.5px;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.18);
+}
 .empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--text-2); }
 </style>
