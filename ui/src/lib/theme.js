@@ -15,6 +15,24 @@ const MODES = [
 const KEY = 'picnest.theme'
 const saved = localStorage.getItem(KEY)
 const mode = ref(MODES.some((m) => m.key === saved) ? saved : 'auto')
+let touched = false
+/* 启动后从 config.json 再对齐一次：localStorage 按 origin 隔离（dev 用 127.0.0.1、生产用 file://），
+   只靠它会把「切换过运行方式」误当成丢主题。config 是跨 origin 的真相；首次运行把旧值迁过去。 */
+;(async () => {
+  try {
+    const r = await window.picrand?.picnestThemeGet?.()
+    if (!r?.ok) return
+    const t = String(r.theme || '')
+    if (t && MODES.some((m) => m.key === t)) {
+      if (!touched && t !== mode.value) {
+        mode.value = t
+        localStorage.setItem(KEY, t)
+      }
+    } else if (!t) {
+      window.picrand?.picnestThemeSet?.(mode.value)
+    }
+  } catch { /* 静默：主题不是主流程阻断项 */ }
+})()
 
 const mq = window.matchMedia?.('(prefers-color-scheme: dark)')
 const systemDark = ref(!!mq?.matches)
@@ -39,8 +57,10 @@ export function useTheme() {
     resolved,
     setMode(key) {
       if (!MODES.some((m) => m.key === key)) return
+      touched = true
       mode.value = key
       localStorage.setItem(KEY, key)
+      try { window.picrand?.picnestThemeSet?.(key) } catch { /* 静默 */ }
     },
   }
 }

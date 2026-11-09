@@ -155,6 +155,15 @@ function findDupes() {
   const rootId = isLibrary ? menuNode.value?.id : lib.activeRootId
   run(() => lib.openDupFinder(rootId, rel))
 }
+/* 缩略图修复：资料库行 = 整个根；只补「缺图/缓存被清」的，已有缩略图不动 */
+function repairThumbs() {
+  const rootId = isLib.value ? menuNode.value?.id : lib.activeRootId
+  run(() => lib.repairThumbs(rootId))
+}
+/* 全局开关：手动排序时把顺序同步成文件名数字前缀（默认真改磁盘，谨慎开启） */
+function togglePhysOrder() {
+  run(() => lib.togglePhysicalOrder())
+}
 function sortLevel(mode) {
   const rel = relOf(menu.value.rel)
   const isLibrary = isLib.value
@@ -273,6 +282,8 @@ const sortItems = [
         <button v-if="!isLib" class="mi" @click="moveTo">移动到…</button>
         <button class="mi" @click="exportDir">导出（含子文件夹）</button>
         <button class="mi" @click="findDupes">查找重复…</button>
+        <button v-if="isLib" class="mi" @click="repairThumbs">修复缩略图…</button>
+        <button class="mi" title="手动排序时把顺序写成文件名数字前缀（会真实改名）" @click="togglePhysOrder">{{ lib.physicalOrder ? '✓ ' : '' }}排序同步文件名</button>
 
         <div class="mi group" @click.stop="toggle('color')">
           <span>图标颜色</span><i class="caret" :class="{ on: colorOpen }">▸</i>

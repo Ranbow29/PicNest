@@ -53,8 +53,9 @@ for rid, root in roots:
     truth = {}
     root_files = 0
     for dp, dns, fns in os.walk(root):
+        dns[:] = [d for d in dns if not d.startswith('.')]  # .picnest 等隐藏目录不参与对账
         rel = os.path.relpath(dp, root).replace(os.sep, '/')
-        n = sum(1 for f in fns if os.path.splitext(f)[1].lower() in EXTS)
+        n = sum(1 for f in fns if not f.startswith('.') and os.path.splitext(f)[1].lower() in EXTS)
         if rel == '.':
             root_files = n
             continue

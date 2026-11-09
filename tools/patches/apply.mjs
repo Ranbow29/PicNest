@@ -98,6 +98,21 @@ const patches = [
     from: "const exts = new Set(['.jpg','.jpeg','.png','.gif','.bmp','.webp','.tiff','.tif','.avif','.svg','.psd','.heic','.heif','.mp4','.webm','.mov','.mkv','.avi','.flv','.f4v'])",
     to: "const exts = new Set(['.jpg','.jpeg','.png','.gif','.bmp','.webp','.tiff','.tif','.avif','.svg','.psd','.heic','.heif','.mp4','.webm','.mov','.mkv','.avi','.flv','.f4v','.txt','.md','.markdown','.log','.json','.jsonc','.csv','.tsv','.ini','.cfg','.conf','.yaml','.yml']); /* PicNest:P9e */",
   },
+  {
+    /* 缩略图缓存目录不能叫 dataDir/cache：Windows 大小写不敏感，会和 Chromium 自己的
+       Cache（Cache_Data）撞在同一目录，浏览器缓存清理时连缩略图一起蒸发（实测生产 340MB
+       只剩 Cache_Data）。挪到 picnest-thumbs，旧文件由 picnestMigrateThumbCacheDir 搬过去。 */
+    id: 'P10', desc: '缩略图缓存目录 → dataDir/picnest-thumbs（避开 Chromium Cache 目录）',
+    from: 'const cacheDir = path.join(dataDir, "cache");',
+    to: 'const cacheDir = path.join(dataDir, "picnest-thumbs"); /* PicNest:P10 */',
+  },
+  {
+    /* scan 工作线程原本不跳过 . 开头的目录/文件；根目录里的 .picnest/meta.json 会被当文本图片入库。
+       补一行 dot 过滤（P9d 的 worker 模板里只有这一处 walk(dir)）。 */
+    id: 'P9f', desc: 'scan-worker 跳过 . 开头的隐藏目录/文件（.picnest 元数据目录不入库）',
+    from: '    if (entry.isDirectory()) { walk(path.join(dir, entry.name)); continue }',
+    to: '    if (entry.name.startsWith(".")) continue\n    if (entry.isDirectory()) { walk(path.join(dir, entry.name)); continue } /* PicNest:P9f */',
+  },
 ]
 
 let ok = 0, skip = 0, fail = 0
@@ -146,7 +161,9 @@ const bridge = [
   '  picnestRecent: (folderId, limit) => electron.ipcRenderer.invoke("picnest-recent", folderId, limit),',
   '  picnestImageOpened: (filePath) => electron.ipcRenderer.invoke("picnest-image-opened", filePath),',
   '  picnestDirMemoryGet: (key) => electron.ipcRenderer.invoke("picnest-dir-memory-get", key),',
-  '  picnestDirMemorySet: (key, patch) => electron.ipcRenderer.invoke("picnest-dir-memory-set", key, patch),',
+  '  picnestDirMemorySet: (rootId, rel, patch) => electron.ipcRenderer.invoke("picnest-dir-memory-set", rootId, rel, patch),',
+  '  picnestDirMemoryRootGet: (rootId) => electron.ipcRenderer.invoke("picnest-dir-memory-root-get", rootId),',
+  '  picnestDirMemoryRename: (rootId, oldRel, newRel) => electron.ipcRenderer.invoke("picnest-dir-memory-rename", rootId, oldRel, newRel),',
   '  onPicnestSeed: (cb) => electron.ipcRenderer.on("picnest-seed", (_e, d) => cb(d)),',
   '  picnestRmSeed: () => electron.ipcRenderer.invoke("picnest-rm-seed"),',
   '  picnestReveal: (filePath) => electron.ipcRenderer.invoke("picnest-reveal", filePath),',
@@ -196,6 +213,17 @@ const bridge = [
   '  picnestDirDupCheck: (srcDir, targetDir, folderId) => electron.ipcRenderer.invoke("picnest-dir-dup-check", srcDir, targetDir, folderId),',
   '  picnestDirDupCancel: () => electron.ipcRenderer.invoke("picnest-dir-dup-cancel"),',
   '  onPicnestDirDupProgress: (cb) => electron.ipcRenderer.on("picnest-dir-dup-progress", (_e, d) => cb(d)),',
+  '  picnestThumbsMissing: (folderId) => electron.ipcRenderer.invoke("picnest-thumbs-missing", folderId),',
+  '  picnestRepairThumbs: (folderId) => electron.ipcRenderer.invoke("picnest-repair-thumbs", folderId),',
+  '  picnestRepairThumbsCancel: () => electron.ipcRenderer.invoke("picnest-repair-thumbs-cancel"),',
+  '  onPicnestThumbRepairProgress: (cb) => electron.ipcRenderer.on("picnest-thumb-repair-progress", (_e, d) => cb(d)),',
+  '  picnestThemeGet: () => electron.ipcRenderer.invoke("picnest-theme-get"),',
+  '  picnestThemeSet: (theme) => electron.ipcRenderer.invoke("picnest-theme-set", theme),',
+  '  picnestRootMetaSave: (rootId) => electron.ipcRenderer.invoke("picnest-root-meta-save", rootId),',
+  '  picnestRootMetaLoad: (rootId) => electron.ipcRenderer.invoke("picnest-root-meta-load", rootId),',
+  '  picnestRootMetaEnsure: (rootId) => electron.ipcRenderer.invoke("picnest-root-meta-ensure", rootId),',
+  '  picnestPhysicalOrderImages: (folderId, orderedPaths) => electron.ipcRenderer.invoke("picnest-physical-order-images", folderId, orderedPaths),',
+  '  picnestPhysicalOrderDirs: (folderId, parentRel, names) => electron.ipcRenderer.invoke("picnest-physical-order-dirs", folderId, parentRel, names),',
   '  picnestCopyImages: (paths, targetDir) => electron.ipcRenderer.invoke("picnest-copy-images", paths, targetDir),',
   '  picnestCrop: (filePath, opts) => electron.ipcRenderer.invoke("picnest-crop", filePath, opts),',
   '  picnestCropAs: (filePath, opts) => electron.ipcRenderer.invoke("picnest-crop-as", filePath, opts),',

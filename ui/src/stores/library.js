@@ -106,6 +106,7 @@ export const useLibrary = defineStore('library', {
     layout: localStorage.getItem('picnest.layout') || 'grid',       // grid | justified | masonry（持久化）
     zoom: Number(localStorage.getItem('picnest.zoom')) || 1,          // 顶栏缩放滑条（持久化）
     sortMode: localStorage.getItem('picnest.sortMode') || 'name',    // name|added|mtime|size|dims|rating|random
+    physicalOrder: localStorage.getItem('picnest.physicalOrder') === '1', // 手动排序同步改文件名前缀（实验，默认关）
     sortAsc: localStorage.getItem('picnest.sortAsc') !== '0',
     randomNonce: 0,       // 随机排序的种子换代
     layoutTick: 0,        // 尺寸回填后触发重排
@@ -118,7 +119,7 @@ export const useLibrary = defineStore('library', {
     renaming: false,
     dupDialog: { open: false, items: [], targetRel: undefined, mode: 'files', count: 0, resolve: null },
     dupFinder: { open: false, rootId: null, rel: '', mode: 'exact', loading: false, canceling: false, canceled: false, progress: { done: 0, total: 0 }, groups: [], stats: null, error: '', selected: [], preserveExt: true, ai: defaultAiDupState() },
-    taskProgress: { visible: false, label: '', done: 0, total: 0, cancelable: false, canceling: false }, // 文件夹查重/长任务浮条
+    taskProgress: { visible: false, kind: '', label: '', done: 0, total: 0, cancelable: false, canceling: false }, // 长任务浮条（文件夹查重/缩略图修复）
     confirmDialog: { open: false, title: '', message: '', details: [], confirmText: '确定', danger: false, resolve: null },
     importResult: { open: false, nonce: 0, summary: '', details: [], tone: 'ok' }, // 录入汇总结果卡
     clipboard: { kind: '', paths: [], count: 0, root: false }, // 应用内复制剪贴板（kind: dirs | files）
@@ -203,6 +204,8 @@ export const useLibrary = defineStore('library', {
             api.startWatcher(r.path).catch(() => {})
             api.syncFolderSnapshot(r.path).then(() => { this.refreshTree(); this.loadImages() }).catch(() => {})
           }
+          /* 根目录没有 .picnest/meta.json 就自动建一个（有则不动） */
+          try { window.picrand?.picnestRootMetaEnsure?.(r.id) } catch { /* 静默 */ }
         }
         this.refreshTags().catch(() => {})
         // 主进程推送种子导入（验收钩子）：走正常导入链路
@@ -235,7 +238,13 @@ export const useLibrary = defineStore('library', {
         })
         window.picrand?.onPicnestDirDupProgress?.((d) => {
           const t = this.taskProgress
-          if (!t.visible) return
+          if (!t.visible || t.kind !== 'dirDup') return
+          t.done = d?.done || 0
+          t.total = d?.total || 0
+        })
+        window.picrand?.onPicnestThumbRepairProgress?.((d) => {
+          const t = this.taskProgress
+          if (!t.visible || t.kind !== 'thumbs') return
           t.done = d?.done || 0
           t.total = d?.total || 0
         })
@@ -352,9 +361,23 @@ export const useLibrary = defineStore('library', {
         this.roots = await api.getAllFolders()
         this.activeRootId = r.id
         this.syncCollectRoot()
+        /* 根目录里可能有 .picnest/meta.json（标签/文件夹色/手动排序）：有则恢复，无则创建 */
+        let meta = null
+        try { meta = await window.picrand?.picnestRootMetaLoad?.(r.id) } catch { /* 静默 */ }
         await this.refreshTree()
         await this.openDir(null)
         this.refreshTags().catch(() => {})
+        if (meta?.ok && meta.created && meta.counts) {
+          const c = meta.counts
+          const bits = []
+          if (c.tags) bits.push(`标签 ${c.tags}`)
+          if (c.tagLinks) bits.push(`标签关联 ${c.tagLinks}`)
+          if (c.images) bits.push(`图片元数据 ${c.images}`)
+          if (c.dirs) bits.push(`文件夹色 ${c.dirs}`)
+          if (c.dirOrder) bits.push(`文件夹排序 ${c.dirOrder}`)
+          if (c.imageOrder) bits.push(`图片排序 ${c.imageOrder}`)
+          if (bits.length) this.showNote(`已从根文件恢复元数据：${bits.join(' · ')}`)
+        }
       } catch (e) {
         this.error = String(e?.message || e)
       } finally {
@@ -367,7 +390,7 @@ export const useLibrary = defineStore('library', {
       if (this.activeRootId == null) return
       this.tree = await api.dirTree(this.activeRootId)
       this.counts = await window.picrand.picnestViewCounts(this.activeRootId)
-      this.dirMemory = await api.dirMemoryGet('') // 全表缓存：树渲染读颜色/展开态零 IPC
+      this.dirMemory = await api.dirMemoryRootGet(this.activeRootId) // 当前根切片（rel 键）：树渲染读颜色/展开态零 IPC
     },
 
     /* 资料库切换：同 id 忽略；全链路键 = activeRootId，tree/counts/images 按 folderId 自动重建 */
@@ -592,17 +615,10 @@ export const useLibrary = defineStore('library', {
       const fixSel = (x) => (x === rel ? newRel : (x || '').startsWith(rel + '/') ? newRel + x.slice(rel.length) : x)
       this.selectedDirs = this.selectedDirs.map(fixSel)
       if (this.dirAnchor != null) this.dirAnchor = fixSel(this.dirAnchor)
-      const oldNorm = oldAbs.replace(/[\\/]+$/, '').toLowerCase()
-      const nextMem = {}
-      for (const [k, v] of Object.entries(this.dirMemory || {})) {
-        const nk = fix(k)
-        let cover = v?.cover
-        if (typeof cover === 'string' && cover.toLowerCase().startsWith(oldNorm + '\\')) {
-          cover = r.path + cover.slice(oldAbs.length)
-        }
-        nextMem[nk] = cover !== v?.cover ? { ...v, cover } : v
-      }
-      this.dirMemory = nextMem
+      /* dirMemory 的根内键整体搬家（主进程同时同步封面绝对路径），再重新取切片 */
+      try { await api.dirMemoryRename(this.activeRootId, rel, newRel) } catch { /* 静默 */ }
+      this.dirMemory = await api.dirMemoryRootGet(this.activeRootId)
+      this.scheduleRootMetaSave()
       await this.refreshTree()
       await this.loadImages()
       return { ...r, rel: newRel }
@@ -610,14 +626,14 @@ export const useLibrary = defineStore('library', {
 
     async sortDir(rel, mode) {
       const r = await api.dirSort(rel || '', this.absPathOf(rel), mode)
-      if (r?.ok) await this.refreshTree()
+      if (r?.ok) { await this.refreshTree(); this.scheduleRootMetaSave() }
       else if (r?.error) this.error = r.error
       return r
     },
 
     async sortDirRecursive(rel, mode) {
       const r = await api.dirSortRecursive(this.absPathOf(rel), rel || '', mode)
-      if (r?.ok) await this.refreshTree()
+      if (r?.ok) { await this.refreshTree(); this.scheduleRootMetaSave() }
       else if (r?.error) this.error = r.error
       return r
     },
@@ -662,10 +678,102 @@ export const useLibrary = defineStore('library', {
       catch (e) { return { ok: false, error: String(e?.message || e) } }
     },
 
-    /* 文件夹记忆（颜色/展开态）：乐观更新本地 + 落 config.json */
+    /* 文件夹记忆（颜色/展开态/封面）：乐观更新本地 + 落当前根的 config 命名空间 */
     async patchDirMemory(rel, patch) {
       this.dirMemory = { ...this.dirMemory, [rel]: { ...(this.dirMemory[rel] || {}), ...patch } }
-      try { await api.dirMemorySet(rel, patch) } catch { /* 静默 */ }
+      try { await api.dirMemorySet(this.activeRootId, rel, patch) } catch { /* 静默 */ }
+      this.scheduleRootMetaSave()
+    },
+    /* 根文件本地元数据落盘（防抖；移出/退出时还会有主进程兜底） */
+    scheduleRootMetaSave(delay = 1200) {
+      if (this.activeRootId == null) return
+      clearTimeout(this._metaSaveTimer)
+      const rid = this.activeRootId
+      this._metaSaveTimer = setTimeout(() => {
+        try { window.picrand?.picnestRootMetaSave?.(rid) } catch { /* 静默 */ }
+      }, delay)
+    },
+    async flushRootMeta() {
+      clearTimeout(this._metaSaveTimer)
+      if (this.activeRootId == null) return null
+      try { return await window.picrand?.picnestRootMetaSave?.(this.activeRootId) } catch { return null }
+    },
+    /* 物理排序开关：手动排序时把顺序写进文件名前缀（默认关闭；改名会真实改磁盘文件） */
+    togglePhysicalOrder() {
+      this.physicalOrder = !this.physicalOrder
+      localStorage.setItem('picnest.physicalOrder', this.physicalOrder ? '1' : '0')
+      this.showNote(this.physicalOrder
+        ? '已开启：手动排序会同步改文件名（数字前缀）'
+        : '已关闭：排序只存在 PicNest 元数据里')
+    },
+    async applyImageOrderPhysical(paths) {
+      if (!this.physicalOrder || this.activeRootId == null) return null
+      try { return await window.picrand.picnestPhysicalOrderImages(this.activeRootId, [...paths]) } catch { return null }
+    },
+    async applyDirOrderPhysical(parentRel, names) {
+      if (!this.physicalOrder || this.activeRootId == null) return null
+      try { return await window.picrand.picnestPhysicalOrderDirs(this.activeRootId, parentRel || '', [...names]) } catch { return null }
+    },
+    fixRelsAfterDirRename(map) {
+      if (!Array.isArray(map) || !map.length) return
+      const fix = (rel) => {
+        if (rel == null) return rel
+        for (const m of map) {
+          if (rel === m.oldRel) return m.newRel
+          if (rel.startsWith(m.oldRel + '/')) return m.newRel + rel.slice(m.oldRel.length)
+        }
+        return rel
+      }
+      this.currentDirRel = fix(this.currentDirRel)
+      this.selectedDirs = this.selectedDirs.map(fix)
+      if (this.dirAnchor != null) this.dirAnchor = fix(this.dirAnchor)
+    },
+    /* 拖拽/插入后的文件夹顺序 → 可选物理改名；改名后整批刷新（路径全变了） */
+    async syncDirOrderPhysical(parentRel, names) {
+      const pr = await this.applyDirOrderPhysical(parentRel, names)
+      if (!pr) return null
+      if (pr.map?.length) {
+        this.fixRelsAfterDirRename(pr.map)
+        this.suppressSyncUntil = Date.now() + 2500
+        this.suppressWaveUntil = Date.now() + 1500
+        await this.refreshTree()
+        await this.loadImages()
+        this.scheduleRootMetaSave()
+        this.showNote(`文件夹顺序已同步到文件名（改名 ${pr.renamed} 个${pr.ok ? '' : '，部分失败'}）`)
+      } else if (!pr.ok) {
+        this.showNote(`顺序已存，但文件夹改名失败：${pr.errors?.[0] || pr.error || ''}`, [], 'error')
+      }
+      return pr
+    },
+    /* 缩略图批量修复（缺图/缓存被清）：后台生成，进度浮条可停止 */
+    async repairThumbs(rootId = this.activeRootId) {
+      const rid = rootId
+      if (rid == null) return { ok: false }
+      let n = 0
+      try { n = Number((await window.picrand.picnestThumbsMissing(rid))?.count) || 0 } catch { /* 静默 */ }
+      if (!n) { this.showNote('缩略图已齐，无需修复'); return { ok: true, total: 0 } }
+      const ok = await this.askConfirm({
+        title: `补 ${n} 张缩略图？`,
+        message: '缺失的缩略图会用原图重新生成；文件较大时会花一些时间，可随时停止。',
+        confirmText: '开始生成',
+      })
+      if (!ok) return { ok: false, canceled: true }
+      this.taskProgress = { visible: true, kind: 'thumbs', label: '正在生成缩略图', done: 0, total: n, cancelable: true, canceling: false }
+      try {
+        const r = await window.picrand.picnestRepairThumbs(rid)
+        if (!r?.ok) { this.showNote(r?.error || '缩略图生成失败', [], 'error'); return r }
+        if (rid === this.activeRootId) await this.loadImages()
+        const parts = [`缩略图补成 ${r.generated || 0} 张`]
+        if (r.failed) parts.push(`失败 ${r.failed}`)
+        if (r.canceled) parts.push('已停止')
+        this.showNote(parts.join(' · '), (r.failedNames || []).length ? [{ label: '失败样本', text: r.failedNames.join('、') }] : [], r.failed ? 'error' : 'ok')
+        return r
+      } catch (e) {
+        this.showNote(String(e?.message || e), [], 'error')
+        return { ok: false, error: String(e?.message || e) }
+      } finally {
+        this.taskProgress.visible = false
+      }
     },
     /* 把图片设为其所在文件夹的封面（子文件夹卡片用；库根散图没有卡片） */
     async setFolderCover(filePath, thumbPath) {
@@ -865,24 +973,24 @@ export const useLibrary = defineStore('library', {
       const ids = (imageIds || []).filter((x) => Number.isInteger(Number(x)) && Number(x) > 0)
       if (!ids.length) return { ok: false, error: '没有目标图片' }
       const r = await window.picrand.picnestTagAssign({ imageIds: ids, name, action: 'add' })
-      if (r?.ok) await this.refreshTags()
+      if (r?.ok) { await this.refreshTags(); this.scheduleRootMetaSave() }
       return r
     },
     async removeTagFromImages(imageIds, tagId) {
       const ids = (imageIds || []).filter((x) => Number.isInteger(Number(x)) && Number(x) > 0)
       if (!ids.length || !tagId) return { ok: false, error: '没有目标标签' }
       const r = await window.picrand.picnestTagAssign({ imageIds: ids, tagId, action: 'remove' })
-      if (r?.ok) await this.refreshTags()
+      if (r?.ok) { await this.refreshTags(); this.scheduleRootMetaSave() }
       return r
     },
     async renameTag(tagId, name) {
       const r = await window.picrand.picnestTagRename({ tagId, name })
-      if (r?.ok) await this.refreshTags()
+      if (r?.ok) { await this.refreshTags(); this.scheduleRootMetaSave() }
       return r
     },
     async deleteTag(tagId) {
       const r = await window.picrand.picnestTagDelete(tagId)
-      if (r?.ok) await this.refreshTags()
+      if (r?.ok) { await this.refreshTags(); this.scheduleRootMetaSave() }
       return r
     },
 
@@ -1559,6 +1667,7 @@ export const useLibrary = defineStore('library', {
         if (this.selectionAnchor === oldPath) this.selectionAnchor = r.file_path
         if (this.lightbox.path === oldPath) this.lightbox.path = r.file_path
         this.fillAllThumbsInBackground() // 新路径无缩略图，补
+        this.scheduleRootMetaSave()
         return r
       } catch (e) { return { ok: false, error: String(e?.message || e) } }
     },
@@ -1567,6 +1676,7 @@ export const useLibrary = defineStore('library', {
       try { await window.picrand.picnestSetImageMeta(path, patch) } catch { /* 静默 */ }
       const img = this.images.find((i) => i.file_path === path)
       if (img) Object.assign(img, patch)
+      this.scheduleRootMetaSave()
     },
 
     // 物理移动文件到本库内另一目录（详情面板文件夹编辑）
@@ -1583,6 +1693,7 @@ export const useLibrary = defineStore('library', {
             this.pruneImageSelection(filePath)
           }
           this.refreshTree()
+          this.scheduleRootMetaSave()
         }
         return r
       } catch (e) { return { ok: false, error: String(e?.message || e) } }
@@ -1612,6 +1723,7 @@ export const useLibrary = defineStore('library', {
         this.suppressSyncUntil = Date.now() + 2000
         this.suppressWaveUntil = Date.now() + 1200
         await this.refreshTree()
+        this.scheduleRootMetaSave()
       }
       return { ok: failed === 0, moved, failed }
     },
@@ -1639,6 +1751,7 @@ export const useLibrary = defineStore('library', {
         if (this.lightbox.open && set.has(this.lightbox.path)) this.closeLightbox()
         if (this.brief.open && set.has(this.brief.path)) this.closeBrief()
         await this.refreshTree()
+        this.scheduleRootMetaSave()
         this.showNote(`已移入回收站 ${ok} 张${failed ? ` · 失败 ${failed}` : ''}`)
       }
       return { ok: failed === 0, moved: ok, failed }
@@ -1679,6 +1792,7 @@ export const useLibrary = defineStore('library', {
           if (this.dirAnchor != null) this.dirAnchor = fix(this.dirAnchor)
           await this.refreshTree()
           await this.loadImages()
+          this.scheduleRootMetaSave()
         } else if (r?.error) {
           this.error = r.error
         }
@@ -1734,6 +1848,17 @@ export const useLibrary = defineStore('library', {
       try {
         const r = await api.imagesReorder(this.activeRootId, this.currentDirRel, rest)
         if (!r?.ok) { if (r?.error) this.error = r.error; return r }
+        /* 物理排序开关：把顺序写进文件名前缀；路径变了 → 整表重载（不再走本地增量） */
+        if (this.physicalOrder) {
+          const pr = await this.applyImageOrderPhysical(rest)
+          if (pr?.map?.length) {
+            await this.loadImages()
+            this.scheduleRootMetaSave()
+            this.showNote(`已调整顺序并同步文件名（改名 ${pr.renamed || 0} 张${pr.ok ? '' : '，部分失败'}）`)
+            return pr
+          }
+          if (pr && !pr.ok) this.showNote(`顺序已存，但改名失败：${pr.errors?.[0] || pr.error || ''}`, [], 'error')
+        }
         /* 本地增量换序：只替换数组与排序模式，不整表 loadImages（不重放入场波、不清选中） */
         const map = new Map(this.images.map((i) => [i.file_path, i]))
         const nextOrder = rest.map((p) => map.get(p)).filter(Boolean)
@@ -1747,6 +1872,7 @@ export const useLibrary = defineStore('library', {
         this.selectedPath = this.selectedPaths[this.selectedPaths.length - 1] || null
         this.selectionAnchor = this.selectedPath
         this.showNote('已调整顺序（手动排序）')
+        this.scheduleRootMetaSave()
         return r
       } catch (e) {
         const err = { ok: false, error: String(e?.message || e) }
@@ -1865,6 +1991,8 @@ export const useLibrary = defineStore('library', {
       names.splice(at, 0, name)
       await window.picrand.picnestDirOrderSet(this.activeRootId, parentRel || '__root__', names)
       await this.refreshTree()
+      this.scheduleRootMetaSave()
+      await this.syncDirOrderPhysical(parentRel, names)
     },
 
     async importUrls(urls, target) {
@@ -1907,7 +2035,7 @@ export const useLibrary = defineStore('library', {
     async mergeDirWithDupes(srcAbs, targetDir, t) {
       let opts = {}
       /* 整包查重改为流式异步：大文件夹扫描期间给一个可取消的进度浮条 */
-      this.taskProgress = { visible: true, label: '正在检查文件夹重复', done: 0, total: 0, cancelable: true, canceling: false }
+      this.taskProgress = { visible: true, kind: 'dirDup', label: '正在检查文件夹重复', done: 0, total: 0, cancelable: true, canceling: false }
       try {
         const scan = await window.picrand.picnestDirDupCheck(srcAbs, targetDir, t.rootId)
         this.taskProgress.visible = false
@@ -1937,7 +2065,10 @@ export const useLibrary = defineStore('library', {
       const t = this.taskProgress
       if (!t.visible || !t.cancelable || t.canceling) return
       t.canceling = true
-      try { await window.picrand.picnestDirDupCancel() } catch { /* 静默 */ }
+      try {
+        if (t.kind === 'thumbs') await window.picrand.picnestRepairThumbsCancel()
+        else await window.picrand.picnestDirDupCancel()
+      } catch { /* 静默 */ }
     },
 
     // 外部拖入：先全库查重（Eagle 式冲突弹窗），再复制进目标目录
@@ -2087,6 +2218,8 @@ export const useLibrary = defineStore('library', {
       names.splice(at < 0 ? names.length : at + (pos === 'after' ? 1 : 0), 0, ...movedNames)
       await window.picrand.picnestDirOrderSet(this.activeRootId, destParent || '__root__', names)
       await this.refreshTree()
+      this.scheduleRootMetaSave()
+      await this.syncDirOrderPhysical(destParent, names)
       return { ok: true, moved: movedNames.length }
     },
 
@@ -2097,6 +2230,8 @@ export const useLibrary = defineStore('library', {
       names.push(name)
       await window.picrand.picnestDirOrderSet(this.activeRootId, parentRel || '__root__', names)
       await this.refreshTree()
+      this.scheduleRootMetaSave()
+      await this.syncDirOrderPhysical(parentRel, names)
     },
 
     findNode(root, rel) {
@@ -2376,6 +2511,7 @@ export const useLibrary = defineStore('library', {
       try { await window.picrand.setImageRating(path, rating) } catch { /* 静默 */ }
       const img = this.images.find((i) => i.file_path === path)
       if (img) img.rating = rating
+      this.scheduleRootMetaSave()
     },
     async del(path) {
       /* 丢到回收站 = 应用内软删（deleted_at），文件原地保留 → 进回收站视图可还原。

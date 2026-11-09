@@ -38,7 +38,9 @@ export const api = {
   recent: (folderId, limit) => invoke('picnestRecent', folderId, limit),
   imageOpened: (filePath) => invoke('picnestImageOpened', filePath),
   dirMemoryGet: (key) => invoke('picnestDirMemoryGet', key),
-  dirMemorySet: (key, patch) => invoke('picnestDirMemorySet', key, patch),
+  dirMemorySet: (rootId, rel, patch) => invoke('picnestDirMemorySet', rootId, rel, patch),
+  dirMemoryRootGet: (rootId) => invoke('picnestDirMemoryRootGet', rootId),
+  dirMemoryRename: (rootId, oldRel, newRel) => invoke('picnestDirMemoryRename', rootId, oldRel, newRel),
   // 资料库文件夹管理
   mkdir: (parentPath, name) => invoke('picnestMkdir', parentPath, name),
   deleteDir: (dirPath, rel, rootId) => invoke('picnestDeleteDir', dirPath, rel, rootId),
