@@ -237,6 +237,7 @@ function onKey(e) {
           <div class="theme-hint">跟随系统随 Windows 明暗切换；黑白主题只改界面，不改变图片</div>
         </div>
       </div>
+      <button class="tool help-btn" title="帮助与使用说明" @click.stop="lib.openHelp()">?</button>
       <div class="zoom-slider">
         <span class="z-sign">−</span>
         <input type="range" min="0.6" max="3.2" step="0.05" :value="lib.zoom" @input="lib.setZoom(Number($event.target.value))" />
@@ -347,6 +348,7 @@ function onKey(e) {
   box-shadow: inset 0 0 0 1px var(--accent);
 }
 .vo-wrap { position: relative; display: flex; align-items: center; }
+.help-btn { min-width: 28px; font-weight: 700; font-size: 14px; }
 /* 隐藏排序编号开关：物理排序的 01_ 前缀只在显示层隐藏 */
 .num-btn { font-family: Consolas, var(--font-mono, monospace); font-size: 11px; letter-spacing: 0.3px; min-width: 30px; }
 /* ---- 主题选择 ---- */

@@ -198,7 +198,7 @@ const header = computed(() => {
   }
   if (!lib.currentDirRel) return { big: '全部', caption: `${(lib.images.length || 0).toLocaleString()} IMAGES / ${viewEn}` }
   const parts = lib.currentDirRel.split('/')
-  return { big: parts[parts.length - 1], caption: `${(lib.images.length || 0).toLocaleString()} IMAGES / ${viewEn}` }
+  return { big: lib.dispName(parts[parts.length - 1]), caption: `${(lib.images.length || 0).toLocaleString()} IMAGES / ${viewEn}` }
 })
 
 const items = computed(() => {

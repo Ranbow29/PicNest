@@ -134,6 +134,7 @@ export const useLibrary = defineStore('library', {
     viewer: { scale: 1, tx: 0, ty: 0, rot: 0, flopX: false, showInspector: false, /* 初始收起：让用户先看图，详情随点随开 */ cropMode: false, fitNonce: 0 },
     filterBarOpen: false,
     pluginsOpen: false,          // 插件库面板
+    helpOpen: false,             // 帮助 / 使用说明
     filters: {
       shapes: [],            // ['landscape','portrait','square','panoramaL','panoramaP','43','34','169','916','custom']
       customW: 4, customH: 3,
@@ -2640,6 +2641,8 @@ export const useLibrary = defineStore('library', {
     },
     openPlugins() { this.pluginsOpen = true },
     closePlugins() { this.pluginsOpen = false },
+    openHelp() { this.helpOpen = true },
+    closeHelp() { this.helpOpen = false },
     toggleSidebar() {
       this.sidebarCollapsed = !this.sidebarCollapsed
       localStorage.setItem('picnest.sidebarCollapsed', this.sidebarCollapsed ? '1' : '0')

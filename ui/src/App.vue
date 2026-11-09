@@ -16,6 +16,7 @@ import TrashMenu from './components/TrashMenu.vue'
 import ImportResultCard from './components/ImportResultCard.vue'
 import TaskProgress from './components/TaskProgress.vue'
 import PluginManager from './components/PluginManager.vue'
+import HelpDialog from './components/HelpDialog.vue'
 import { refreshPluginThemes } from './lib/plugins'
 import ResizeHandle from './components/ResizeHandle.vue'
 import InspResize from './components/InspResize.vue'
@@ -56,6 +57,8 @@ function onKeydown(e) {
   if (key === 'escape') {
     /* 分层退出：输入框/灯箱/弹窗/右键菜单各有其主，都没有才清空选中 */
     if (isTypingTarget(e.target)) return
+    if (lib.helpOpen) { e.preventDefault(); lib.closeHelp(); return }
+    if (lib.pluginsOpen) { e.preventDefault(); lib.closePlugins(); return }
     if (lib.lightbox.open) return // Lightbox 自己处理（含裁剪态）
     if (lib.confirmDialog.open) { lib.resolveConfirm(false); return }
     if (lib.dupFinder.open) { lib.closeDupFinder(); return }
@@ -193,6 +196,7 @@ const chipStyle = computed(() => {
   <ImportResultCard />
   <TaskProgress />
   <PluginManager />
+  <HelpDialog />
 </template>
 
 <style scoped>
