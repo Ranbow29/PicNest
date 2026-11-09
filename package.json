@@ -10,6 +10,7 @@
     "patch": "node tools/patches/apply.mjs",
     "patch:exe": "node tools/patches/patch-exe-resources.mjs",
     "test:extension": "node tools/test-collect-script.mjs && node tools/test-collect-background.mjs",
+    "test:extension:e2e": "node tools/e2e-extension.mjs",
     "build": "npm run build:ui && npm run patch"
   },
   "author": "Ranbow29",
