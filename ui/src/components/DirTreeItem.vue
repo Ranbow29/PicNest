@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useLibrary, extractDropUrls } from '../stores/library'
 import { isExternalDT, dndTypes } from '../lib/dnd'
 import FolderIcon from './FolderIcon.vue'
@@ -22,9 +22,6 @@ watch(() => props.node, () => {
 /* 自动展开祖先（从正文子文件夹卡片进入时）需要响应 dirMemory 变化 */
 watch(() => mem.value.expanded, (v) => {
   if (v !== undefined) expanded.value = !!v
-})
-onMounted(() => {
-  if (props.depth === 0 && mem.value.expanded === undefined) expanded.value = true
 })
 
 function toggleExpand() {

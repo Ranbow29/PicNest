@@ -149,9 +149,13 @@ function clearTreeSelection() {
   lib.exitSelectionView()
 }
 
-/* 拖到资料库行 = 录进对应资料库的库根（全部/未分类） */
+/* 拖到资料库行 = 录进对应资料库的库根（全部/未分类）；内部文件夹拖到当前库行 = 移回库根 */
 function isExternalDT(e) {
   return isDnDExternal(e)
+}
+function isInternalDirsDT(e) {
+  const t = [...(e.dataTransfer?.types || [])]
+  return t.includes('application/x-picnest-dir') || t.includes('application/x-picnest-dirs')
 }
 /* 侧栏空白：落当前库根（高亮当前资料库行） */
 function onSidebarDragOver(e) {
@@ -165,15 +169,27 @@ function onSidebarDragLeave(e) {
   if (e.clientX <= 0 || e.clientY <= 0 || e.clientX >= innerWidth || e.clientY >= innerHeight) lib.clearDropHint()
 }
 function onLibDragOver(e, l) {
+  const internalDirs = isInternalDirsDT(e)
+  if (!isExternalDT(e) && !internalDirs) return
+  if (internalDirs && !l.active) return // 只允许移回当前库根，不跨库搬文件夹
   e.preventDefault()
-  if (!isExternalDT(e)) return
   e.stopPropagation()
-  e.dataTransfer.dropEffect = 'copy'
-  lib.setDropHint('lib', `录入到「${l.name}」`, e.clientX, e.clientY, l.id)
+  e.dataTransfer.dropEffect = internalDirs ? 'move' : 'copy'
+  lib.setDropHint('lib', internalDirs ? `移到根文件「${l.name}」` : `录入到「${l.name}」`, e.clientX, e.clientY, l.id)
 }
 async function dropOnLib(e, l) {
   e.stopPropagation()
   lib.clearDropHint()
+  const internalDirs = isInternalDirsDT(e)
+  if (internalDirs) {
+    if (!l.active) return
+    const one = e.dataTransfer.getData('application/x-picnest-dir')
+    let list = []
+    try { list = JSON.parse(e.dataTransfer.getData('application/x-picnest-dirs') || '[]') } catch { /* 静默 */ }
+    if (!Array.isArray(list) || !list.length) list = one ? [one] : []
+    if (list.length) await lib.dropOnDirs(list.filter(Boolean), '', 'into')
+    return
+  }
   if (!isExternalDT(e)) return
   const paths = [...(e.dataTransfer.files || [])].map((f) => window.picrand.getFilePath?.(f)).filter(Boolean)
   const urls = extractDropUrls(e.dataTransfer)
@@ -230,7 +246,8 @@ async function dropOnLib(e, l) {
     <div v-if="lib.scanning" class="scanning">{{ lib.scanNote }}</div>
     <div v-else-if="!lib.tree" class="empty">还没有根文件，点 ⌂ 导入</div>
     <div v-else class="tree" @click.self="clearTreeSelection">
-      <DirTreeItem :node="lib.tree.tree" :depth="0" @open="openNode" />
+      <DirTreeItem v-for="c in (lib.tree.tree.children || [])" :key="c.rel" :node="c" :depth="0" @open="openNode" />
+      <div v-if="!(lib.tree.tree.children || []).length" class="empty">暂无子文件夹</div>
     </div>
 
     <div v-if="lib.error" class="error">{{ lib.error }}</div>
