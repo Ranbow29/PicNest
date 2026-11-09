@@ -170,7 +170,7 @@ const multiImages = computed(() => {
   const map = new Map(lib.images.map((i) => [i.file_path, i]))
   return lib.selectedPaths.map((p) => map.get(p)).filter(Boolean)
 })
-const stackImgs = computed(() => multiImages.value.slice(0, 4))
+const stackImgs = computed(() => multiImages.value.slice(-4))
 function stackStyle(i) {
   const n = stackImgs.value.length
   const off = i - (n - 1) / 2
