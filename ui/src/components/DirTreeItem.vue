@@ -171,14 +171,24 @@ async function onDrop(e) {
 .row {
   position: relative;
   display: flex; align-items: center; gap: 5px;
-  height: 27px; margin: 0 6px; padding-right: 8px;
-  border-radius: 7px; cursor: default; transition: background 0.15s;
+  height: 26px; margin: 0 4px 0 6px; padding-right: 6px;
+  border-radius: 7px; cursor: default; transition: background 0.15s, color 0.15s;
 }
 .row:hover { background: var(--accent-weak); }
+.row:hover .count { opacity: 1; }
 .row.active {
-  background: var(--accent-weak); font-weight: 600;
+  background: var(--accent-weak);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 20%, transparent), var(--accent-weak) 70%);
+  font-weight: 600;
+  box-shadow: inset 0 0 0 1px var(--accent-weak);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 26%, transparent);
+}
+.row.active::after {
+  content: ''; position: absolute; left: 0; top: 6px; bottom: 6px;
+  width: 3px; border-radius: 0 3px 3px 0; background: var(--accent); pointer-events: none;
 }
 .row.active .name { color: var(--accent); }
+.row.active .count { color: var(--accent); opacity: 1; }
 .row.active :deep(.folder-ico) { filter: drop-shadow(0 0 3px var(--accent-weak)); }
 .row.selected { background: var(--accent-weak); }
 .row.selected::before {
@@ -205,5 +215,5 @@ async function onDrop(e) {
 .caret.open { transform: rotate(90deg); }
 .caret.leaf { visibility: hidden; }
 .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
-.count { flex: none; font-size: 10.5px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.count { flex: none; font-size: 10.5px; color: var(--text-2); font-variant-numeric: tabular-nums; opacity: 0.72; transition: opacity 0.15s; }
 </style>

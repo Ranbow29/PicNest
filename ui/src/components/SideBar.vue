@@ -30,11 +30,25 @@ const entries = computed(() => [
   { key: 'trash', label: '回收站', count: lib.counts.trash ?? 0, enabled: true },
 ])
 
+/* 视图分两档：「全部」独占一行（主入口），其余四个并成 2×2 网格，省出两行高度给文件夹树 */
+const primaryEntry = computed(() => entries.value[0])
+const gridEntries = computed(() => entries.value.slice(1))
+function isEntryActive(e) {
+  return !lib.selectionView && lib.view === e.key && (e.key !== 'all' || !lib.currentDirRel)
+}
+
 const libs = computed(() => (lib.roots || []).map((r) => ({
   ...r,
   name: r.display_name || r.path.split(/[\\/]/).pop(),
   active: r.id === lib.activeRootId,
 })))
+/* 根文件区可折叠：折叠时只露出当前库，一库多根时腾出纵向空间给文件夹树（持久化） */
+const rootsFolded = ref(localStorage.getItem('picnest.rootsFolded') === '1')
+function toggleRootsFolded() {
+  rootsFolded.value = !rootsFolded.value
+  localStorage.setItem('picnest.rootsFolded', rootsFolded.value ? '1' : '0')
+}
+const visibleLibs = computed(() => (rootsFolded.value ? libs.value.filter((l) => l.active) : libs.value))
 
 const askNewFolder = ref(false)
 
@@ -212,24 +226,41 @@ async function dropOnLib(e, l) {
 
     <nav class="views">
       <div
-        v-for="e in entries" :key="e.key"
-        class="view-item" :class="{ active: !lib.selectionView && lib.view === e.key && (e.key !== 'all' || !lib.currentDirRel), disabled: !e.enabled, 'drop-trash': e.key === 'trash' && trashOver, 'drop-uncat': e.key === 'uncategorized' && uncatOver }"
-        @click="e.enabled && lib.view !== e.key && lib.switchView(e.key)"
-        @contextmenu="onViewMenu($event, e)"
-        @dragover="onViewDragOver($event, e)" @dragleave="onViewDragLeave(e)" @drop.prevent="onViewDrop($event, e)"
+        class="view-item primary" :class="{ active: isEntryActive(primaryEntry) }"
+        @click="lib.view !== primaryEntry.key && lib.switchView(primaryEntry.key)"
       >
-        <span class="label">{{ e.label }}</span>
-        <span v-if="e.count != null" class="count">{{ e.count.toLocaleString() }}</span>
+        <svg class="v-ico" viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2" width="5" height="5" rx="1.2" /><rect x="9" y="2" width="5" height="5" rx="1.2" /><rect x="2" y="9" width="5" height="5" rx="1.2" /><rect x="9" y="9" width="5" height="5" rx="1.2" /></svg>
+        <span class="label">{{ primaryEntry.label }}</span>
+        <span class="count">{{ primaryEntry.count.toLocaleString() }}</span>
+      </div>
+      <div class="view-grid">
+        <div
+          v-for="e in gridEntries" :key="e.key"
+          class="view-item chip" :class="{ active: isEntryActive(e), disabled: !e.enabled, 'drop-trash': e.key === 'trash' && trashOver, 'drop-uncat': e.key === 'uncategorized' && uncatOver }"
+          :title="e.count != null ? `${e.label} · ${e.count.toLocaleString()}` : e.label"
+          @click="e.enabled && lib.view !== e.key && lib.switchView(e.key)"
+          @contextmenu="onViewMenu($event, e)"
+          @dragover="onViewDragOver($event, e)" @dragleave="onViewDragLeave(e)" @drop.prevent="onViewDrop($event, e)"
+        >
+          <svg v-if="e.key === 'recent'" class="v-ico" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.8" /><path d="M8 4.8V8l2.2 1.4" /></svg>
+          <svg v-else-if="e.key === 'uncategorized'" class="v-ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 5.5 8 2.5l5.5 3v5L8 13.5l-5.5-3z" /><path d="M2.5 5.5 8 8.5l5.5-3M8 8.5v5" /></svg>
+          <svg v-else-if="e.key === 'random'" class="v-ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4.5h2.5c3 0 4 7 7 7H14M2 11.5h2.5c1.2 0 2-1 2.7-2.3M9 6.6c.7-1.2 1.5-2.1 2.5-2.1H14" /><path d="m12.3 2.8 1.7 1.7-1.7 1.7M12.3 9.8l1.7 1.7-1.7 1.7" /></svg>
+          <svg v-else class="v-ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.3 4.5l.7 9h6l.7-9" /></svg>
+          <span class="label">{{ e.label }}</span>
+          <span v-if="e.count != null" class="count">{{ e.count.toLocaleString() }}</span>
+        </div>
       </div>
     </nav>
 
-    <!-- 根文件（资料库根）：每个根一个节点，点击回到库根；当前库高亮；右键 = 文件夹菜单 -->
-    <div class="section-head">
+    <!-- 根文件（资料库根）：每个根一个节点，点击回到库根；当前库高亮；右键 = 文件夹菜单；标题可折叠 -->
+    <div class="section-head foldable" @click="toggleRootsFolded" :title="rootsFolded ? '展开全部根文件' : '只显示当前根文件'">
+      <span class="sh-caret" :class="{ open: !rootsFolded }">▸</span>
       <span>根文件</span>
-      <button class="add-btn lib-add" title="添加根文件（支持 Eagle .library）" @click="pickFolder">⌂</button>
+      <span v-if="libs.length > 1" class="sh-badge">{{ libs.length }}</span>
+      <button class="add-btn lib-add" title="添加根文件（支持 Eagle .library）" @click.stop="pickFolder">⌂</button>
     </div>
     <div class="libs">
-      <div v-for="l in libs" :key="l.id" class="lib-item" :class="{ active: l.active, 'drop-into': lib.dropHint.active && lib.dropHint.zone === 'lib' && lib.dropHint.key === l.id }"
+      <div v-for="l in visibleLibs" :key="l.id" class="lib-item" :class="{ active: l.active, 'drop-into': lib.dropHint.active && lib.dropHint.zone === 'lib' && lib.dropHint.key === l.id }"
            @click="lib.switchRoot(l.id)"
            @dragover="onLibDragOver($event, l)" @drop.prevent="dropOnLib($event, l)"
            @contextmenu.prevent.stop="lib.openDirMenu($event, { rel: '', node: l, isLibrary: true, absPath: l.path })">
@@ -253,9 +284,11 @@ async function dropOnLib(e, l) {
 
     <div v-if="lib.error" class="error">{{ lib.error }}</div>
 
-    <button class="plugin-entry" title="插件库（主题 / 界面插件）" @click="lib.openPlugins()">
-      <span class="pe-ico">🧩</span><span>插件库</span>
-    </button>
+    <div class="sb-foot">
+      <button class="plugin-entry" title="插件库（主题 / 界面插件）" @click="lib.openPlugins()">
+        <span class="pe-ico">🧩</span><span>插件库</span>
+      </button>
+    </div>
 
     <NamePromptDialog :visible="askNewFolder" title="在库根新建文件夹"
                       @confirm="(v) => { askNewFolder = false; newFolderInRoot(v) }"
@@ -278,29 +311,60 @@ async function dropOnLib(e, l) {
   background: linear-gradient(180deg, var(--sidebar-glow) 0, rgba(255, 255, 255, 0) 150px);
 }
 .sidebar.collapsed { padding-left: 0; padding-right: 0; opacity: 0; pointer-events: none; }
-.brand { display: flex; align-items: baseline; gap: 8px; padding: 1px 10px 9px; border-bottom: 1px solid var(--border); user-select: none; -webkit-app-region: drag; }
+.brand { display: flex; align-items: baseline; gap: 8px; padding: 1px 10px 8px; border-bottom: 1px solid var(--border); user-select: none; -webkit-app-region: drag; }
 .brand h1 { font-family: var(--font-serif); font-size: 19px; margin: 0; letter-spacing: 4px; }
 .brand .sub { font-size: 10px; color: var(--text-2); letter-spacing: 1.5px; }
 
-.views { display: flex; flex-direction: column; gap: 1px; padding: 6px 0; }
+/* ---- 视图区：主入口一行 + 2×2 小卡网格 ---- */
+.views { display: flex; flex-direction: column; gap: 4px; padding: 7px 2px 6px; }
+.view-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
 .view-item {
-  display: flex; align-items: center; height: 28px; padding: 0 9px;
-  border-radius: 8px; color: var(--text-2); transition: background 0.15s, color 0.15s;
+  position: relative;
+  display: flex; align-items: center; gap: 7px; height: 28px; padding: 0 9px;
+  border-radius: 8px; color: var(--text-2); cursor: pointer;
+  transition: background 0.15s, color 0.15s, box-shadow 0.15s;
 }
+.view-item.chip {
+  height: 27px; padding: 0 8px; gap: 6px; min-width: 0;
+  background: var(--panel);
+  background: color-mix(in srgb, var(--panel-strong) 45%, transparent);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+.view-item.chip .label { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.view-item.chip .count { opacity: 0.8; }
 .view-item:hover:not(.disabled) { background: var(--accent-weak); color: var(--text); }
-.view-item.active { background: var(--accent-weak); color: var(--accent); font-weight: 600; }
+.view-item.active { background: var(--accent-weak); color: var(--accent); font-weight: 600; box-shadow: inset 0 0 0 1px var(--accent-weak); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 38%, transparent); }
+.view-item.primary.active::before {
+  content: ''; position: absolute; left: 0; top: 7px; bottom: 7px; width: 3px;
+  border-radius: 0 3px 3px 0; background: var(--accent);
+}
 .view-item.drop-trash { background: rgba(194, 90, 77, 0.14); color: #cf6b5c; outline: 1.5px dashed #c25a4d; outline-offset: -2px; }
 .view-item.drop-uncat { background: var(--accent-weak); color: var(--accent); outline: 1.5px dashed var(--accent); outline-offset: -2px; }
 .view-item.disabled { opacity: 0.45; }
-.label { flex: 1; font-size: 12.5px; }
+.v-ico {
+  flex: none; width: 14px; height: 14px;
+  fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round;
+  opacity: 0.85;
+}
+.label { flex: 1; min-width: 0; font-size: 12.5px; }
 .count { font-size: 10.5px; font-variant-numeric: tabular-nums; }
 
 .section-head {
-  display: flex; align-items: center; padding: 6px 10px 4px;
+  display: flex; align-items: center; gap: 5px; padding: 6px 6px 4px 10px;
   font-size: 10.5px; color: var(--text-2); letter-spacing: 1px;
+}
+.section-head.foldable { cursor: pointer; border-radius: 6px; }
+.section-head.foldable:hover { color: var(--text); }
+.sh-caret { width: 9px; font-size: 9px; transition: transform 0.18s var(--ease-overshoot); margin-left: -4px; }
+.sh-caret.open { transform: rotate(90deg); }
+.sh-badge {
+  padding: 0 5px; min-width: 16px; height: 15px; line-height: 15px; text-align: center;
+  border-radius: 8px; background: var(--accent-weak); color: var(--accent);
+  font-size: 9.5px; letter-spacing: 0; font-variant-numeric: tabular-nums;
 }
 .head-btns { margin-left: auto; display: flex; gap: 2px; }
 .add-btn {
+  margin-left: auto;
   width: 22px; height: 22px; border: none; border-radius: 6px;
   background: transparent; color: var(--text-2); cursor: pointer; font-size: 13px;
 }
@@ -311,7 +375,7 @@ async function dropOnLib(e, l) {
 /* 资料库节点区 */
 .libs { display: flex; flex-direction: column; gap: 1px; padding: 0 4px 2px; }
 .lib-item {
-  display: flex; align-items: center; gap: 7px; height: 29px; padding: 0 9px;
+  display: flex; align-items: center; gap: 7px; height: 28px; padding: 0 9px;
   border-radius: 8px; color: var(--text-2); cursor: pointer;
   transition: background 0.15s, color 0.15s;
 }
@@ -321,22 +385,32 @@ async function dropOnLib(e, l) {
 .lib-item .count { font-size: 11px; font-variant-numeric: tabular-nums; }
 .lib-item.drop-into { background: var(--accent-weak); outline: 1.5px dashed var(--accent); outline-offset: -2px; }
 
-.tree { flex: 1; overflow-y: auto; padding-bottom: 6px; }
+/* 文件夹树：占满剩余高度；上下边缘渐隐，滚动时不会被硬切 */
+.tree {
+  flex: 1; min-height: 120px; overflow-y: auto; padding: 4px 0 10px;
+  -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 8px, #000 calc(100% - 14px), transparent 100%);
+          mask-image: linear-gradient(180deg, transparent 0, #000 8px, #000 calc(100% - 14px), transparent 100%);
+}
 .tree::-webkit-scrollbar { width: 6px; }
-.tree::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+.tree::-webkit-scrollbar-thumb { background: transparent; border-radius: 3px; }
+.tree:hover::-webkit-scrollbar-thumb { background: var(--border); }
 
 .scanning, .empty { padding: 12px; font-size: 12px; color: var(--text-2); }
 .error { padding: 8px 12px; font-size: 11px; color: #e5484d; }
-/* 插件库入口：树下方常驻 */
-.plugin-entry {
-  flex: none; display: flex; align-items: center; gap: 7px;
-  margin-top: 8px; height: 32px; padding: 0 10px;
-  border: 1px dashed var(--border); border-radius: 8px;
-  background: transparent; color: var(--text-2); font-size: 12px; cursor: pointer;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
+/* 底栏：插件库入口压成一条细栏，不再占一块虚线大按钮 */
+.sb-foot {
+  flex: none; display: flex; align-items: center; gap: 4px;
+  margin: 2px -2px 0; padding-top: 6px; border-top: 1px solid var(--border);
 }
-.plugin-entry:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-weak); }
-.pe-ico { font-size: 14px; line-height: 1; }
+.plugin-entry {
+  display: flex; align-items: center; gap: 6px;
+  height: 26px; padding: 0 9px;
+  border: none; border-radius: 7px;
+  background: transparent; color: var(--text-2); font-size: 11.5px; cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.plugin-entry:hover { color: var(--accent); background: var(--accent-weak); }
+.pe-ico { font-size: 13px; line-height: 1; }
 .eagle-check { position: fixed; inset: 0; z-index: 910; display: flex; align-items: center; justify-content: center; pointer-events: none; }
 .eagle-check-card {
   display: flex; align-items: center; gap: 9px; padding: 10px 14px;

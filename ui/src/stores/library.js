@@ -151,7 +151,8 @@ export const useLibrary = defineStore('library', {
     displayThumbs: {},       // file_path -> { p: 1024px 显示图路径|'' , m: modify_time }（网格大格用）
     paletteBuild: { running: false, done: 0, total: 0 },
     colorDist: {},           // file_path -> d76（颜色命中排序用）
-    sidebarWidth: Number(localStorage.getItem('picnest.sidebarWidth')) || 236,
+    /* v2 布局：文件夹区加宽到 264；旧版存过的窄宽度（<264）一次性迁移抬升，之后尊重用户拖拽值 */
+    sidebarWidth: (() => { const w = Number(localStorage.getItem('picnest.sidebarWidth')) || 0; if (localStorage.getItem('picnest.sidebarLayoutV') !== '2') { localStorage.setItem('picnest.sidebarLayoutV', '2'); if (w && w < 264) { localStorage.setItem('picnest.sidebarWidth', '264'); return 264 } } return w || 264 })(),
     sidebarCollapsed: localStorage.getItem('picnest.sidebarCollapsed') === '1', // 左边栏收起态（持久化）
     inspectorWidth: Number(localStorage.getItem('picnest.inspectorWidth')) || 296,
     inspectorHeight: Number(localStorage.getItem('picnest.inspectorHeight')) || 0, // 0 = 自适应满高
@@ -1869,7 +1870,7 @@ export const useLibrary = defineStore('library', {
     },
 
     setSidebarWidth(w) {
-      this.sidebarWidth = Math.min(440, Math.max(180, w))
+      this.sidebarWidth = Math.min(560, Math.max(200, w))
       localStorage.setItem('picnest.sidebarWidth', String(this.sidebarWidth))
     },
     setInspectorWidth(w) {

@@ -266,7 +266,7 @@ const chipStyle = computed(() => {
   position: relative;
   /* 四边留白 + 悬浮阴影：白窗体压在左栏之上
      上/右 8px（让右上角窗控按钮贴角、行为正常），下 22 / 左 20 保留孤岛水带 */
-  margin: 8px 8px 22px 20px; background: var(--panel-strong);
+  margin: 8px 8px 22px 14px; /* 左水带 20→14：把宽度让给文件夹栏 */ background: var(--panel-strong);
   border: 1px solid var(--border); border-radius: var(--radius-panel);
   box-shadow: var(--shadow-float), inset 0 1px 0 var(--panel-edge);
   overflow: hidden;
