@@ -3,7 +3,6 @@
 // 拖到目标松开即保存；松开在面板空白处则面板停留，可点击/滚动选择；Esc / 点外部取消。
 (() => {
   if (window.__picnestHoldCollectLoaded) return
-  window.__picnestHoldCollectLoaded = true
 
   const HOLD_MS = 380
   const RING_DELAY = 120
@@ -699,4 +698,7 @@
   window.addEventListener('blur', closePanel)
   window.addEventListener('resize', closePanel)
   document.addEventListener('visibilitychange', () => { if (document.hidden) closePanel() })
+  /* 只有监听器全部注册成功后才置 Loaded：部分初始化失败的页面可以被后台补注入修复 */
+  window.__picnestHoldCollectLoaded = true
+  window.__picnestHoldCollectVersion = '0.1.3'
 })()

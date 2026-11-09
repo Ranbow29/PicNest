@@ -501,3 +501,8 @@ PicNest/
     ① **根因**：pan 在 pointerdown 时冻结 `baseTx/baseTy`；滚轮改变 scale/tx/ty 后，下一次 pointermove 仍用旧 base 计算 `tx = base + delta`，把锚点缩放的结果顶回去；CanvasStage 的 props watch 又会把内部 view 拉回 store 的旧 tx/ty，形成一帧回弹/抽搐。
     ② **解法**（与网上通用 pan/zoom 状态驱动做法一致）：滚轮时如果 `pan.active`，先把当前拖动位移写进 store → 以光标为锚点计算新的 tx/ty/scale → **把 pan 的 start/base 重设到当前光标与新 tx/ty** → 取消挂起的 rAF 并立即重绘；之后 pointermove 从新基准继续。Lightbox 同时补上光标锚点缩放（此前滚轮只改 scale，中心缩放）。Brief 原有锚点缩放也补同样的 pan 重基准。
     ③ **参考**：状态驱动/逆变换、zoom-to-cursor、避免 stale translation 的通用做法（CSDN、Stack Overflow、php.cn 等；不引入第三方库）。
+
+85. **Pinterest 补注入二次失效（2026-11-10，Feb 报「从标签进入不刷新采集又失效」）**：
+    ① **v0.1.2 漏掉的场景**：content.js 在 IIFE 最顶部就置 `__picnestHoldCollectLoaded`，若脚本执行到一半失败，后续补注入会被守卫拦住；`tabs.onActivated` 拿到的 tab 可能还在睡眠恢复/URL 为空，直接 executeScript 失败；窗口切换/标签高亮不一定触发 activation；扩展重载时若当前就在 Pinterest，`onInstalled` 不一定补到。刷新能重新走 manifest 注入，所以表现为“刷新就好”。
+    ② **v0.1.3 修法**：content.js 把 `Loaded`/`Version` 移到所有监听器注册完成之后；background 先用 `executeScript(func)` 探测 `__picnestHoldCollectLoaded && Version`，未就绪才注入，失败按 350ms/1200ms 重试两次；监听 `tabs.onActivated`、`tabs.onUpdated`（complete/url）、`tabs.onHighlighted`、`windows.onFocusChanged`；service worker 启动时立即 `ensurePinterestTabs()`，并在 1.5s/4.5s 再补一次，不依赖 `onInstalled`。
+    ③ **验证**：background/content 语法检查通过；扩展版本升 `0.1.3`，需在 `edge://extensions` 重载后刷新一次已打开的 Pinterest 页面，之后切标签应自动补注入。实际浏览器需 Feb 验证。
