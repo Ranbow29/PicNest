@@ -20,15 +20,17 @@
 > **更新扩展后**：在 `edge://extensions` / `chrome://extensions` 点重载，并**刷新所有已打开的网页**。
 > 旧页面里的 content script 会失效，按住面板会提示「扩展已更新，请刷新此页面」。
 >
-> **切回旧标签 / Pinterest 失效？** v0.1.4 起后台会做完整探测（Loaded / 版本 / runtime 是否存活 /
+> **切回旧标签 / Pinterest 失效？** v0.1.5 起后台会做完整探测（Loaded / 版本 / runtime 是否存活 /
 > document 监听器是否还能收到事件），然后分级处理：
 > - 页面没有脚本 → 直接注入；
-> - 旧版脚本带 cleanup → 注入新脚本原地清理并重建，不用刷新；
-> - 无 cleanup 的极旧脚本 / 扩展更新后失去 runtime 的孤立脚本 / 监听器失效 → **Pinterest 标签自动刷新一次**
->   （同一标签同一 URL 只刷一次，避免打断和循环），其它站点不自动刷新，改用 popup「修复本页」。
+> - 旧版脚本带 cleanup / 扩展更新后失去 runtime / 监听器被页面清掉但全局还在 → **原地清理重建，不用刷新**；
+> - 无 cleanup 的极旧脚本 → **Pinterest 标签自动刷新一次**（同一标签同一 URL 只刷一次），其它站点用 popup「修复本页」。
+>
+> content script 还会在初始化 1.2s 后及每 2.5s 自检一次；如果页面把 document 监听器清掉（`document.open()`
+> / 页面重建），会自动重装监听器，popup 不会一直停在「监听失效」。
 >
 > 打开扩展面板顶部的「本页采集」会显示当前页状态（已就绪 / 未注入 / 旧版脚本 / 需刷新 / 监听失效），
-> 异常时旁边出现「修复本页」按钮：能注入就注入，注入不了才刷新。版本需显示 0.1.4。
+> 异常时旁边出现「修复本页」按钮：优先原地重建/注入，注入不了才刷新。版本需显示 0.1.5。
 
 ## 用法
 
@@ -64,8 +66,8 @@
 ## 开发自测
 
 ```bash
-npm run test:extension      # 无头：content.js 守卫/接管/cleanup/health + background 决策/popup 修复
-npm run test:extension:e2e  # 真实 Chrome：临时 profile 加载未打包扩展，跑注入/接管/自动刷新
+npm run test:extension      # 无头：content.js 守卫/接管/cleanup/health/看门狗 + background 决策/popup 修复
+npm run test:extension:e2e  # 真实 Chrome：临时 profile 加载未打包扩展，跑注入/接管/自动刷新/原地重建
 ```
 
 `e2e-extension.mjs` 需要 Chrome 137+ 与本机 Chrome 路径（可用 `CHROME_PATH` 覆盖）；只使用临时配置目录，
