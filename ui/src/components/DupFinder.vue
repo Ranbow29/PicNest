@@ -206,11 +206,11 @@ function thumbOf(file) {
 }
 .df-title { font-size: 16px; font-weight: 700; letter-spacing: 0.5px; }
 .df-scope { margin-left: 10px; font-size: 12px; font-weight: 500; color: var(--text-2); letter-spacing: 0; }
-.df-stats { margin-left: auto; font-size: 12px; color: var(--text-2); }
+.df-stats { margin-left: 0; font-size: 12px; color: var(--text-2); }
 .df-stats b { color: var(--text); font-weight: 600; }
 .df-cap { margin-left: 6px; font-size: 10.5px; color: var(--text-2); }
 .df-modes {
-  display: flex; gap: 2px; padding: 3px;
+  display: flex; gap: 2px; padding: 3px; margin-right: auto;
   border: 1px solid var(--border); border-radius: 9px; background: var(--bg);
 }
 .df-modes button {
