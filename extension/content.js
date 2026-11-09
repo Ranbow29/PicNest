@@ -89,9 +89,9 @@
     .ring { position: fixed; width: 40px; height: 40px; margin: -20px 0 0 -20px;
       pointer-events: none; filter: drop-shadow(0 2px 8px rgba(0,0,0,.18)); }
     .ring svg { width: 40px; height: 40px; transform: rotate(-90deg); }
-    .ring circle { fill: none; stroke-width: 3.2; }
-    .ring .bg { stroke: rgba(0,0,0,.18); }
-    .ring .fg { stroke: #b4884b; stroke-linecap: round; stroke-dasharray: 94.25;
+    .ring circle { fill: none; stroke-width: 5.2; } /* 加粗：按住采集的进度环要一眼可辨 */
+    .ring .bg { stroke: rgba(0,0,0,.22); }
+    .ring .fg { stroke: #c08a3e; stroke-linecap: round; stroke-dasharray: 94.25;
       stroke-dashoffset: 94.25; animation: ringfill ${HOLD_MS - RING_DELAY}ms linear forwards; }
     @keyframes ringfill { to { stroke-dashoffset: 0; } }
     .panel { position: fixed; pointer-events: auto; display: flex; flex-direction: column;

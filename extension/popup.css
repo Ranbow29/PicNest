@@ -3,26 +3,26 @@ html, body { margin: 0; }
 body {
   width: 300px; padding: 12px 14px 14px;
   font-family: 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
-  font-size: 12.5px; color: #2c2a26; background: #f4efe7;
+  font-size: 12.5px; color: #1f1f1f; background: #ffffff;
 }
 header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
 .brand { display: flex; align-items: baseline; gap: 7px; }
 .brand b { font-family: Georgia, 'SimSun', serif; font-size: 15px; letter-spacing: 1px; }
-.brand .sub { font-size: 10.5px; color: #6f6a60; letter-spacing: .5px; }
+.brand .sub { font-size: 10.5px; color: #6b6b6b; letter-spacing: .5px; }
 .mark {
   width: 13px; height: 13px; border-radius: 4px; align-self: center;
   background: #2c2a26; box-shadow: inset 0 0 0 2px #b4884b, inset 0 -5px 0 -2px #b4884b;
 }
-.status { display: flex; align-items: center; gap: 5px; font-size: 10.5px; color: #6f6a60; }
-.status i { width: 7px; height: 7px; border-radius: 50%; background: #b9b0a0; }
+.status { display: flex; align-items: center; gap: 5px; font-size: 10.5px; color: #6b6b6b; }
+.status i { width: 7px; height: 7px; border-radius: 50%; background: #c4c4c4; }
 .status.on i { background: #6dbf90; }
 .status.off i { background: #c25a4d; }
 .row { display: flex; align-items: center; gap: 8px; margin: 7px 0; }
-.row label { width: 46px; flex: none; color: #6f6a60; font-size: 11.5px; }
+.row label { width: 46px; flex: none; color: #5f6368; font-size: 11.5px; }
 select {
   flex: 1; min-width: 0; height: 28px; padding: 0 6px;
-  border: 1px solid rgba(60, 50, 30, .18); border-radius: 7px;
-  background: #fffdf9; color: #2c2a26; font-size: 12px;
+  border: 1px solid rgba(0, 0, 0, .13); border-radius: 7px;
+  background: #ffffff; color: #2c2a26; font-size: 12px;
 }
 select:disabled { opacity: .5; }
 button {
@@ -33,9 +33,9 @@ button {
 }
 button:hover:not(:disabled) { filter: brightness(1.06); }
 button:disabled { opacity: .45; cursor: default; }
-.opt { display: flex; align-items: center; gap: 7px; margin: 9px 1px 2px; font-size: 11.5px; color: #6f6a60; cursor: pointer; user-select: none; }
+.opt { display: flex; align-items: center; gap: 7px; margin: 9px 1px 2px; font-size: 11.5px; color: #5f6368; cursor: pointer; user-select: none; }
 .opt input { accent-color: #b4884b; cursor: pointer; }
-.hint { margin: 9px 1px 0; font-size: 10.5px; line-height: 1.55; color: #8a8170; }
+.hint { margin: 9px 1px 0; font-size: 10.5px; line-height: 1.55; color: #777; }
 .msg { min-height: 15px; margin: 6px 1px 0; font-size: 11px; line-height: 1.4; color: #4f7d5e; }
 .msg.err { color: #b4463b; }
 
