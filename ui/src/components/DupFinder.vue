@@ -13,19 +13,6 @@ const stats = computed(() => (f.value.mode === 'ai' ? f.value.ai.stats : f.value
 const activeError = computed(() => (f.value.mode === 'ai' ? f.value.ai.error : f.value.error))
 const activeLoading = computed(() => (f.value.mode === 'ai' ? f.value.ai.loading : f.value.loading))
 const aiKey = ref('')
-let dfBackdropDown = null
-function onDfPointerDown(e) {
-  // 只有真正从遮罩上按下才算；从卡片里按下再拖出去不会关闭
-  dfBackdropDown = e.button === 0 && e.target === e.currentTarget ? { x: e.clientX, y: e.clientY } : null
-}
-function onDfBackdropUp(e) {
-  const d = dfBackdropDown
-  dfBackdropDown = null
-  if (!d) return
-  if (Math.abs(e.clientX - d.x) > 6 || Math.abs(e.clientY - d.y) > 6) return
-  lib.closeDupFinder()
-}
-function onDfBackdropCancel() { dfBackdropDown = null }
 
 const scopeLabel = computed(() => {
   const root = lib.roots.find((r) => r.id === f.value.rootId)
@@ -87,10 +74,7 @@ function thumbOf(file) {
 
 <template>
   <Teleport to="body">
-    <div v-if="f.open" class="df-layer"
-      @pointerdown="onDfPointerDown"
-      @pointerup.self="onDfBackdropUp"
-      @pointercancel="onDfBackdropCancel">
+    <div v-if="f.open" class="df-layer">
       <div class="df-card">
         <header class="df-head">
           <div class="df-title">
@@ -105,7 +89,7 @@ function thumbOf(file) {
             <b>{{ stats.groups }}</b> 组 · <b>{{ stats.files }}</b> 个文件 · 可省 <b>{{ fmtSize(stats.wasted) }}</b>
             <span v-if="f.mode === 'ai'" class="df-cap">（dHash {{ stats.dhashPairs ?? stats.candidates }} 对 → 本地预筛后 {{ stats.candidates }} 对，已查 {{ stats.checked }}）</span>
           </div>
-          <button class="df-x" title="关闭（Esc）" @click="lib.closeDupFinder()">✕</button>
+          <button class="df-x" title="关闭" @click="lib.closeDupFinder()">✕</button>
         </header>
 
         <div v-if="f.mode === 'ai'" class="ai-box">
@@ -193,7 +177,6 @@ function thumbOf(file) {
           <span class="df-selcount">已选 <b>{{ selectedSet.size }}</b> 张{{ selectedBytes ? ' · ' + fmtSize(selectedBytes) : '' }}</span>
           <span class="df-tip">只删勾选的；未勾选的保持不动</span>
           <span class="df-spacer" />
-          <button class="df-btn" @click="lib.closeDupFinder()">取消</button>
           <button class="df-btn danger" :disabled="!selectedSet.size" @click="lib.applyDupTrash()">移入回收站</button>
         </footer>
       </div>
