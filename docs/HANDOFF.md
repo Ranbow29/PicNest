@@ -1,8 +1,8 @@
 # PicNest 图巢 — 交接文档（写给下一个窗口）
 
-> **2026-11-09 第十版·查重收尾**（精确查重可取消 / 文件夹整包查重流式异步 + 进度浮条 + 取消 / 拖入与采集查重流式 MD5 / AI 费用与上传量预估）。
-> 之前：第七版录入语义、第八版多选收尾、第九版收官交接。本版按「开窗 → 现状 → 数据约束 → 未做 → 文件地图 → 纪律 → 验收」组织。
-> 最新提交 `9ac0c6b`；工作区干净；dist 已构建；dev 数据已清理（无测试目录、无手动封面残留）。
+> **2026-11-09 第十一版·根内元数据 / 主题记忆 / 缩略图修复**（.picnest/meta.json 随根文件走、目录记忆按根隔离、主题写 config、缩略图缓存避开 Chromium Cache、批量补图、物理排序开关）。
+> 之前：第七版录入语义、第八版多选收尾、第九版收官、第十版查重收尾。本版按「开窗 → 现状 → 数据约束 → 未做 → 文件地图 → 纪律 → 验收」组织。
+> 最新提交 `ac42e7c`；工作区干净；dist 已构建；dev 数据已清理（无测试目录、无手动封面残留）。
 
 ## 〇、开窗三步走
 
@@ -40,6 +40,7 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 - **移出根文件**（2026-11-09）：只解除图巢登记——删该根 `images` 行/`picnest_trash_folders`/`folders` 行、config 里 `folderId|*` 排序键；**磁盘文件夹与文件一律不动**，可重新添加。移出后清孤儿标签：先清指向已删图片的 `image_tags`，再 `DELETE tags WHERE id NOT IN (SELECT tag_id FROM image_tags)`；只删不再被任何图片引用的标签，其他根仍在使用的保留。回收站非空时主进程拒绝（先清空/还原）；被移出根若正在被 watcher 监听则 `stopWatching()` + 清 `_addQueue`（否则 add 事件会 `getOrCreateFolder` 把根复活）；活动根被移出 → 切到 roots[0] 或空态，并重启新根的 watcher；浏览历史过滤掉该根位置。
 - 文件夹右键：新建子/同级、重命名、排序（当前层/全部层，名称/修改时间）、移动到…、导出、查找重复、图标颜色 8 色（多选时批量应用到所有选中文件夹；混合色不显示选中态）、删除。
 - 空文件夹可见（dir-tree 合并真实目录）；颜色/展开/描述/封面存 `dirMemory`（config.json；封面键 `cover`/`coverThumb`）。
+- **根文件本地元数据 `.picnest/meta.json`（2026-11-09）**：点开头目录，PicNest 扫描/监听/树全部忽略，并 `attrib +h` 在资源管理器隐藏。内容：标签列表 + 每张图的评分/注释/URL/收藏/标签、文件夹颜色/描述/展开/封面（相对路径）、手动排序（目录数组 + 每夹图片名数组）。`picnest-root-meta-export/import` 读写；**移出根文件前强制导出**，重新添加根后自动导入并 toast 恢复项；没有文件时启动/加根自动创建。单文件目前约 774KB（10,764 图 / 2,431 条图片元数据）。
 
 ### 回收站
 - 图片软删 `picnestRemove`；文件夹删除整包软删到 `AppData\Roaming\PicNest\picnest-trash\<rootId>\<id>-<name>`（dev 在 `_internal_data\picnest-trash`），行标 `deleted_at + trash_group`。
@@ -66,6 +67,7 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 - 文件夹树行：单击打开；Shift 范围；Alt/Ctrl 加减（不打开）；多选进 selectionView 合并内容视图。
 - 正文文件夹卡片：单击只选中（详情看文件夹）、双击进入；Shift/Alt 只更新选中与详情、不切中央网格；选中样式与图片一致。
 - **拖动排序只在手动排序模式生效**：拖到正文任意位置按最近图中心算插入点，金色竖线距目标 12px，左半插前/右半插后；非手动模式拒绝并提示。
+- **物理排序开关（2026-11-09，默认关）**：文件夹/资料库右键「✓ 排序同步文件名」。开启后手动换序会把同目录文件重命名为 `NN_原名.ext`（文件夹同理 `NN_原名`），资源管理器里也按此顺序；两阶段临时名避免互换撞名；改名时暂停 watcher（否则 rename 事件的旧路径会被当 unlink 删 DB 行），同步 DB 路径 / 缩略图缓存（按新路径 md5）/ dirMemory 键 / dirOrder 嵌套键 / 回收站 abs_path，完成后重开 watcher。默认关闭时顺序只写 `.picnest/meta.json`，不碰文件名。
 - `sort_order=0` = 新录入/移入，manual 时排最前；移动图片重置 0。
 - 拖图到子文件夹卡片/树行 = 移入；外部文件到卡片 = 录入；文件夹到卡片 = 移入；多选整组用 `x-picnest-files/dirs`。
 - 拖图到侧栏「回收站」= 软删；拖到「未分类」= 移库根。
@@ -104,6 +106,12 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 - 实测 MiMo `mimo-v2.6-flash`（`https://api.xiaomimimo.com/v1`，7 个模型）：`/v1/models` 正常；视觉测试（两张异色 64×64）返回 `same:false`。此前 `max_tokens:80` 被思考阶段吃光，`content` 为空。
 - **费用/上传量预估**：AI 参数区「单价 ¥/1M tok」（可选，localStorage `picnest.aiPricePerM`）→ 按 maxPairs×2 张 384px 缩略图（≈45KB/张）与每对 ≈340 tokens 粗估「最多 N 对 · ≈X 张 / Y MB · ≈Z 元」；不填单价只显示上传量。结果头部在 `stats.capped` 时提示「候选超出上限，只查最接近的 N 对」。
 - 实测本地预筛（Fate Grand Order material 1~9，3,372 张；本地 mock 视觉 API）：dHash 候选 4,145 对 → 色块+pHash 筛掉 4,041 对 → 104 对进入 AI 队列（减少 97.5%）；整轮 7.8s（hash+色块+pHash+40 次本地 AI 调用）。只上色块时是 286 对（减少 93.1%），pHash 再砍掉 63.6%。
+
+### 缩略图（2026-11-09 修复）
+- **缓存目录改为 `dataDir/picnest-thumbs`**（主进程补丁 P10）。旧 `dataDir/cache` 在 Windows 上与 Chromium 自己的 `Cache` 同名（大小写不敏感），浏览器缓存清理会把缩略图一起清掉；生产数据目录实测 340MB 只剩 `Cache_Data`。启动时 `picnestMigrateThumbCacheDir` 把旧目录里仍被 DB 引用的文件搬进新目录并改写 `thumbnail_path`，死路径直接清空。
+- `picnest-images-by-dir` 发现 `thumbnail_path` 文件不存在时**同步清 DB**（旧版只清内存，导致每次查询都拿着死路径）。
+- 资料库右键新增 **「修复缩略图…」**：先统计缺失数并确认，再 `picnest-repair-thumbs` 用 `ensureQuickThumb`（sharp / PSD / 视频）并发 2 生成，进度走 `picnest-thumb-repair-progress` + 底部浮条（可停止）；完事刷新列表。可见格子仍保留按需补图（一次最多 80 张）。
+- 实测：4 张缺失 → 4 张补成 / 0 剩；全库 10,764 行从 10,450 个死路径清空后按需/批量重建。
 
 ### 标签（2026-11-09）
 - 表：`tags(id, name COLLATE NOCASE UNIQUE, created_at)` + `image_tags(image_id, tag_id, created_at, PK)`；迁移在 `picnestMigrate()`；图片永久删除由 trigger 清关联，软删保留（还原后标签还在）。
@@ -155,6 +163,7 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 
 ### 主题
 - 顶栏 **☀/☾/◐ 按钮** → 六选一弹板：**跟随系统 / 暖砂 / 靛夜 / 灰白（低饱和） / 炭黑（低饱和） / 墨黑（低饱和）**；持久化 `localStorage['picnest.theme']`。暖砂=原暖米+金浅色，靛夜=原蓝紫夜+金深色。三个顶栏按钮（漏斗/布局/主题）`vo-wrap` 改 flex 对齐，盒子统一 29×28。
+- **跨运行方式记忆**：主题同时写 `config.json` 的 `picnestTheme`；`theme.js` 启动后从 config 对齐并回写 localStorage。localStorage 按 origin 隔离（dev `127.0.0.1` / 生产 `file://`），只靠它会看起来“换种启动方式就丢主题”。
 - 主题按钮动效：同一套 `springAt`（640ms，旋转 16° + 缩放 1.10 峰值），挂载/hover/mousedown/换主题/`iconShake` 集体晃动都会播放——不是 SVG 层图标但绑进集体动效总线。
 - `ui/src/lib/theme.js`：auto 模式读 `matchMedia('(prefers-color-scheme: dark)')` 并监听变化，**解析到 `mono-light`（灰白）/ `mono-dark`（墨黑）**；解析结果写 `<html data-theme="light|dark|mono-light|mono-charcoal|mono-dark">` + `style.colorScheme`（light/mono-light → light，其余 → dark）；五个主题各有 token 块（light 为 `:root` 默认，其余按 `data-theme` 覆盖）。
 - **低饱和黑白**：`mono-light`（中性灰白）/ `mono-charcoal`（比墨黑浅一档的中性灰）/ `mono-dark`（中性近黑），强调色也去饱和；默认文件夹图标走 `--folder-default` token（普通主题金、黑白主题灰）。**黑白主题只改界面，不改图片/色板内容**。
@@ -177,6 +186,9 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 - `images.sort_order`；`images.trash_group`；`picnest_trash_folders(id, folder_id, rel, abs_path, trash_path, name, image_count, size, deleted_at)`。
 - **sortMode 全局**（localStorage）；`sort_order` 各自存；每文件夹独立排序模式未做。
 - **dirOrder 键 = `${folderId}|${rel || "__root__"}`**（多库隔离）；旧全局键启动时复制到每个库，读取只认新键。
+- **dirMemory 键也改为 `${folderId}|${rel || ""}`**（2026-11-09）：`picnestMigrateDirMemoryKeys` 把旧全局 rel 键复制到每个根（已有根键不覆盖）；渲染层 `refreshTree` 只取当前根切片（rel 键），`patchDirMemory` 必须带 `activeRootId`；目录改名走 `picnest-dir-memory-rename` 整体搬键。
+- **根文件元数据 `.picnest/meta.json`**：导出前必须确认根目录真实存在（避免 `D:xxx` 这类 drive-relative 垃圾路径建目录）；`picnest-root-meta-ensure` 只在缺失时创建；移出根文件前、`before-quit` 都会兜底导出。导入只按相对路径匹配当前索引，找不到的条目保留在文件里不报错。
+- **缩略图缓存目录 = `dataDir/picnest-thumbs`**：禁止改回 `dataDir/cache`（与 Chromium `Cache` 撞名）；新增缩略图生成必须写这里，缓存文件名 = `md5(file_path) + ext`（`discoverThumbnailPath` 的寻址规则）。
 - 文本缩略图/读取/保存、查重 IPC、rotate/flop IPC 见 PLAN 对应条目；**新增 IPC 必须 main / preload(apply.mjs P4b) / api.js 三处同步**。
 - Pinia 响应式数组过 IPC 先 `[...arr]`（否则 structured clone 报错）。
 - `ImageGrid` 是 fragment 根（canvas+viewport）：App 传 class 会丢；布局让位用 CSS 变量；`loadImages` 会清选中，本地增量别调它。
@@ -195,6 +207,12 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 - **Eagle 向导打包**：向导主进程从项目根 `tools/eagle-migrate/` 调脚本；打包版必须把该目录随 app 分发，或在主进程内置迁移逻辑，否则打包版向导会找不到脚本。
 - **开源发布准备**：README/截图/构建脚本、许可证与第三方声明（PicRand GPL-3.0、Wenku8 GPL-2.0-or-later）、扩展打包、去除个人路径/示例库/测试数据。
 - **查重收尾（余项）**：AI 候选超过上限时目前只查最接近的 200 对、不做多轮分批；`import-dir-copy` 的同名同大小 MD5 与整体 copy 仍是同步（超大文件夹拖入会卡主进程）；AI 定时后台扫描未做。
+
+### 元数据 / 物理排序 / 缩略图（2026-11-09 新增）
+- 元数据导入目前是“文件覆盖 DB”：只在添加根时导入一次；外部同时改 PicNest 时以最后一次加根为准，无冲突合并/双向同步。
+- 物理排序无撤销、无预览；开启后每次手动拖拽都可能改名（每个目录全量重命名）。建议只在小文件夹开启；改名前不弹确认。
+- 全库缩略图批量修复是单次全量任务（并发 2、可停止），10k 图预计数分钟；停止后再点会重新统计缺失，无断点续跑。
+- 物理改名对符号链接/权限不足目录只记错误继续，不回滚整批；极端情况下可能残留 `__pn_tmp_*` 临时名（可手动改回或再跑一次排序）。
 
 ### P1 后续
 - **Eagle 迁移后续**：增量同步、PDF 索引、多文件夹条目 UI 提示（当前 7 条完整多夹、16 条部分失效、2 条 PDF 未索引）。
@@ -234,7 +252,7 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 | `ui/src/components/ConfirmDialog.vue` · `NamePromptDialog.vue` · `DuplicateDialog.vue` · `ImportResultCard.vue` · `TrashMenu.vue` · `TaskProgress.vue` | 确认/命名/录入三选一/结果卡/回收站菜单/长任务进度浮条 |
 | `ui/src/components/FilterBar.vue` · `ColorPicker.vue` | 筛选 · HSV 取色 |
 | `ui/vite.config.js` | dev 绑定 127.0.0.1 + watch polling；build 输出到 app dist |
-| `tools/patches/apply.mjs` · `picnest-handlers.js` | 补丁 P1-P9 + 文件夹/录入/回收站/统计/排序/文本/查重/变换 IPC + **M6 采集本地服务（127.0.0.1:41600）** |
+| `tools/patches/apply.mjs` · `picnest-handlers.js` | 补丁 P1-P10 + 文件夹/录入/回收站/统计/排序/文本/查重/变换/根元数据/物理排序/缩略图修复 IPC + **M6 采集本地服务（127.0.0.1:41600）** |
 | `extension/` | 自研 MV3 采集扩展（右键存图/页面截图 + popup 选根/文件夹）；安装见 `extension/README.md` |
 | `tools/cdp-*.mjs` · `shot-prod.ps1` · `verify_counts.py` | CDP 探针/截屏 · 多库对账 |
 | `docs/MOTION.md` | 动效规格/调参 |
@@ -271,6 +289,10 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 28. 主题只认 `<html data-theme>`：新颜色同时补 `:root`（light）、`[data-theme="dark"]`、`mono-light`、`mono-charcoal`、`mono-dark` 五块，组件里不要写 `prefers-color-scheme`；auto 的系统联动在 `lib/theme.js`，首屏防闪在 `index.html` 内联脚本；canvas（概览滑尺）换主题要主动重绘。
 29. 采集服务只绑 `127.0.0.1:41600`；写文件前必须过 `picnestCollectTarget`（防 `..` 逃逸）；Origin 只放行 `chrome-extension://`/`extension://`/本机 localhost；扩展代码原创、不打包不引用 Eagle 资源，Eagle 兼容层不默认开启。改采集服务后 `apply.mjs` + 重启；扩展改完在 `edge://extensions` 点重载，**并刷新所有已打开网页**（旧 content script 的 runtime 失效，会提示扩展已更新）。
 30. 长扫描必须可取消 + 流式：`picnest-find-duplicates` / `picnest-dir-dup-check` 的 cancel flag 每轮重置，检查点放在 `picnestMapLimit` 回调读盘前；MD5 一律用 `picnestMd5Of`（`createReadStream` + per-scan Map 缓存），不要再 `readFileSync` 整文件。文件夹查重进度走 `picnest-dir-dup-progress` → store `taskProgress`（`TaskProgress.vue`），弹重复三选一/开始复制前收起浮条；取消要让 `paste()`/`importDrop()` break 并标「已取消」。
+31. **根内元数据目录只能是点开头的 `.picnest`**：scan-worker 原本不跳过点目录（P9f 才补上），watcher 自带 dot 过滤；`verify_counts.py` 也跳过点目录/文件。别把 meta.json 放到非隐藏目录——`.json` 会被当文本类图片入库。
+32. **dirMemory 键一律 `${rootId}|${rel}`**：渲染层 `dirMemory` 只保存当前根切片（rel 键，组件不用改），写入走 `patchDirMemory`→`api.dirMemorySet(activeRootId, rel, patch)`；切根/refreshTree 重新取切片；目录改名走 `picnest-dir-memory-rename`。不要再做 `dirMemoryGet('')` 全表缓存（多根会同名串色，根图标颜色 `dirMemory['']` 也会串）。
+33. **缩略图缓存固定 `dataDir/picnest-thumbs`**（禁止 `dataDir/cache`，Windows 大小写不敏感会撞 Chromium `Cache`）；生成/迁移/修复都遵守 `md5(file_path)+ext` 寻址；`imagesByDir` 发现缩略图文件丢失必须同时清 DB 字段。
+34. **物理改名必须暂停 watcher**（rename 旧路径会触发 unlink，主进程会按旧路径删 DB 行），用两阶段临时名避免互换撞名；同步 DB `file_path`、缩略图缓存名（按新路径 md5）、dirMemory/dirOrder 键、回收站 `abs_path`，完成后重开 watcher。默认开关关闭，仅手动排序时生效。
 
 ## 七、验收状态 / 最近提交
 
@@ -278,17 +300,22 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 - **对账**：`verify_counts.py` 好图 6718/6718、素材 42/42 全一致（修了根目录直属文件漏数）。
 - **查重**：全库 6,724 文件 258ms → 9 组/19 文件/可省 13.1MB；临时目录图片/视频/文本正确分组、同尺寸不同内容未误报；批量软删后组自动收缩。
 - **查重收尾（2026-11-09）**：精确扫描关面板取消 → 空态「已停止扫描」；全库 10,764 行 317ms / 38 个同尺寸候选（Eagle 入库已按内容去重 → 0 组；抽检 19 对同尺寸文件 MD5 均不同，非回归）；120×2.9MB 临时目录文件夹查重 900ms、进度 12→102、取消 `canceled:true`；30 副本走真实 `mergeDirWithDupes`：浮条 3/30→30/30、弹窗 count=30、复制 30 张；`cancelTask` 中途停止不复制；import-check 3 冲突 / 1 干净 / 1 缺失。
+- **根内元数据（2026-11-09）**：临时根 4 图：加根自动建 `.picnest/meta.json`（Hidden 属性生效）；打标签 + 评分 5 + `Alpha` 颜色红/描述 + 图片顺序写入；移出根后 meta.json 保留（DB tagsRemoved=1）；重新加根恢复标签关联/颜色/描述/评分/顺序；`picnest-root-meta-load` 返回 counts（tags 0 已有、tagLinks 0 已有、images 1、dirs 1、imageOrder 2）。真实根导出 774KB（23 标签 / 2,431 图片元数据 / 47 文件夹 / 83 目录排序 / 102 图片排序）。`verify_counts.py` 跳过 `.picnest` 后 10,764/10,764 一致。
+- **主题（2026-11-09）**：config `picnestTheme=mono-light`；把 localStorage 改成 dark 后 reload，仍回 mono-light 并回写 localStorage（跨 origin 记忆生效）；重启后主题保持。
+- **缩略图（2026-11-09）**：缓存迁移到 `picnest-thumbs`；临时根删 4 张缓存文件 → 缺失计数 4 → 修复 4/4、失败 0 → 缺失计数 0；全库死路径清理后按需生成（浏览中从 22 → 821+）。
+- **生产实例缩略图修复（2026-11-09）**：Desktop 好图 6,630 / 素材 30；批量修复 6,619 张（生成 6,618，失败 1 个坏 mp4 `26a60135….mp4`）+ 素材 30/30；`Fate Grand Order material 1~9` 3,353 图 0 缺缩略图 / 0 裂图，`src` 全部走 `AppData/Roaming/PicNest/picnest-thumbs`；主题 config=dark；两个根均生成 `.picnest/meta.json`（Hidden 属性生效）。
+- **物理排序（2026-11-09）**：临时根 3 图 + 2 子夹：开关开→拖拽换序 `a/b/c` → `Alpha/01_a`、`Alpha/02_b`、`Beta/01_c`，DB/缩略图路径同步；再同步文件夹顺序 → `01_Beta/01_c`、`02_Alpha/01_a`、`02_Alpha/02_b`；watcher 暂停/恢复、缩略图缓存改名均通过；停开关/移出临时根后无残留。
 - **拖拽**：内部载荷+uri-list 拖到树行正确 move；行顶部 10% 强制 into 无插入线；根行不接；未分类入口落库根。
 - **封面**：设置后卡片换图；同夹另一图菜单显示 ✓，再按恢复自动。
 - **变换**：735×490 临时图保存后磁盘/DB 均 490×735，缩略图重生成、按钮复位、toast 正常。
 - **其它**：详情宽 289 时卡片 4 列；简报 1/370、滚轮 1→1.12、拖拽 50/30、右键菜单 z900>890；灯箱/简报 A/D 通过；大图透明顶栏/dock、安全区 70px 通过。
-- **最近提交**：`9cc6703` 查重+优化 → `47bd9b4` 简报/黑白/未分类 → `5063d7e` 去打开灯箱 → `5ace0a3` A/D+图片查重 → `32ec210` 卡片条/拖拽分类 → `c48e575` 拖入落点/封面 → `86539a3` 旋转翻转保存 + 封面开关 → `a61b86b` 网格图片浮岛化 → `e985fcf` 左栏顶部白色渐变 → `1a4c91c` 正文面板孤岛感加码 → `8eefc03` 详情浮岛升层 + 上/右缝收紧 → `5d44454` 色板索引跟随视图补建 → `4e28313` 灯箱/简报去浮岛 → `d6b3d4e` 移出根文件 → `57ed218` 主题系统 → `caab968` 根文件菜单「在文件管理器中打开」 → `f3ccc2f` 右键菜单统一「根文件」措辞 → `bc6735a` 清剩余可见「资料库」文案 → `20679c4` 两套低饱和黑白主题 → `dd25fcc` 再加「炭黑」档 → `61ae51f` 主题更名/跟随系统改灰白墨黑/炭黑提亮 → `504f50c` 顶栏三钮对齐 + 主题钮集体动效 → `18ec862` 详情文件夹 chip 反推修复 → `f780c65` M6 采集（自研扩展 + 本地服务） → `8132bd3` 网页内按住采集（长按面板） → `4f30cab` 采集面板固定白底 + Chrome 安装说明 → `2572965` 采集查重（跳过/仍然保存） → `94f5595` Pixiv Referer / Pinterest 覆盖层兜底 → `15d0c3a` 扩展上下文失效提示 + 重载后刷新纪律 → `d1857c4` 采集覆盖旧图 + 未分类 FolderIcon 动效 → `e2f0da1` 采集面板新建文件夹 → `6cfea18` 查重 AI 视觉二次查重（再往前见 `git log`：文本/视频、多选、视觉分层、详情缩放、大图透明栏等） → `b161ec5` 模型列表 → `74c6850` MiMo 思考额度 → `7abf1a7` 色块预筛 → `032b7e1` pHash 预筛 → `141fab9` 关思考/4 并发 → `13ba4bd` 一键保留/跨后缀/弹层修复 → `ba0be79` 查重收尾（精确取消/流式 MD5/进度浮条/AI 预估） → `9ac0c6b` 左栏图巢标签可拖窗。
+- **最近提交**：`9cc6703` 查重+优化 → `47bd9b4` 简报/黑白/未分类 → `5063d7e` 去打开灯箱 → `5ace0a3` A/D+图片查重 → `32ec210` 卡片条/拖拽分类 → `c48e575` 拖入落点/封面 → `86539a3` 旋转翻转保存 + 封面开关 → `a61b86b` 网格图片浮岛化 → `e985fcf` 左栏顶部白色渐变 → `1a4c91c` 正文面板孤岛感加码 → `8eefc03` 详情浮岛升层 + 上/右缝收紧 → `5d44454` 色板索引跟随视图补建 → `4e28313` 灯箱/简报去浮岛 → `d6b3d4e` 移出根文件 → `57ed218` 主题系统 → `caab968` 根文件菜单「在文件管理器中打开」 → `f3ccc2f` 右键菜单统一「根文件」措辞 → `bc6735a` 清剩余可见「资料库」文案 → `20679c4` 两套低饱和黑白主题 → `dd25fcc` 再加「炭黑」档 → `61ae51f` 主题更名/跟随系统改灰白墨黑/炭黑提亮 → `504f50c` 顶栏三钮对齐 + 主题钮集体动效 → `18ec862` 详情文件夹 chip 反推修复 → `f780c65` M6 采集（自研扩展 + 本地服务） → `8132bd3` 网页内按住采集（长按面板） → `4f30cab` 采集面板固定白底 + Chrome 安装说明 → `2572965` 采集查重（跳过/仍然保存） → `94f5595` Pixiv Referer / Pinterest 覆盖层兜底 → `15d0c3a` 扩展上下文失效提示 + 重载后刷新纪律 → `d1857c4` 采集覆盖旧图 + 未分类 FolderIcon 动效 → `e2f0da1` 采集面板新建文件夹 → `6cfea18` 查重 AI 视觉二次查重（再往前见 `git log`：文本/视频、多选、视觉分层、详情缩放、大图透明栏等） → `b161ec5` 模型列表 → `74c6850` MiMo 思考额度 → `7abf1a7` 色块预筛 → `032b7e1` pHash 预筛 → `141fab9` 关思考/4 并发 → `13ba4bd` 一键保留/跨后缀/弹层修复 → `ba0be79` 查重收尾（精确取消/流式 MD5/进度浮条/AI 预估） → `9ac0c6b` 左栏图巢标签可拖窗 → `ac42e7c` 根内元数据/目录记忆按根/主题 config/缩略图缓存迁移+批量修复/物理排序开关。
 - **仍需 Feb 物理鼠标验收**：旋转/翻转保存、封面 ✓ 两段式、图片拖行边缘/根行/未分类、简报缩放平移右键与 A/D、灯箱右键/A/D、查重面板（精确停止 / 文件夹查重浮条与停止）、详情三向缩放、大图透明顶栏/底栏、框选/拖动排序。
 - dist 已构建；HANDOFF/PLAN 已同步（MOTION 未改）。
 
 ## 八、2026-11-09 阶段检查点
 
-- **当前运行态**：dev 实例运行中（Vite `127.0.0.1:5173` + CDP 9222，数据目录 `app\_internal_data`），浏览位置「好图/藤原」；当前仅登记根文件 `好图`（`D:\图巢迁移\好图`，10,764 张索引）；标签 23 个、无零引用标签；无 `_ptmp`、无测试临时根；主进程补丁与 UI 构建均为最新（`ba0be79`）。
+- **当前运行态**：**生产实例运行中**（`app\PicNest.exe`，无 `PICNEST_DEV`，数据目录 `AppData\Roaming\PicNest`，CDP 9222）；根文件 `好图`（Desktop，6,630）与 `素材`（30）；缩略图已全量补齐（仅 1 个坏 mp4 无海报）；主题 dark 已写入 config；两个根都有 `.picnest/meta.json`。dev 数据 `app\_internal_data` 保留（根 456 `D:\图巢迁移\好图` 10,764 张，缩略图 10,762/10,764）；无测试临时根（已删 520）；主进程补丁与 UI 构建均为最新。
 - **本轮成果**：标签系统 v1（单图/多选、任一筛选、搜索、改名/删除）；Eagle 库迁移（11,365 活跃条目 / 18.25GB / 23 标签 / 2,538 URL）+ 根文件 ⌂ 应用内向导；根文件夹物理重命名；文件夹树移除库根行；树行拖拽排序修正；多选文件夹批量图标颜色；侧栏顶部紧凑化；灯箱退出恢复滚动；文件夹树换成 Wenku8 动效图标；移出根文件自动清理孤儿标签（旧遗留 `材质/精选` 已删，临时根验证 `tagsRemoved=1`）。
 - **迁移已知项**：2 个 PDF 已复制但未索引；7 个完整多文件夹条目各两份；16 个多文件夹条目有一条失效引用（放有效文件夹）；40 个全部引用失效 + 293 未归类在 `_未分类`；589 个重名加后缀。Eagle 原库只读未改。
 - **关键提交**：`b8df2a5` 迁移工具/本库导入 → `8b683f8` Eagle 向导 → `0e34544` 树移除根行 → `020c36a` 根物理重命名 → `713d719` 拖拽排序/侧栏紧凑 → `60fdd03` 灯箱滚动 → `09c8e3b` 多选颜色 → `d6543cf` 树动效文件夹图标。

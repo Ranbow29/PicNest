@@ -364,3 +364,11 @@ PicNest/
     实测：120 个 2.9MB 副本目录查重 900ms、进度 12→102、取消返回 canceled；30 副本走真实 mergeDirWithDupes：
     浮条 3/30 → 30/30、弹窗 count=30、复制 30 张；cancelTask 中途停止不复制；全库 10,764 行 317ms、38 个同尺寸候选
     （内容均不同 → 0 组，Eagle 入库时已按内容去重）；import-check 3 冲突 + 1 干净 + 1 缺失正确。
+
+53. **根内元数据 / 目录记忆按根隔离 / 主题 / 缩略图 / 物理排序（2026-11-09，Feb 指定）**：
+    ① **`.picnest/meta.json` 随根文件走**：点开头目录（扫描 P9f 跳过、watcher 自带 dot 过滤、`attrib +h` 资源管理器隐藏）。导出内容 = 标签名列表 + 每图 `{rating, annotation, url, favorite, tags}` + 每个文件夹 `{color, desc, expanded, cover(相对路径)}` + `orders.dirs`（父 rel → 目录名数组）+ `orders.images`（目录 rel → 文件名数组，仅 size>1 的组）。`picnest-root-meta-export/import/ensure/save/load`：移出根前强制导出（根目录不存在则跳过，防 drive-relative 垃圾路径建目录），重新加根后导入并 toast；启动时 `ensure` 只补缺失文件；`before-quit` 兜底导出全部根。store 在标签/评分/注释/文件夹记忆/排序/移动/改名后 `scheduleRootMetaSave()` 防抖 1.2s。
+    ② **目录记忆按根隔离**：config `picnestDirMemory` 键从 `rel` 改为 `${rootId}|${rel}`；`picnestMigrateDirMemoryKeys` 把旧全局键复制到每个根；渲染层只取当前根切片（rel 键，组件零改），`refreshTree` 换切片；`patchDirMemory(activeRootId, rel, patch)`；目录改名 `picnest-dir-memory-rename` 整体搬键 + 封面绝对路径；根图标色 `dirMemory['']` 不再跨库串。
+    ③ **主题跨 origin 记忆**：`picnest-theme-get/set` 写 config `picnestTheme`；`theme.js` 启动后从 config 对齐（`touched` 防覆盖用户手选），首次运行把 localStorage 旧值迁到 config。解决 dev（127.0.0.1）与生产（file://）localStorage 不互通造成的“重启丢主题”假象。
+    ④ **缩略图缓存目录 P10 → `dataDir/picnest-thumbs`**：避开 Windows 上同名的 Chromium `Cache`（实测生产 340MB 只剩 `Cache_Data`，缩略图全被清）。`picnestMigrateThumbCacheDir` 搬旧文件/清死路径；`imagesByDir` 发现死路径写回 DB；新增 `picnest-thumbs-missing` / `picnest-repair-thumbs(-cancel)`：统计缺失 → 用户确认 → `ensureQuickThumb`（sharp/PSD/视频）并发 2 生成 → `picnest-thumb-repair-progress` + `taskProgress` 浮条可停止。资料库右键「修复缩略图…」。实测 4 缺失 → 4 补成 / 0 剩。
+    ⑤ **物理排序开关（默认关）**：资料库/文件夹右键「✓ 排序同步文件名」。开启后 `reorderImages` / `insertOrderAt` / `appendOrder` / `dropOnDirs` 在写完顺序后调 `picnest-physical-order-images|dirs`：按目录分组加 `NN_` 前缀（去掉旧前缀），两阶段临时名防互换，暂停 watcher（rename 旧路径会触发 unlink 删 DB 行），同步 DB `file_path`、缩略图缓存名（md5 新路径）、dirMemory/dirOrder 键、回收站 `abs_path`，完成后重开 watcher。关闭时只写元数据不动文件。实测临时根 3 图/2 夹：`a,b,c` → `Alpha/01_a`、`Alpha/02_b`、`Beta/01_c` → `01_Beta/01_c`、`02_Alpha/01_a`、`02_Alpha/02_b`。
+    ⑥ **`verify_counts.py` 跳过点目录/文件**，否则 `.picnest/meta.json`（.json 属文本白名单）会让对账多 1。
