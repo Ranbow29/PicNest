@@ -130,7 +130,7 @@ const chipStyle = computed(() => {
     @dragenter="onDragEnter" @dragover="onDragOver" @dragleave="onDragLeave" @drop.prevent="onDrop"
   >
     <SideBar />
-    <ResizeHandle store="sidebar" />
+    <ResizeHandle v-if="!lib.sidebarCollapsed" store="sidebar" />
     <section class="main-panel">
       <TitleBar />
       <div class="main-inner">

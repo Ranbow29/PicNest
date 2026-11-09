@@ -6,13 +6,14 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { GESTURE_MS, layerAt, scheduleAmbient, iconShake } from '../lib/iconMotion'
 
 const props = defineProps({
-  name: { type: String, required: true },   // filter | layout | grid | contents | justified | pin | folder
+  name: { type: String, required: true },   // filter | layout | grid | contents | justified | pin | folder | sidebar
   size: { type: Number, default: 16 },
   ambient: { type: Boolean, default: false }, // 环境晃动（顶栏开）
   active: { type: Boolean, default: false },  // 选中态：填充加重
   stroke: { type: Number, default: 1.7 },
   open: { type: Boolean, default: false },    // folder 专用：展开态（前板下压开口）
   tint: { type: String, default: '' },        // folder 专用：染色（'' = currentColor）
+  collapsed: { type: Boolean, default: false }, // sidebar 专用：收起态（分隔线左移、列内线淡出）
   mountShake: { type: Boolean, default: true }, // 挂载即晃一次（树上批量挂载可关）
 })
 
@@ -124,6 +125,15 @@ const clampArt = (v) => Math.max(-0.12, Math.min(v, 1))
       <line :x1="12 + 2.5 * q" :y1="5 - p * 0.8" :x2="12 + 2.5 * q" :y2="19 - p * 0.8" />
     </g>
 
+    <!-- sidebar：左侧栏面板，收起时分隔线左移、列内短线淡出；p/q/r 走同一套弹簧 -->
+    <g v-else-if="name === 'sidebar'">
+      <rect :x="4.5" :y="5 - p * 0.8" width="15" height="14" />
+      <line class="sb-divider" :class="{ collapsed }"
+            :x1="10 + q * 0.8" :y1="5 - p * 0.8" :x2="10 + q * 0.8" :y2="19 - p * 0.8" />
+      <line :x1="6.1 + q * 0.5" :x2="8.1 + q * 0.5" y1="9" y2="9" :style="{ opacity: collapsed ? 0 : 1 }" />
+      <line :x1="6.1 + r * 0.5" :x2="8.1 + r * 0.5" y1="12.6" y2="12.6" :style="{ opacity: collapsed ? 0 : 1 }" />
+    </g>
+
     <!-- justified：三行宽度随 p/q/r 伸缩（行自适应 reflow 语义） -->
     <g v-else-if="name === 'justified'">
       <rect :x="4" y="5" :width="8 + 8 * p" height="3.2" />
@@ -162,4 +172,6 @@ const clampArt = (v) => Math.max(-0.12, Math.min(v, 1))
 <style scoped>
 .anim-ico { display: block; overflow: visible; }
 .anim-ico rect, .anim-ico line, .anim-ico path { will-change: transform; }
+.sb-divider { transition: transform 0.22s var(--ease-overshoot); }
+.sb-divider.collapsed { transform: translateX(-3.6px); }
 </style>

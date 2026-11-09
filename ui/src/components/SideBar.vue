@@ -202,7 +202,8 @@ async function dropOnLib(e, l) {
 
 <template>
   <aside
-    class="sidebar" :style="{ width: lib.sidebarWidth + 'px' }"
+    class="sidebar" :class="{ collapsed: lib.sidebarCollapsed }"
+    :style="{ width: (lib.sidebarCollapsed ? 0 : lib.sidebarWidth) + 'px' }"
     @dragover="onSidebarDragOver" @dragleave="onSidebarDragLeave" @drop.prevent="dropToRoot"
   >
     <div class="brand" @mousedown="startWindowDrag" @dblclick="onBarDblclick">
@@ -269,9 +270,11 @@ async function dropOnLib(e, l) {
   /* 左侧栏 = 底层（不是浮岛卡）：主面板浮在它上面，ZCode 同构；宽度可拖 */
   flex: none; display: flex; flex-direction: column;
   padding: 10px 8px 8px; overflow: hidden;
+  transition: width 0.24s var(--ease-overshoot), padding 0.2s ease, opacity 0.18s ease;
   /* 底子顶部白色渐变：从栏顶亮起，150px 内渐隐回 --bg（范围对齐品牌区+「全部」行） */
   background: linear-gradient(180deg, var(--sidebar-glow) 0, rgba(255, 255, 255, 0) 150px);
 }
+.sidebar.collapsed { padding-left: 0; padding-right: 0; opacity: 0; pointer-events: none; }
 .brand { display: flex; align-items: baseline; gap: 8px; padding: 1px 10px 9px; border-bottom: 1px solid var(--border); user-select: none; }
 .brand h1 { font-family: var(--font-serif); font-size: 19px; margin: 0; letter-spacing: 4px; }
 .brand .sub { font-size: 10px; color: var(--text-2); letter-spacing: 1.5px; }

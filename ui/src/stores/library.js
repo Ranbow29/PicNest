@@ -146,6 +146,7 @@ export const useLibrary = defineStore('library', {
     paletteBuild: { running: false, done: 0, total: 0 },
     colorDist: {},           // file_path -> d76（颜色命中排序用）
     sidebarWidth: Number(localStorage.getItem('picnest.sidebarWidth')) || 236,
+    sidebarCollapsed: localStorage.getItem('picnest.sidebarCollapsed') === '1', // 左边栏收起态（持久化）
     inspectorWidth: Number(localStorage.getItem('picnest.inspectorWidth')) || 296,
     inspectorHeight: Number(localStorage.getItem('picnest.inspectorHeight')) || 0, // 0 = 自适应满高
   }),
@@ -2471,6 +2472,11 @@ export const useLibrary = defineStore('library', {
       if (this.lightbox.open && moved) this.closeLightbox()
       this.showNote(parts.join(' · ') || '没有可移动的文件', [], failed ? 'error' : 'ok')
       return { ok: failed === 0, moved, failed, already: already.length }
+    },
+    toggleSidebar() {
+      this.sidebarCollapsed = !this.sidebarCollapsed
+      localStorage.setItem('picnest.sidebarCollapsed', this.sidebarCollapsed ? '1' : '0')
+      collectiveShake() // 左栏收起/放出 → 集体晃动
     },
     toggleInspector() {
       this.viewer.showInspector = !this.viewer.showInspector

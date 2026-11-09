@@ -244,6 +244,7 @@ function onKey(e) {
     <div class="spacer" />
     <!-- 窗控 + 详情开关：圆形亮色，内联右端（与其他窗口右上角对齐） -->
     <div class="bar-controls">
+      <button class="wc" :class="{ on: lib.sidebarCollapsed }" :title="lib.sidebarCollapsed ? '展开左边栏' : '收起左边栏'" @click="lib.toggleSidebar()"><AnimIcon name="sidebar" :size="14" :collapsed="lib.sidebarCollapsed" /></button>
       <button class="wc" :class="{ on: lib.viewer.showInspector }" title="详情面板（收起/放出）" @click="lib.toggleInspector()"><AnimIcon name="contents" :size="14" /></button>
       <button class="wc" :class="{ on: topPinned }" :title="topPinned ? '取消置顶（当前置顶中）' : '置顶窗口'" @click="toggleTop"><AnimIcon name="pin" :size="14" :active="topPinned" /></button>
       <button class="wc" title="最小化" @click="api.windowMinimize()">─</button>
