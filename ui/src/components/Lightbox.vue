@@ -238,8 +238,36 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 function onWheel(e) {
   if (kind.value === 'text') return // 文本编辑器里滚轮 = 滚动正文
   e.preventDefault()
+  const s0 = lib.viewer.scale || 1
   const k = e.deltaY < 0 ? 1.12 : 1 / 1.12
-  lib.viewer.scale = Math.min(8, Math.max(0.05, lib.viewer.scale * k))
+  const s1 = Math.min(8, Math.max(0.05, s0 * k))
+  if (s1 === s0) return
+  const wasPan = pan.active
+  /* 拖动中滚轮：先把当前拖动位移写进 store，再做锚点缩放，最后把 pan 基准
+     重设到当前光标/新位移；否则下一次 mousemove 会用旧 base 把缩放后的位移顶回去。 */
+  if (wasPan) {
+    lib.viewer.tx = pan.curTx
+    lib.viewer.ty = pan.curTy
+  }
+  const rect = stageEl.value?.getBoundingClientRect()
+  if (rect) {
+    const px = e.clientX - (rect.left + rect.width / 2)
+    const py = e.clientY - (rect.top + rect.height / 2)
+    lib.viewer.tx = px - (s1 / s0) * (px - (lib.viewer.tx || 0))
+    lib.viewer.ty = py - (s1 / s0) * (py - (lib.viewer.ty || 0))
+  }
+  lib.viewer.scale = s1
+  if (wasPan) {
+    if (pan.raf) { cancelAnimationFrame(pan.raf); pan.raf = 0 }
+    pan.baseTx = lib.viewer.tx
+    pan.baseTy = lib.viewer.ty
+    pan.startX = e.clientX
+    pan.startY = e.clientY
+    pan.curTx = lib.viewer.tx
+    pan.curTy = lib.viewer.ty
+    if (canvasMode.value) canvasStage.value?.drawAt(pan.curTx, pan.curTy, s1)
+    else applyPan(pan.curTx, pan.curTy)
+  }
 }
 function onDown(e) {
   if (kind.value !== 'image') return // 文本/视频不拖拽平移
