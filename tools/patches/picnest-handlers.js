@@ -1165,6 +1165,12 @@ electron.ipcMain.handle("picnest-remove-root", (_event, folderId) => {
     const images = db.prepare("DELETE FROM images WHERE folder_id = ?").run(folderId).changes;
     db.prepare("DELETE FROM picnest_trash_folders WHERE folder_id = ?").run(folderId);
     db.prepare("DELETE FROM folders WHERE id = ?").run(folderId);
+    /* 移出根后清孤儿标签：图片行已删，清掉不再被任何图片引用的标签 */
+    let tagsRemoved = 0;
+    try {
+      db.prepare("DELETE FROM image_tags WHERE image_id NOT IN (SELECT id FROM images)").run();
+      tagsRemoved = db.prepare("DELETE FROM tags WHERE id NOT IN (SELECT tag_id FROM image_tags)").run().changes;
+    } catch (e) { /* 旧库无标签表时不阻塞移出 */ }
     /* 清该库的目录排序键（config，键 = folderId|rel） */
     try {
       const c = JSON.parse(fs.readFileSync(configPath, "utf-8"));
@@ -1181,7 +1187,7 @@ electron.ipcMain.handle("picnest-remove-root", (_event, folderId) => {
       const td = path.join(dataDir, "picnest-trash", String(folderId));
       if (fs.existsSync(td)) fs.rmSync(td, { recursive: true, force: true });
     } catch (e) {}
-    return { ok: true, images, name: root.display_name || path.basename(root.path) };
+    return { ok: true, images, name: root.display_name || path.basename(root.path), tagsRemoved };
   } catch (e) {
     return { ok: false, error: String(e?.message || e) };
   }

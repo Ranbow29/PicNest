@@ -37,7 +37,7 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 - 侧栏区块名 **「根文件」**；资料库行的右键菜单用同一套词（重命名根文件…/复制根文件/粘贴到此根文件/移出根文件…），提示卡与 toast 也已统一。点击当前库也会回库根（全部视图 + `dir=null`）。
 - **根文件重命名 = 物理目录 rename**（2026-11-09）：同步 `folders.path`、该根所有 `images.file_path`、`picnest_trash_folders.abs_path`、`dirMemory.cover` 绝对路径；主进程先停 watcher，渲染层用新路径重新 `startWatcher`（不能复用旧 onAdd 闭包）；失败会回滚目录并恢复旧 watcher。显示名跟随新目录名。文件夹重命名本来就是物理 rename，并同步 `dirMemory` 的 rel/cover。Eagle 向导为避免同名根冲突只改显示名，走 `displayOnly` 分支不动磁盘。
 - **文件夹树不显示库根行**（2026-11-09）：根由「根文件」区选中/高亮；树只渲染根下子文件夹（顶层 depth=0，默认折叠，不再自动展开根）。根文件的编辑在「根文件」区（资料库行菜单：**在文件管理器中打开**/新建/重命名显示名/排序/导出/颜色/复制/粘贴/查找重复/**移出根文件**）。「打开」用 `openWithDefault`（`shell.openPath`）直接进目录本身；图片右键的「在文件管理器打开」是 `showItemInFolder`（选中文件），两者语义不同。
-- **移出根文件**（2026-11-09）：只解除图巢登记——删该根 `images` 行/`picnest_trash_folders`/`folders` 行、config 里 `folderId|*` 排序键；**磁盘文件夹与文件一律不动**，可重新添加。回收站非空时主进程拒绝（先清空/还原）；被移出根若正在被 watcher 监听则 `stopWatching()` + 清 `_addQueue`（否则 add 事件会 `getOrCreateFolder` 把根复活）；活动根被移出 → 切到 roots[0] 或空态，并重启新根的 watcher；浏览历史过滤掉该根位置。
+- **移出根文件**（2026-11-09）：只解除图巢登记——删该根 `images` 行/`picnest_trash_folders`/`folders` 行、config 里 `folderId|*` 排序键；**磁盘文件夹与文件一律不动**，可重新添加。移出后清孤儿标签：先清指向已删图片的 `image_tags`，再 `DELETE tags WHERE id NOT IN (SELECT tag_id FROM image_tags)`；只删不再被任何图片引用的标签，其他根仍在使用的保留。回收站非空时主进程拒绝（先清空/还原）；被移出根若正在被 watcher 监听则 `stopWatching()` + 清 `_addQueue`（否则 add 事件会 `getOrCreateFolder` 把根复活）；活动根被移出 → 切到 roots[0] 或空态，并重启新根的 watcher；浏览历史过滤掉该根位置。
 - 文件夹右键：新建子/同级、重命名、排序（当前层/全部层，名称/修改时间）、移动到…、导出、查找重复、图标颜色 8 色（多选时批量应用到所有选中文件夹；混合色不显示选中态）、删除。
 - 空文件夹可见（dir-tree 合并真实目录）；颜色/展开/描述/封面存 `dirMemory`（config.json；封面键 `cover`/`coverThumb`）。
 
@@ -263,7 +263,7 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 24. 封面菜单是文件夹级开关（有手动封面即显示 ✓，再按清除），换新封面两次操作是预期。
 25. 入场波 `.wi` 的 fill-mode 保持 `backwards`，不要改回 `both`（会永久压住 hover 的 transform）；卡片浮岛靠 `--shadow-tile*` / `--tile-edge` 双主题 token。
 26. 颜色筛选依赖内存 `palettes`：`loadImages` 末尾必须 `ensurePalettes()`（init 只覆盖启动时文件夹，切换后不补建=颜色筛选恒 0）；FilterBar 取色/灰度、详情现算色板都要兜底触发/回写 `lib.palettes`。
-27. 移出根文件 = 只清 DB 索引/排序键/回收站条目，磁盘文件永不动；回收站非空先拒；watcher 命中该根必须停并清 `_addQueue`，否则根会被 add 事件复活。新增根相关 IPC 走 `picnest-handlers.js` + `apply.mjs` 的 P4b preload 列表两处（渲染层直接 `window.picrand.*`）。
+27. 移出根文件 = 只清 DB 索引/排序键/回收站条目 + **清孤儿标签**（无任何 image 引用的 tags），磁盘文件永不动；回收站非空先拒；watcher 命中该根必须停并清 `_addQueue`，否则根会被 add 事件复活。新增根相关 IPC 走 `picnest-handlers.js` + `apply.mjs` 的 P4b preload 列表两处（渲染层直接 `window.picrand.*`）。
 28. 主题只认 `<html data-theme>`：新颜色同时补 `:root`（light）、`[data-theme="dark"]`、`mono-light`、`mono-charcoal`、`mono-dark` 五块，组件里不要写 `prefers-color-scheme`；auto 的系统联动在 `lib/theme.js`，首屏防闪在 `index.html` 内联脚本；canvas（概览滑尺）换主题要主动重绘。
 29. 采集服务只绑 `127.0.0.1:41600`；写文件前必须过 `picnestCollectTarget`（防 `..` 逃逸）；Origin 只放行 `chrome-extension://`/`extension://`/本机 localhost；扩展代码原创、不打包不引用 Eagle 资源，Eagle 兼容层不默认开启。改采集服务后 `apply.mjs` + 重启；扩展改完在 `edge://extensions` 点重载，**并刷新所有已打开网页**（旧 content script 的 runtime 失效，会提示扩展已更新）。
 
@@ -282,8 +282,8 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 
 ## 八、2026-11-09 阶段检查点
 
-- **当前运行态**：dev 实例已用最新 dist 重启；根文件 `好图`（`D:\图巢迁移\好图`，10,869 张）与 `素材`（42 张）；无 `_ptmp`、无测试临时根；主进程补丁与 UI 构建均为最新。
-- **本轮成果**：标签系统 v1（单图/多选、任一筛选、搜索、改名/删除）；Eagle 库迁移（11,365 活跃条目 / 18.25GB / 23 标签 / 2,538 URL）+ 根文件 ⌂ 应用内向导；根文件夹物理重命名；文件夹树移除库根行；树行拖拽排序修正；多选文件夹批量图标颜色；侧栏顶部紧凑化；灯箱退出恢复滚动；文件夹树换成 Wenku8 动效图标。
+- **当前运行态**：dev 实例已用最新 dist 重启；当前仅登记根文件 `好图`（`D:\图巢迁移\好图`，10,869 张）；`素材` 的磁盘目录（`C:\Users\feb\Desktop\素材`）保留但当前未登记。标签 23 个、无零引用标签；无 `_ptmp`、无测试临时根；主进程补丁与 UI 构建均为最新。
+- **本轮成果**：标签系统 v1（单图/多选、任一筛选、搜索、改名/删除）；Eagle 库迁移（11,365 活跃条目 / 18.25GB / 23 标签 / 2,538 URL）+ 根文件 ⌂ 应用内向导；根文件夹物理重命名；文件夹树移除库根行；树行拖拽排序修正；多选文件夹批量图标颜色；侧栏顶部紧凑化；灯箱退出恢复滚动；文件夹树换成 Wenku8 动效图标；移出根文件自动清理孤儿标签（旧遗留 `材质/精选` 已删，临时根验证 `tagsRemoved=1`）。
 - **迁移已知项**：2 个 PDF 已复制但未索引；7 个完整多文件夹条目各两份；16 个多文件夹条目有一条失效引用（放有效文件夹）；40 个全部引用失效 + 293 未归类在 `_未分类`；589 个重名加后缀。Eagle 原库只读未改。
 - **关键提交**：`b8df2a5` 迁移工具/本库导入 → `8b683f8` Eagle 向导 → `0e34544` 树移除根行 → `020c36a` 根物理重命名 → `713d719` 拖拽排序/侧栏紧凑 → `60fdd03` 灯箱滚动 → `09c8e3b` 多选颜色 → `d6543cf` 树动效文件夹图标。
 - **仍需验收**：文件夹动效图标视觉/物理鼠标拖拽、Eagle 向导完整跑一次新库、灯箱/简报切换手感；P0 待办见第四节（向导打包、开源准备、查重收尾）。
