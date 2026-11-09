@@ -185,7 +185,7 @@ function thumbOf(file) {
                   <b v-else>{{ extLabel(file.path) }}</b>
                 </span>
                 <span class="df-meta">
-                  <span class="df-name" :title="file.path">{{ file.name }}</span>
+                  <span class="df-name" :title="file.path">{{ lib.dispName(file.name) }}</span>
                   <span class="df-dir" :title="file.path">{{ file.rel || '库根' }}</span>
                   <span class="df-sub">{{ fmtSize(file.size) }} · {{ fmtDate(file.mtime) }}</span>
                 </span>

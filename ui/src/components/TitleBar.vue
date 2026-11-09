@@ -56,7 +56,7 @@ const crumbs = computed(() => {
     return out
   }
   const parts = String(lib.currentDirRel || '').split('/').filter(Boolean)
-  parts.forEach((p, i) => out.push({ label: p, view: 'all', rel: parts.slice(0, i + 1).join('/') }))
+  parts.forEach((p, i) => out.push({ label: lib.dispName(p), view: 'all', rel: parts.slice(0, i + 1).join('/') }))
   if (!parts.length) out[0].current = true
   else out[out.length - 1].current = true
   return out
@@ -214,6 +214,9 @@ function onKey(e) {
           </div>
         </div>
       </div>
+      <button class="tool num-btn" :class="{ on: lib.hideOrderNumbers }"
+              :title="lib.hideOrderNumbers ? '隐藏排序编号：开（01_ 前缀只影响磁盘名）' : '隐藏排序编号：关（显示真实文件名）'"
+              @click.stop="lib.toggleHideOrderNumbers()">01</button>
       <div class="vo-wrap">
         <button class="tool theme-btn" :class="{ on: themeOpen || theme.mode.value !== 'auto' }" :title="`主题：${themeLabel}`"
                 @click.stop="toggleThemePanel" @mouseenter="playTheme" @mousedown="playTheme">
@@ -340,6 +343,8 @@ function onKey(e) {
   box-shadow: inset 0 0 0 1px var(--accent);
 }
 .vo-wrap { position: relative; display: flex; align-items: center; }
+/* 隐藏排序编号开关：物理排序的 01_ 前缀只在显示层隐藏 */
+.num-btn { font-family: Consolas, var(--font-mono, monospace); font-size: 11px; letter-spacing: 0.3px; min-width: 30px; }
 /* ---- 主题选择 ---- */
 .theme-btn {
   padding: 0 7px; min-width: 29px;

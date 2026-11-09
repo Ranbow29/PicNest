@@ -56,7 +56,7 @@ watch(() => lib.selectedPath, () => { editingName.value = false })
 watch(() => lib.renaming, (v) => { if (v) startEdit() })
 function startEdit() {
   if (!img.value) return
-  nameDraft.value = img.value.file_name.replace(/\.[^.]+$/, '')
+  nameDraft.value = lib.dispName(img.value.file_name).replace(/\.[^.]+$/, '')
   editingName.value = true
   lib.renaming = false
   nextTick(() => { nameInput.value?.focus(); nameInput.value?.select() })
@@ -65,8 +65,11 @@ async function commitName() {
   if (!editingName.value || !img.value) return
   editingName.value = false
   const old = img.value.file_path
-  if (nameDraft.value.trim() && nameDraft.value !== img.value.file_name.replace(/\.[^.]+$/, '')) {
-    await lib.renameImage(old, nameDraft.value.trim())
+  const orig = img.value.file_name
+  const displayStem = lib.dispName(orig).replace(/\.[^.]+$/, '')
+  if (nameDraft.value.trim() && nameDraft.value !== displayStem) {
+    /* 显示层可能隐藏了 01_ 前缀，改名时把前缀原样接回去，避免一次重命名打乱物理排序 */
+    await lib.renameImage(old, lib.renameTarget(orig, nameDraft.value.trim()))
   }
 }
 
@@ -167,8 +170,8 @@ function relOfImage(filePath) {
 }
 const folderName = computed(() => {
   const rel = img.value ? relOfImage(img.value.file_path) : null
-  if (rel === null) return lib.tree?.tree?.name || ''
-  return rel ? rel.split('/').pop() : (lib.tree?.tree?.name || '库根')
+  if (rel === null) return lib.dispName(lib.tree?.tree?.name || '')
+  return rel ? lib.dispName(rel.split('/').pop()) : lib.dispName(lib.tree?.tree?.name || '库根')
 })
 async function copyPath() {
   if (!img.value) return
@@ -209,7 +212,7 @@ const multiFolders = computed(() => {
     const rel = relOfImage(im.file_path) || ''
     map.set(rel, rel ? rel.split('/').pop() : (lib.tree?.tree?.name || '库根'))
   }
-  return [...map.entries()].map(([rel, name]) => ({ rel, name }))
+  return [...map.entries()].map(([rel, name]) => ({ rel, name: lib.dispName(name) }))
 })
 
 /* ---------- 标签 ---------- */
@@ -304,25 +307,28 @@ const folderNameDraft = ref('')
 const nameDirRel = ref('')
 watch(singleDir, (d) => {
   nameDirRel.value = d?.rel || ''
-  folderNameDraft.value = d?.node?.name || ''
+  folderNameDraft.value = lib.dispName(d?.node?.name || '')
 }, { immediate: true })
 async function commitFolderName() {
   const rel = nameDirRel.value
   if (!rel) return
   const node = lib.findNode(lib.tree?.tree, rel)
   const oldName = node?.name || ''
+  const oldDisplay = lib.dispName(oldName)
   const name = folderNameDraft.value.trim()
-  if (!name || name === oldName) { folderNameDraft.value = oldName; return }
-  const r = await lib.renameDir(rel, name)
+  if (!name || name === oldDisplay) { folderNameDraft.value = oldDisplay; return }
+  /* 显示层隐藏的 01_ 前缀要接回去，改名不打乱物理文件夹顺序 */
+  const target = lib.renameTarget(oldName, name)
+  const r = await lib.renameDir(rel, target)
   if (r?.ok) {
     nameDirRel.value = r.rel
-    folderNameDraft.value = r.name
+    folderNameDraft.value = lib.dispName(r.name)
   } else {
-    folderNameDraft.value = oldName
+    folderNameDraft.value = oldDisplay
     lib.error = r?.error || '重命名失败'
   }
 }
-function resetFolderName() { folderNameDraft.value = singleDir.value?.node?.name || '' }
+function resetFolderName() { folderNameDraft.value = lib.dispName(singleDir.value?.node?.name || '') }
 
 const dirDesc = ref('')
 let descTimer = null
@@ -368,7 +374,7 @@ async function exportFolder() {
         v-if="editingName" ref="nameInput" v-model="nameDraft"
         class="name-input" @keyup.enter="commitName" @blur="commitName" @keyup.esc="editingName = false"
       />
-      <div v-else class="name" title="点击重命名" @click="startEdit">{{ img.file_name }}</div>
+      <div v-else class="name" title="点击重命名" @click="startEdit">{{ lib.dispName(img.file_name) }}</div>
 
       <input class="line-input" placeholder="添加注释" v-model="meta.annotation" @input="queueSave" />
 
@@ -434,7 +440,7 @@ async function exportFolder() {
           <select v-if="moveOpen" class="move-select" @change="doMove($event)">
             <option value="" disabled selected>选择目标文件夹…</option>
             <option value="">（库根目录）</option>
-            <option v-for="d in lib.flatDirs()" :key="d.rel" :value="d.rel">{{ '　'.repeat(d.depth) + d.name }}（{{ d.total }}）</option>
+            <option v-for="d in lib.flatDirs()" :key="d.rel" :value="d.rel">{{ '　'.repeat(d.depth) + lib.dispName(d.name) }}（{{ d.total }}）</option>
           </select>
           <div v-if="moveNote" class="move-note" :class="{ err: moveNoteErr }">{{ moveNote }}</div>
         </div>
@@ -516,7 +522,7 @@ async function exportFolder() {
           <select v-if="moveOpen" class="move-select" @change="doMultiMove($event)">
             <option value="" disabled selected>全部移到目标文件夹…</option>
             <option value="">（库根目录）</option>
-            <option v-for="d in lib.flatDirs()" :key="d.rel" :value="d.rel">{{ '　'.repeat(d.depth) + d.name }}（{{ d.total }}）</option>
+            <option v-for="d in lib.flatDirs()" :key="d.rel" :value="d.rel">{{ '　'.repeat(d.depth) + lib.dispName(d.name) }}（{{ d.total }}）</option>
           </select>
         </div>
       </div>
@@ -538,7 +544,7 @@ async function exportFolder() {
       <template v-if="mode === 'dir' && singleDir">
         <input v-if="singleDir.rel" class="line-input folder-name" v-model="folderNameDraft"
                @keyup.enter="commitFolderName" @blur="commitFolderName" @keyup.esc="resetFolderName" />
-        <div v-else class="folder-title">{{ singleDir.node.name }}</div>
+        <div v-else class="folder-title">{{ lib.dispName(singleDir.node.name) }}</div>
         <div v-if="!singleDir.rel" class="folder-note">根目录（编辑请在根文件区）</div>
         <textarea v-if="singleDir.rel" class="line-input desc" placeholder="描述" v-model="dirDesc" @input="queueDirDesc"></textarea>
       </template>

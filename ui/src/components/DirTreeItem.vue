@@ -105,10 +105,10 @@ function gapTarget(mark) {
   return { rootId: lib.activeRootId, rel: parentRel, index }
 }
 function dragHintLabel(mark) {
-  if (mark === 'into') return `录入到「${props.node.name}」`
+  if (mark === 'into') return `录入到「${lib.dispName(props.node.name)}」`
   const t = gapTarget(mark)
   const root = lib.roots.find((r) => r.id === lib.activeRootId)
-  const base = t.rel ? t.rel.split('/').pop() : (root?.display_name || '库根')
+  const base = t.rel ? lib.dispName(t.rel.split('/').pop()) : (root?.display_name || '库根')
   return `插入到「${base}」第 ${t.index + 1} 位`
 }
 async function onDrop(e) {
@@ -158,7 +158,7 @@ async function onDrop(e) {
       <i v-if="dropMark === 'after'" class="drop-line bottom" />
       <span class="caret" :class="{ open: expanded, leaf: !node.children?.length }" @click.stop="toggleExpand">▸</span>
       <AnimIcon name="folder" :size="17" :open="expanded" :tint="folderTint(colorKey)" :mount-shake="false" :stroke="1.6" :active="isActive" />
-      <span class="name" :title="node.name">{{ node.name }}</span>
+      <span class="name" :title="lib.dispName(node.name)">{{ lib.dispName(node.name) }}</span>
       <span class="count">{{ node.total }}</span>
     </div>
     <template v-if="expanded">

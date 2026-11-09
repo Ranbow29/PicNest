@@ -37,7 +37,7 @@ function dismiss() {
                 <img :src="fileUrl(c.existing.file_path)" loading="lazy" draggable="false" />
                 <span class="tag">已存在</span>
               </div>
-              <div class="name" :title="c.existing.file_name">{{ c.existing.file_name }}</div>
+              <div class="name" :title="c.existing.file_name">{{ lib.dispName(c.existing.file_name) }}</div>
               <div class="meta">{{ c.existing.width || '—' }} × {{ c.existing.height || '—' }} / {{ fmtSize(c.size) }}</div>
               <div class="folder">{{ c.existing.folderName }}</div>
             </div>
@@ -46,9 +46,9 @@ function dismiss() {
                 <img :src="fileUrl(c.path)" loading="lazy" draggable="false" />
                 <span class="tag blue">新的文件</span>
               </div>
-              <div class="name" :title="c.name">{{ c.name }}</div>
+              <div class="name" :title="c.name">{{ lib.dispName(c.name) }}</div>
               <div class="meta">{{ fmtSize(c.size) }}</div>
-              <div class="folder">{{ dlg.targetRel ? dlg.targetRel.split('/').pop() : '当前目录' }}</div>
+              <div class="folder">{{ dlg.targetRel ? lib.dispName(dlg.targetRel.split('/').pop()) : '当前目录' }}</div>
             </div>
           </div>
         </div>

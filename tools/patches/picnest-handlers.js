@@ -2144,7 +2144,7 @@ function picnestPhysWatcherActive(rootPath) {
 }
 function picnestPhysPad(i, total) { return String(i).padStart(Math.max(2, String(total).length), "0"); }
 function picnestStripOrderPrefix(name) {
-  const m = /^\d{1,4}[_\-\s]+(.+)$/.exec(String(name || ""));
+  const m = /^(?:\d{1,3}|0\d{3})_+(.+)$/.exec(String(name || ""));
   return m ? m[1] : String(name || "");
 }
 /* 改文件路径并同步 thumbnail 缓存名（缓存按新路径 md5 寻址）；失败只影响缓存 */

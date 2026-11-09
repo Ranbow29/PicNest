@@ -65,8 +65,9 @@ function newSibling() {
 }
 function rename() {
   const rel = relOf(menu.value.rel)
+  const oldName = nameOf(rel)
   run(() => {
-    ask.value = { title: '重命名文件夹', initial: nameOf(rel), selectBase: true, run: (name) => lib.renameDir(rel, name) }
+    ask.value = { title: '重命名文件夹', initial: lib.dispName(oldName), selectBase: true, run: (name) => lib.renameDir(rel, lib.renameTarget(oldName, name)) }
   })
 }
 function renameLib() {
@@ -208,7 +209,7 @@ function deleteDir() {
   const useSelection = lib.selectedDirs.length > 1 && lib.selectedDirs.includes(rel)
   const rels = lib.topLevelDirs(useSelection ? lib.selectedDirs : [rel]).filter((r) => r !== '')
   if (!rels.length) return
-  const names = rels.map((r) => r.split('/').pop())
+  const names = rels.map((r) => lib.dispName(r.split('/').pop()))
   run(async () => {
     const stats = await lib.dirStats(rels)
     const ok = await lib.askConfirm({

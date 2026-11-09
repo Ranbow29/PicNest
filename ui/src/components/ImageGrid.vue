@@ -496,7 +496,7 @@ const cells = computed(() =>
       isVideo,
       extLabel: isText ? extOf(img.file_path).slice(1).toUpperCase() : '',
       res,
-      info: res ? `${img.file_name}  ${res}` : img.file_name,
+      info: res ? `${lib.dispName(img.file_name)}  ${res}` : lib.dispName(img.file_name),
     }
   })
 )
@@ -673,7 +673,7 @@ function onSubDragOver(e, f) {
   e.stopPropagation()
   e.dataTransfer.dropEffect = isExternalDT(e) ? 'copy' : 'move'
   subDropRel.value = f.rel
-  if (isExternalDT(e)) lib.setDropHint('dir', `录入到「${f.name}」`, e.clientX, e.clientY)
+  if (isExternalDT(e)) lib.setDropHint('dir', `录入到「${lib.dispName(f.name)}」`, e.clientX, e.clientY)
 }
 function onSubDragLeave(f) {
   if (subDropRel.value === f.rel) subDropRel.value = null
@@ -746,7 +746,7 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
                 <img v-if="covers[f.rel]" :src="covers[f.rel]" :class="{ gray: lib.grayscaleMode }" draggable="false" loading="lazy" decoding="async" @error="$event.target.style.visibility='hidden'" />
                 <FolderIcon v-else :color="lib.dirMemory[f.rel]?.color || ''" :size="30" />
               </div>
-              <div class="sf-name" :title="f.name + ' · 双击进入'">{{ f.name }}</div>
+              <div class="sf-name" :title="lib.dispName(f.name) + ' · 双击进入'">{{ lib.dispName(f.name) }}</div>
               <div class="sf-count">{{ f.total }} 个文件</div>
             </div>
           </div>
@@ -760,7 +760,7 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
               <div class="sf-cover trash-cover">
                 <FolderIcon :color="lib.dirMemory[tf.rel]?.color || ''" :size="28" />
               </div>
-              <div class="sf-name" :title="tf.rel">{{ tf.name }}</div>
+              <div class="sf-name" :title="tf.rel">{{ lib.dispName(tf.name) }}</div>
               <div class="sf-count">{{ tf.image_count }} 个文件 · {{ fmtTrashDate(tf.deleted_at) }}</div>
               <div class="tf-actions">
                 <button class="tf-btn" @click="lib.restoreTrashFolder(tf.id)">还原</button>
@@ -793,7 +793,7 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
           <img v-if="img.src" :src="img.src" loading="lazy" decoding="async" draggable="false" @error="onCellImgError(img)" />
           <div v-else-if="img.isText" class="docph">
             <b>{{ img.extLabel }}</b>
-            <span>{{ img.file_name }}</span>
+            <span>{{ lib.dispName(img.file_name) }}</span>
           </div>
           <div v-else-if="img.srcKind === 'error'" class="noimg broken" title="加载失败，点击重试" @click.stop="retryCellImg(img)">⟳</div>
           <div v-else class="noimg">{{ img.isVideo ? '▶' : '∘' }}</div>

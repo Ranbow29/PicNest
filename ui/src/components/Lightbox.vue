@@ -619,7 +619,7 @@ function onKey(e) {
       <div class="text-bar">
         <button class="tb-btn nav" title="上一张（←/A）" @click="lib.lightboxNav(-1)">‹</button>
         <button class="tb-btn nav" title="下一张（→/D）" @click="lib.lightboxNav(1)">›</button>
-        <span class="tb-name" :title="fileName">{{ fileName }}</span>
+        <span class="tb-name" :title="fileName">{{ lib.dispName(fileName) }}</span>
         <span v-if="textState.encoding" class="tb-badge">{{ textState.encoding }}</span>
         <span v-if="textState.truncated" class="tb-warn">超过 2MB · 只读预览</span>
         <span v-else-if="/GB/i.test(textState.encoding)" class="tb-warn">保存将转为 UTF-8</span>

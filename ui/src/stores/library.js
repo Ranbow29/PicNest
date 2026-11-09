@@ -104,6 +104,7 @@ export const useLibrary = defineStore('library', {
     hoverLabels: true,    // 网格悬停显字（M5 视图选项可关）
     showSubfolderContent: localStorage.getItem('picnest.showSubfolderContent') !== '0', // 文件夹视图：是否包含子文件夹图片
     layout: localStorage.getItem('picnest.layout') || 'grid',       // grid | justified | masonry（持久化）
+    hideOrderNumbers: localStorage.getItem('picnest.hideOrderNumbers') !== '0', // 显示层隐藏 01_ 排序前缀（默认开）
     zoom: Number(localStorage.getItem('picnest.zoom')) || 1,          // 顶栏缩放滑条（持久化）
     sortMode: localStorage.getItem('picnest.sortMode') || 'name',    // name|added|mtime|size|dims|rating|random
     physicalOrder: localStorage.getItem('picnest.physicalOrder') === '1', // 手动排序同步改文件名前缀（实验，默认关）
@@ -1905,6 +1906,25 @@ export const useLibrary = defineStore('library', {
     setLayout(key) {
       this.layout = key
       localStorage.setItem('picnest.layout', key)
+    },
+    /* 显示名：物理排序给文件/文件夹加的 01_ 前缀默认在界面隐藏，磁盘名不动 */
+    dispName(name) {
+      const s = String(name || '')
+      return this.hideOrderNumbers ? s.replace(/^(?:\d{1,3}|0\d{3})_+/, '') : s
+    },
+    orderPrefix(name) {
+      const m = /^((?:\d{1,3}|0\d{3})_+)/.exec(String(name || ''))
+      return m ? m[1] : ''
+    },
+    /* 重命名目标名：隐藏编号时把旧前缀接回去；关闭隐藏时按用户输入原样 */
+    renameTarget(oldName, name) {
+      const n = String(name || '')
+      return this.hideOrderNumbers ? this.orderPrefix(oldName) + n : n
+    },
+    toggleHideOrderNumbers() {
+      this.hideOrderNumbers = !this.hideOrderNumbers
+      localStorage.setItem('picnest.hideOrderNumbers', this.hideOrderNumbers ? '1' : '0')
+      this.layoutTick++
     },
     setShowSubfolderContent(v) {
       this.showSubfolderContent = !!v
