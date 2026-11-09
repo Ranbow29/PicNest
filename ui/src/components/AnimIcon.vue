@@ -14,8 +14,11 @@ const props = defineProps({
 })
 
 const phase = ref(-1) // -1 = 静止
+const root = ref(null)
 let raf = 0
 let cancelAmbient = null
+let hostBtn = null
+const onHostEnter = () => play()
 
 function play() {
   cancelAnimationFrame(raf)
@@ -34,12 +37,18 @@ function play() {
    顺带首次启动全体开场一次，符合"状态跃迁盖一次章"的编排哲学。 */
 let mountT = 0
 onMounted(() => {
+  // 悬停按整个按钮算：图标只占按钮一小块，鼠标掠过留白/文字也要动
+  hostBtn = root.value?.closest('button') || null
+  hostBtn?.addEventListener('mouseenter', onHostEnter)
   mountT = setTimeout(play, 80) // 让挂载与布局稳定，手势读起来像同一拍
   if (!props.ambient) return
   const loop = () => { cancelAmbient = scheduleAmbient(() => { play(); loop() }, 3000, 6000) }
   loop()
 })
-onBeforeUnmount(() => { clearTimeout(mountT); cancelAnimationFrame(raf); cancelAmbient?.() })
+onBeforeUnmount(() => {
+  hostBtn?.removeEventListener('mouseenter', onHostEnter)
+  clearTimeout(mountT); cancelAnimationFrame(raf); cancelAmbient?.()
+})
 
 // 集体晃动：总线 +1 时全体同步做一次手势
 watch(iconShake, () => play())
@@ -55,6 +64,7 @@ const clampArt = (v) => Math.max(-0.12, Math.min(v, 1))
 
 <template>
   <svg
+    ref="root"
     :width="size" :height="size" viewBox="0 0 24 24" class="anim-ico"
     fill="none" stroke="currentColor" :stroke-width="stroke"
     stroke-linecap="round" stroke-linejoin="round"
