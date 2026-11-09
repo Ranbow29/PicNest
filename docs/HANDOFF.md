@@ -135,6 +135,7 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 ### 简报 / 黑白 / 无标题栏大图
 - **简报模式**：全屏黑底（页面级 `requestFullscreen`），单击下一张、←/A 上一张、→/D 下一张、Esc 退出；视频静音循环、文本占位；计数/提示/右上关闭。
 - 简报**滚轮以光标为锚点缩放**（0.2–8×）+ 拖拽平移（4px 阈值，未拖动才算单击切图）；右键呼出上述图片菜单（简报 z-index 890 < 菜单 900）。
+- **简报 PSD / 平移（2026-11-10）**：简报图片源改走 `mediaSrc`——PSD 用 `picnest-psd-preview` 的整幅 PNG（`new Image()+decode()` 预解码后才切，期间显示缩略图 + `brief-note`）；普通图失败退缩略图，再失败显示「图片加载失败」。平移不再逐 pointermove 写 `brief.tx/ty`，改成 rAF + `mediaEl.style.transform`（`translate3d`），松手才提交；媒体元素已有 `will-change: transform`。
 - **灯箱右键**：图片/视频/文本舞台右键 → 同一套菜单；输入框/dock/裁剪层保留原生；灯箱 ←/→ 与 A/D 翻页（输入框/裁剪态不拦截，Ctrl+A/D 不误触）。
 - **大图顶栏完全透明**：`.titlebar.lb-clear` 关闭玻璃/模糊/拖尾，只留悬浮控件；浏览模式仍保留全宽玻璃+拖尾。
 - **大图底部 dock 完全透明**：`.dock.dock-clear` 关闭玻璃底/边框/阴影/模糊（裁剪条仍玻璃底）。

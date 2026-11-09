@@ -14,7 +14,7 @@ const dragging = ref(false)
    松手才把最终 tx/ty 写回 store；裁剪模式仍逐帧写 store 以便裁剪框跟随。 */
 const pan = { active: false, startX: 0, startY: 0, baseTx: 0, baseTy: 0, curTx: 0, curTy: 0, raf: 0 }
 function stageTransform(tx, ty) {
-  return `translate(${tx}px, ${ty}px) scale(${lib.viewer.scale}) rotate(${lib.viewer.rot}deg)`
+  return `translate3d(${tx}px, ${ty}px, 0) scale(${lib.viewer.scale}) rotate(${lib.viewer.rot}deg)`
     + (lib.viewer.flopX ? ' scaleX(-1)' : '')
 }
 function applyPan(tx, ty) {
@@ -730,7 +730,7 @@ function onKey(e) {
       v-else-if="!stageDead"
       ref="imgEl" :src="stageUrl" class="stage" :class="{ gray: lib.grayscaleMode }" draggable="false"
       :style="{
-        transform: `translate(${lib.viewer.tx}px, ${lib.viewer.ty}px) scale(${lib.viewer.scale}) rotate(${lib.viewer.rot}deg)` + (lib.viewer.flopX ? ' scaleX(-1)' : ''),
+        transform: `translate3d(${lib.viewer.tx}px, ${lib.viewer.ty}px, 0) scale(${lib.viewer.scale}) rotate(${lib.viewer.rot}deg)` + (lib.viewer.flopX ? ' scaleX(-1)' : ''),
         cursor: lib.viewer.cropMode ? 'default' : dragging ? 'grabbing' : 'grab',
       }"
       @error="onStageError"

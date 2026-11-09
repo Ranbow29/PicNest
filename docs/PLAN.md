@@ -478,3 +478,8 @@ PicNest/
     ① **根因**：`onMove` 每个 mousemove 都 `lib.viewer.tx/ty += delta` 写 Pinia，触发 Lightbox 重渲染 + 裁剪 watcher + 大图 transform 字符串重建；PSD 整幅图（4203×5939）尤其明显。另外 PSD 整幅 PNG 在 IPC 返回后立刻换 src，几十 MB 图未解码完时会出现半张/空白的卡顿感。
     ② **修法**：Lightbox 增加 `pan` 普通对象；`onDown` 记录 base，`onMove` 只算目标并用 rAF 合并（每帧最多一次）；普通模式直接 `imgEl.style.transform`，**不写 store**，松手 `commitPan()` 才提交最终 tx/ty。裁剪模式仍逐帧写 store，保证裁剪框跟随。`.stage` 加 `will-change: transform / backface-visibility`。PSD 整幅 PNG 先用 `new Image()` + `decode()` 预解码，成功后才切 `psdFull`，期间保持缩略图 + 渲染提示。
     ③ **验证**：灯箱内焦点正常时 rAF `avg 8.2ms / p50 5.6ms / p95 6.6ms`（约 120Hz），740 帧中 34 帧 >33ms（主要在起止瞬间）；PSD 打开后 `complete=true`、natural 4203×5939 才切换。实际手感需 Feb 确认。
+
+81. **简报模式 PSD + 平移优化（2026-11-10，Feb 报「简报不支持 PSD」「简报拖拽微微卡顿」）**：
+    ① **PSD 支持**：BriefMode 原来只用 `fileUrl(brief.path)`，PSD 直接给 `<img>` 无解；现在新增 `isPsd/mediaSrc`，PSD 走 `picnest-psd-preview` 的整幅 PNG（`new Image()+decode()` 预解码后才切 src，期间保留 400 缩略图 + `brief-note`），普通图片失败退 400 缩略图，再失败显示「图片加载失败」。实测 `1.psd` 简报 `<img>` natural **4203×5939**、`complete=true`。
+    ② **平移跟手**：原 `onMove` 每个 pointermove 直接写 `brief.tx/ty`，触发 Pinia/组件重渲染；改成 `pan` 普通对象 + rAF 合并，拖动期间只改 `mediaEl.style.transform`（`translate3d`），松手才写回 `brief.tx/ty`；未移动仍按 4px 阈值判单击下一张。媒体元素已有 `will-change: transform`。
+    ③ **验证**：简报全屏焦点正常时 rAF `avg 8.5ms / p50 5.6ms`，p95 55.6ms（715 帧中 38 帧 >33ms，集中起止/机械输入）；实际手感需 Feb 确认。
