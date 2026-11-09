@@ -113,6 +113,31 @@ const patches = [
     from: '    if (entry.isDirectory()) { walk(path.join(dir, entry.name)); continue }',
     to: '    if (entry.name.startsWith(".")) continue\n    if (entry.isDirectory()) { walk(path.join(dir, entry.name)); continue } /* PicNest:P9f */',
   },
+  {
+    id: 'P11a', desc: '应用名 PicRand → PicNest（任务栏/托盘/崩溃报告）',
+    from: 'electron.app.setName("PicRand");',
+    to: 'electron.app.setName("PicNest"); /* PicNest:P11a */\ntry { electron.app.setAppUserModelId("PicNest"); } catch (e) {}',
+  },
+  {
+    id: 'P11b', desc: '托盘 tooltip → PicNest 图巢',
+    from: 'tray.setToolTip("PicRand");',
+    to: 'tray.setToolTip("PicNest 图巢"); /* PicNest:P11b */',
+  },
+  {
+    id: 'P11c', desc: '托盘菜单「显示 PicRand」→「显示 PicNest 图巢」',
+    from: '{ label: "显示 PicRand", click: () => showWindow() },',
+    to: '{ label: "显示 PicNest 图巢", click: () => showWindow() }, /* PicNest:P11c */',
+  },
+  {
+    id: 'P11d', desc: 'crashReporter productName/companyName → PicNest',
+    from: 'crashReporter.start({ productName: "PicRand", companyName: "PicRand", submitURL: "", uploadToServer: false });',
+    to: 'crashReporter.start({ productName: "PicNest", companyName: "PicNest", submitURL: "", uploadToServer: false }); /* PicNest:P11d */',
+  },
+  {
+    id: 'P11e', desc: '子进程探针 wmic 进程名 → PicNest.exe',
+    from: 'wmic process where "name=\'PicRand.exe\'" get ProcessId,CommandLine /format:list',
+    to: 'wmic process where "name=\'PicNest.exe\'" get ProcessId,CommandLine /format:list /* PicNest:P11e */',
+  },
 ]
 
 let ok = 0, skip = 0, fail = 0
@@ -122,6 +147,21 @@ for (const p of patches) {
   src = src.replace(p.from, p.to)
   ok++; console.log(`[ok]   ${p.id} ${p.desc}`)
 }
+
+/* ---- P11f: 应用 package.json 名称 → PicNest（任务栏/系统显示名） ---- */
+try {
+  const APPPKG = path.join(ROOT, 'app', 'resources', 'app', 'package.json')
+  const pkg = JSON.parse(fs.readFileSync(APPPKG, 'utf8'))
+  const changed = pkg.name !== 'picnest' || pkg.productName !== 'PicNest' || pkg.description !== 'PicNest 图巢' || pkg.author !== 'PicNest'
+  pkg.name = 'picnest'
+  pkg.productName = 'PicNest'
+  pkg.description = 'PicNest 图巢'
+  pkg.author = 'PicNest'
+  if (changed) {
+    fs.writeFileSync(APPPKG, JSON.stringify(pkg, null, 2))
+    console.log('[ok]   P11f package.json 应用名 → PicNest')
+  }
+} catch (e) { console.warn('[skip] P11f package.json:', e.message) }
 
 /* ---- P4: 追加型补丁（picnest-handlers.js 整块，重放=更新到最新） ---- */
 const HANDLERS_SRC = path.join(ROOT, 'tools', 'patches', 'picnest-handlers.js')

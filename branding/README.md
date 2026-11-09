@@ -55,13 +55,13 @@
 
 ## 终稿方向：黑底 N 标（`final/`）
 
-最终采用你在 `PicNest-logo-template.psd` 里保留的 C 层（黑底 N + 金点）。仓库里保存了这份 PSD 原件；按你后来的要求，最终 PNG/ICO 里把 N 组等比缩到 **84%**（四周黑边加大），并把 N 从暖纸色提为**中性白**（金色蛋点保留原色），PSD 仍是 100% 原始母版：
+最终以你最新保存的 `PicNest-logo-template.psd` 可见层合成结果为准：**纯白 N + 更大的浅金色蛋点 + 黑底圆角 tile**（N 底部保留了你在 PSD 里画的分隔缺口）。仓库保存了这份 PSD 原件：
 
 - `final/PicNest-logo.psd`（最终母版，2048 × 2048，参考层均已隐藏）
 - `final/picnest-icon-2048.png` / 1024 / 512 / 256 / 128 / 64 / 48 / 32 / 16
 - `final/picnest.ico`（16/24/32/48/64/128/256 多尺寸，Windows 用）
 - `final/preview-icon.png`（浅底/深底 + 缩小可读性检查）
 
-终稿已接入 PicNest 的窗口/任务栏图标（`app/_internal_data/icon.png` 与 `icon.ico`，原件备份为 `icon-old.*`）。`PicNest.exe` 文件本身的内嵌图标仍是旧图，需用 rcedit/Resource Hacker 之类工具改 exe 资源；窗口与任务栏已生效。
+终稿已接入 PicNest 的窗口/任务栏图标（`app/_internal_data/icon.png` 与 `icon.ico`，原件备份为 `icon-old.*`），并写入 `PicNest.exe` 的图标与版本信息（FileDescription `PicNest` / ProductName `PicNest 图巢`；exe 原件备份为 `app/PicNest.exe.picrand.bak`）。窗口标题、托盘、任务栏 AppDetails、package.json 应用名均已改为 PicNest。
 
 几何版 N（无笔刷细节）保留为备选矢量：`concepts/monogram-geometric-draft.svg`，只在需要重新矢量化时参考。侧栏品牌字标仍保持「图巢 / PicNest」文字，不混入图标。

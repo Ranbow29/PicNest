@@ -2436,6 +2436,21 @@ electron.ipcMain.handle("picnest-strip-order-prefixes", async (event, folderId) 
   }
 });
 
+/* 任务栏/跳转列表显示名：Windows 的按钮组标签不一定跟窗口 title 走，
+   需要给窗口显式设置 AppUserModelID 与 relaunchDisplayName（PicNest）。 */
+electron.app.on("browser-window-created", (_event, win) => {
+  try {
+    const ico = path.join(path.dirname(process.execPath), "_internal_data", "icon.ico");
+    win.setAppDetails({
+      appId: "PicNest",
+      appIconPath: fs.existsSync(ico) ? ico : "",
+      appIconIndex: 0,
+      relaunchCommand: process.execPath,
+      relaunchDisplayName: "PicNest",
+    });
+  } catch (e) { /* 旧 Electron 或缺图标时忽略 */ }
+});
+
 /* ==== 插件系统（P1/P2：theme + renderer；main 仅登记，P3 再跑） ==== */
 const PICNEST_PLUGIN_API = "1.0.0";
 const PICNEST_PLUGIN_ID_RE = /^[a-z0-9][a-z0-9._-]{1,63}$/;

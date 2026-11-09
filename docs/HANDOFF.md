@@ -167,6 +167,11 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 - 示例与开发指南：`examples/plugins/`（`mono-mint` 主题、`view-stats` 沙箱面板、`registry.json`、zip、README）。
 - 实测：文件夹安装两例成功；theme CSS 437B 注入/停用移除；renderer 面板 srcdoc 5502B、bridge 收到 `ready` + `query-images#1/#2`；`query-images` 返回 3 行；storage set/get 正常；本地 registry 解析 2 条；zip 安装 + sha256 通过；最后已卸载示例，插件目录为空。
 
+### 应用名 / 任务栏（2026-11-09）
+- 软件名统一 **PicNest 图巢**：窗口 title、`package.json`（name/productName）、`app.setName`/`setAppUserModelId`、托盘 tooltip/菜单、crashReporter、wmic 进程名、exe VersionInfo（FileDescription `PicNest` / ProductName `PicNest 图巢` / OriginalFilename `PicNest.exe`）全部改过；exe 原件备份 `app/PicNest.exe.picrand.bak`。
+- **任务栏按钮组标签不是窗口 title**：只改 title/AppUserModelID 仍会显示旧名；必须给窗口 `win.setAppDetails({ appId: "PicNest", relaunchDisplayName: "PicNest", appIconPath: …icon.ico })`（见 handlers 的 `browser-window-created`），Windows UIAutomation 才会显示 `PicNest - 1 个运行窗口`。
+- exe 的图标与 VersionInfo 用临时安装的 `resedit`（纯 JS PE 资源库）修改；`app/` 目录被 gitignore，打包/重新复制原始 exe 时需要重跑这一步。
+
 ### 详情 / 视觉分层
 - 单选图片：预览/名称/注释/色板/评分/文件夹/操作（**URL 输入栏已删，DB url 字段保留**）。**图片的「文件夹」chip 必须由 `file_path` 反推**（`relOfImage`），不能用 `currentDirRel`——根文件夹开「显示子文件夹内容」或合并视图时，视图位置≠图片所在夹（否则子夹图片被标成库根）。
 - **灯箱详情是第二个 Inspector 实例**（`.insp-overlay` 新挂载）：`selectedPath` 的 meta/色板 watch 必须 `{ immediate: true }` 才能拿到当前选中项；`lib.palettes[p]` 的**空数组**必须视为未命中（`ensurePalettes` 用空数组标记 SKIP/失败），否则灯箱色板永远显示「—」。
@@ -276,7 +281,7 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 | `ui/src/components/DupFinder.vue` | 查重结果分组面板（精确/AI 页签、精确停止、AI 设置/预估、快捷保留、勾选、软删） |
 | `ui/src/components/HelpDialog.vue` | 顶栏 `?` 使用说明（排序前缀/清除方式重点、各功能与快捷键） |
 | `docs/PLUGIN.md` | 插件系统设计定稿 + 实现状态（theme/renderer 已实现；main/签名未做） |
-| `branding/` | Logo 概念底稿（A 巢照片 / B 巢鸮 / C N 标）、2048 PSD 模板、深色变体与尺寸预览；终稿**黑底 N 标**在 `final/`（PSD 母版 + 2048…16 PNG + ICO；最终版 N 缩至 84%、黑边加大、N 提为中性白）；已接入窗口/任务栏图标（`app/_internal_data/icon.png`/`icon.ico`，旧件备份 `icon-old.*`）；exe 内嵌图标待 rcedit |
+| `branding/` | Logo 概念底稿（A 巢照片 / B 巢鸮 / C N 标）、2048 PSD 模板、深色变体与尺寸预览；终稿**黑底 N 标**在 `final/`（最新 PSD 母版 + 2048…16 PNG + ICO；纯白 N/浅金蛋点/底部保留分隔缺口）；已接入窗口/任务栏/exe 图标（`app/_internal_data/icon.png`/`icon.ico`，旧件备份 `icon-old.*`）；exe 内嵌图标待 rcedit |
 | `ui/src/components/PluginManager.vue` · `ui/src/lib/plugins.js` | 插件库面板（已安装/仓库/文件夹安装/启停/卸载）· 主题注入 + 插件事件总线 |
 | `examples/plugins/` | 示例插件（mono-mint 主题、view-stats 沙箱面板）、registry.json、zip、开发指南 |
 | `ui/src/components/ConfirmDialog.vue` · `NamePromptDialog.vue` · `DuplicateDialog.vue` · `ImportResultCard.vue` · `TrashMenu.vue` · `TaskProgress.vue` | 确认/命名/录入三选一/结果卡/回收站菜单/长任务进度浮条 |
