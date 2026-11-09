@@ -1,0 +1,87 @@
+PicNest (图巢)
+Copyright (C) 2026 Ranbow29
+
+This product is free and open-source software, licensed under the GNU General
+Public License, Version 3 (GPL-3.0) or any later version.
+
+========================================================================
+1. Upstream Work and Derivative Attribution
+========================================================================
+
+PicNest is a derivative work of PicRand 2.77.0:
+  Copyright (C) 2026 PicRand
+  Licensed under the GNU General Public License, Version 3.
+
+Major modifications introduced in PicNest:
+  - Re-engineered the UI layer with Vue 3.5, Pinia, and Vite 6, adopting the
+    warm-paper / golden aesthetic, floating island grid, and multi-theme palette.
+  - Implemented an in-place direct linking architecture with virtualized 1024px
+    display thumbnails, bounding memory usage under Chromium decoding budgets.
+  - Introduced the two-tier duplicate detection engine: streaming MD5 exact match
+    and visual AI verification with color block + pHash pre-filtering.
+  - Built a zero-friction sandbox plugin architecture (Theme CSS and Renderer
+    isolated HTML iframes with postMessage RPC).
+  - Developed a standalone browser extension (MV3) for web image and screenshot
+    collection via local service.
+  - Added physical folder ordering with atomic two-phase renaming, hidden order
+    prefixes, and `.picnest/meta.json` in-root metadata persistence.
+  - Added an Eagle library migration wizard to reconstruct flat .library bundles
+    back into hierarchical physical folders.
+  - Completely severed and removed Steam status reporting, Steamworks runtime
+    binaries, and proprietary telemetry to ensure 100% free software purity.
+
+========================================================================
+2. Icons and Art Assets
+========================================================================
+
+- Folder Motion Icons:
+  Derived from Wenku8 (archive_icon_fold_art), licensed under the
+  GNU General Public License, Version 2.0 or later (GPL-2.0-or-later).
+  Compatible with GPL-3.0.
+
+- Branding, Logo, and Visual Identity:
+  The PicNest name, nest/egg icon designs, PSD templates, and exported icon
+  assets are Copyright (C) 2026 Ranbow29.
+
+========================================================================
+3. Third-Party Notices and Runtimes
+========================================================================
+
+PicNest bundles or depends on several open-source libraries and runtimes:
+
+- Electron / Chromium
+  Copyright (c) Electron contributors / The Chromium Authors
+  Licensed under the MIT License and BSD-style Licenses.
+  See app/LICENSE.electron.txt and app/LICENSES.chromium.html for details.
+
+- Vue.js / Pinia
+  Copyright (c) 2014-present Evan You
+  Licensed under the MIT License.
+
+- Vite
+  Copyright (c) 2019-present Evan You & Vite Contributors
+  Licensed under the MIT License.
+
+- better-sqlite3
+  Copyright (c) 2017 Joshua Wise
+  Licensed under the MIT License.
+
+- sharp
+  Copyright (c) 2013-present Lovell Fuller and contributors
+  Licensed under the Apache License, Version 2.0.
+
+- ag-psd
+  Copyright (c) 2019-present Dmitriy KOPROV
+  Licensed under the MIT License.
+
+- koffi
+  Copyright (c) 2021-present Victorien Elvinger
+  Licensed under the MIT License.
+
+- trash
+  Copyright (c) Sindre Sorhus <sindresorhus@gmail.com>
+  Licensed under the MIT License.
+
+- @xenova/transformers / onnxruntime-node
+  Copyright (c) Xenova / Microsoft Corporation
+  Licensed under the Apache License, Version 2.0 / MIT License.

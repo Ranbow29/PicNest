@@ -1,4 +1,4 @@
-// PicNest 主进程/preload 补丁脚本（幂等，改前自动备份 .bak，重放安全）
+﻿// PicNest 主进程/preload 补丁脚本（幂等，改前自动备份 .bak，重放安全）
 // 用法: node tools/patches/apply.mjs
 import fs from 'node:fs'
 import path from 'node:path'
@@ -7,6 +7,17 @@ import { fileURLToPath } from 'node:url'
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const MAIN = path.join(ROOT, 'app', 'resources', 'app', 'out', 'main', 'index.js')
 const PRELOAD = path.join(ROOT, 'app', 'resources', 'app', 'out', 'preload', 'index.js')
+const SOURCE_DIR = path.join(ROOT, 'source', 'picrand-2.77.0')
+
+// 若 app/resources/app/out 尚不存在（全新克隆环境），自动从 source/ 源码镜像初始化
+if (!fs.existsSync(MAIN) && fs.existsSync(SOURCE_DIR)) {
+  console.log('[init] 未在 app/resources/app 检测到主进程，正在从 source/picrand-2.77.0 自动初始化...')
+  const targetAppDir = path.join(ROOT, 'app', 'resources', 'app')
+  fs.mkdirSync(path.join(targetAppDir, 'out', 'main'), { recursive: true })
+  fs.mkdirSync(path.join(targetAppDir, 'out', 'preload'), { recursive: true })
+  fs.cpSync(SOURCE_DIR, targetAppDir, { recursive: true })
+  console.log('[init] 源码镜像初始化完毕！')
+}
 
 let src = fs.readFileSync(MAIN, 'utf8')
 if (!fs.existsSync(MAIN + '.bak')) {
