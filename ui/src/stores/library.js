@@ -41,6 +41,37 @@ function defaultAiDupState() {
   }
 }
 
+/* 查重保留规则：不同后缀是否各留一张（jpg/jpeg 视为同一种） */
+function dupExtKey(filePath) {
+  const base = String(filePath || '').split(/[\\/]/).pop() || ''
+  const m = /\.([A-Za-z0-9]+)$/.exec(base)
+  let e = m ? m[1].toLowerCase() : '(none)'
+  if (e === 'jpeg' || e === 'jpe' || e === 'jfif') e = 'jpg'
+  if (e === 'tif') e = 'tiff'
+  return e
+}
+function dupPickKeeper(files, mode) {
+  if (!files?.length) return null
+  if (mode === 'newest') return files.reduce((a, b) => ((b.mtime || 0) > (a.mtime || 0) ? b : a), files[0])
+  if (mode === 'oldest') return files.reduce((a, b) => ((b.mtime || 0) < (a.mtime || 0) ? b : a), files[0])
+  if (mode === 'largest') return files.reduce((a, b) => ((b.size || 0) > (a.size || 0) ? b : a), files[0])
+  return files[0]
+}
+function dupKeepers(files, mode, preserveExt) {
+  if (!files?.length) return []
+  if (!preserveExt) return [dupPickKeeper(files, mode)].filter(Boolean)
+  const byExt = new Map()
+  for (const f of files) {
+    const k = dupExtKey(f.path)
+    if (!byExt.has(k)) byExt.set(k, [])
+    byExt.get(k).push(f)
+  }
+  return [...byExt.values()].map((arr) => dupPickKeeper(arr, mode)).filter(Boolean)
+}
+function dupPreserveDefault() {
+  try { return localStorage.getItem('picnest.dupPreserveExt') !== '0' } catch { return true }
+}
+
 export const useLibrary = defineStore('library', {
   state: () => ({
     roots: [],            // [{id, path, display_name}]
@@ -81,7 +112,7 @@ export const useLibrary = defineStore('library', {
     contextMenu: { open: false, x: 0, y: 0, image: null },
     renaming: false,
     dupDialog: { open: false, items: [], targetRel: undefined, mode: 'files', count: 0, resolve: null },
-    dupFinder: { open: false, rootId: null, rel: '', mode: 'exact', loading: false, progress: { done: 0, total: 0 }, groups: [], stats: null, error: '', selected: [], ai: defaultAiDupState() },
+    dupFinder: { open: false, rootId: null, rel: '', mode: 'exact', loading: false, progress: { done: 0, total: 0 }, groups: [], stats: null, error: '', selected: [], preserveExt: true, ai: defaultAiDupState() },
     confirmDialog: { open: false, title: '', message: '', details: [], confirmText: '确定', danger: false, resolve: null },
     importResult: { open: false, nonce: 0, summary: '', details: [], tone: 'ok' }, // 录入汇总结果卡
     clipboard: { kind: '', paths: [], count: 0, root: false }, // 应用内复制剪贴板（kind: dirs | files）
@@ -961,6 +992,7 @@ export const useLibrary = defineStore('library', {
       this.dupFinder = {
         open: true, rootId: rid, rel: rel || '', mode: 'exact', loading: true,
         progress: { done: 0, total: 0 }, groups: [], stats: null, error: '', selected: [],
+        preserveExt: dupPreserveDefault(),
         ai: defaultAiDupState(),
       }
       this.runDupScan()
@@ -1112,6 +1144,7 @@ export const useLibrary = defineStore('library', {
       this.dupFinder = {
         open: false, rootId: null, rel: '', mode: 'exact', loading: false,
         progress: { done: 0, total: 0 }, groups: [], stats: null, error: '', selected: [],
+        preserveExt: dupPreserveDefault(),
         ai: defaultAiDupState(),
       }
     },
@@ -1121,18 +1154,33 @@ export const useLibrary = defineStore('library', {
       else this.dupFinder.selected.push(path)
     },
     /* 快捷保留：first | newest | oldest | largest（AI 组尺寸不同，"最大"有意义） */
+    setDupPreserveExt(v) {
+      this.dupFinder.preserveExt = !!v
+      try { localStorage.setItem('picnest.dupPreserveExt', v ? '1' : '0') } catch { /* 静默 */ }
+    },
     dupKeep(gi, mode) {
       const groups = this.dupFinder.mode === 'ai' ? this.dupFinder.ai.groups : this.dupFinder.groups
       const g = groups[gi]
       if (!g?.files?.length) return
       const files = g.files
-      let keep = files[0]
-      if (mode === 'newest') keep = files.reduce((a, b) => ((b.mtime || 0) > (a.mtime || 0) ? b : a), files[0])
-      else if (mode === 'oldest') keep = files.reduce((a, b) => ((b.mtime || 0) < (a.mtime || 0) ? b : a), files[0])
-      else if (mode === 'largest') keep = files.reduce((a, b) => ((b.size || 0) > (a.size || 0) ? b : a), files[0])
+      const keepers = new Set(dupKeepers(files, mode, this.dupFinder.preserveExt).map((f) => f.path))
       const inGroup = new Set(files.map((f) => f.path))
       this.dupFinder.selected = this.dupFinder.selected.filter((p) => !inGroup.has(p))
-        .concat(files.filter((f) => f.path !== keep.path).map((f) => f.path))
+        .concat(files.filter((f) => !keepers.has(f.path)).map((f) => f.path))
+    },
+    /* 一键处理全部组：按规则保留，其余全部勾选；会覆盖当前勾选 */
+    dupKeepAll(mode) {
+      const groups = this.dupFinder.mode === 'ai' ? this.dupFinder.ai.groups : this.dupFinder.groups
+      if (!groups?.length) return
+      const keepers = new Set()
+      for (const g of groups) {
+        for (const f of dupKeepers(g.files, mode, this.dupFinder.preserveExt)) keepers.add(f.path)
+      }
+      const selected = []
+      for (const g of groups) {
+        for (const f of g.files) if (!keepers.has(f.path)) selected.push(f.path)
+      }
+      this.dupFinder.selected = [...new Set(selected)]
     },
     async applyDupTrash() {
       const paths = [...this.dupFinder.selected]

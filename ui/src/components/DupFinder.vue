@@ -13,6 +13,19 @@ const stats = computed(() => (f.value.mode === 'ai' ? f.value.ai.stats : f.value
 const activeError = computed(() => (f.value.mode === 'ai' ? f.value.ai.error : f.value.error))
 const activeLoading = computed(() => (f.value.mode === 'ai' ? f.value.ai.loading : f.value.loading))
 const aiKey = ref('')
+let dfBackdropDown = null
+function onDfPointerDown(e) {
+  // 只有真正从遮罩上按下才算；从卡片里按下再拖出去不会关闭
+  dfBackdropDown = e.button === 0 && e.target === e.currentTarget ? { x: e.clientX, y: e.clientY } : null
+}
+function onDfBackdropUp(e) {
+  const d = dfBackdropDown
+  dfBackdropDown = null
+  if (!d) return
+  if (Math.abs(e.clientX - d.x) > 6 || Math.abs(e.clientY - d.y) > 6) return
+  lib.closeDupFinder()
+}
+function onDfBackdropCancel() { dfBackdropDown = null }
 
 const scopeLabel = computed(() => {
   const root = lib.roots.find((r) => r.id === f.value.rootId)
@@ -74,7 +87,10 @@ function thumbOf(file) {
 
 <template>
   <Teleport to="body">
-    <div v-if="f.open" class="df-layer" @click.self="lib.closeDupFinder()">
+    <div v-if="f.open" class="df-layer"
+      @pointerdown="onDfPointerDown"
+      @pointerup.self="onDfBackdropUp"
+      @pointercancel="onDfBackdropCancel">
       <div class="df-card">
         <header class="df-head">
           <div class="df-title">
@@ -118,6 +134,18 @@ function thumbOf(file) {
             <span v-if="f.ai.note" class="ai-note" :class="{ err: f.ai.noteErr }">{{ f.ai.note }}</span>
           </div>
           <div class="ai-hint">OpenAI 兼容 /chat/completions + /models，模型需支持图片输入。先本地 dHash 缩圈，再用 32×32 色块 + pHash 预筛（dHash≤4 的强结构对直接保留），最后把候选缩略图交给 AI 确认；AI 阶段 4 路并发，最多检查 {{ f.ai.maxPairs }} 对。</div>
+        </div>
+
+        <div v-if="!activeLoading && groups.length" class="df-bulk">
+          <span class="df-bulk-label">一键保留</span>
+          <button class="df-bulk-btn" title="每组保留最大的文件，其余全部勾选" @click="lib.dupKeepAll('largest')">最大</button>
+          <button class="df-bulk-btn" title="每组保留最新的文件，其余全部勾选" @click="lib.dupKeepAll('newest')">最新</button>
+          <button class="df-bulk-btn" title="每组保留最旧的文件，其余全部勾选" @click="lib.dupKeepAll('oldest')">最旧</button>
+          <label class="df-bulk-ext" title="jpg/jpeg 视为同一后缀；开启后每组每种后缀各保留一张">
+            <input type="checkbox" :checked="f.preserveExt" @change="lib.setDupPreserveExt($event.target.checked)" />
+            <span>不同后缀各保留一张</span>
+          </label>
+          <span class="df-bulk-hint">会覆盖当前勾选</span>
         </div>
 
         <div v-if="activeLoading" class="df-loading">
@@ -255,6 +283,20 @@ function thumbOf(file) {
 .df-ptext { font-size: 12px; color: var(--text-2); font-variant-numeric: tabular-nums; }
 .df-empty { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--text-2); font-size: 13px; }
 .df-empty span { margin-left: 4px; font-size: 12px; }
+.df-bulk {
+  flex: none; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin: 10px 16px 0; padding: 8px 10px; border: 1px solid var(--border);
+  border-radius: 10px; background: var(--bg);
+}
+.df-bulk-label { font-size: 11px; color: var(--text-2); }
+.df-bulk-btn {
+  height: 26px; padding: 0 10px; border: 1px solid var(--border); border-radius: 7px;
+  background: var(--panel-strong); color: var(--text); font-size: 11px; cursor: pointer;
+}
+.df-bulk-btn:hover { border-color: var(--accent); color: var(--accent); }
+.df-bulk-ext { display: flex; align-items: center; gap: 6px; margin-left: 4px; font-size: 11px; color: var(--text-2); cursor: pointer; }
+.df-bulk-ext input { accent-color: var(--accent); }
+.df-bulk-hint { margin-left: auto; font-size: 10.5px; color: var(--text-2); opacity: 0.8; }
 .df-list { flex: 1; overflow-y: auto; padding: 12px 16px 8px; scrollbar-width: thin; }
 .df-group { border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px 12px; margin-bottom: 12px; background: var(--bg); }
 .df-ghead { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
