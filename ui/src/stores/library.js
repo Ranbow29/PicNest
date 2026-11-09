@@ -2015,8 +2015,9 @@ export const useLibrary = defineStore('library', {
         const a = list.indexOf(this.selectionAnchor)
         const b = list.indexOf(path)
         if (a >= 0 && b >= 0) {
-          const [lo, hi] = a < b ? [a, b] : [b, a]
-          const range = list.slice(lo, hi + 1)
+          // 保留鼠标选择方向：从下往上框选时 selectedPaths 也按从下往上的顺序，
+          // 否则多选叠图按 slice(-4) 永远取到列表最底部 4 个。
+          const range = a <= b ? list.slice(a, b + 1) : list.slice(b, a + 1).reverse()
           this.selectedPaths = add ? [...new Set([...this.selectedPaths, ...range])] : range
           this.selectedPath = path
           return
