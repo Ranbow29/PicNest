@@ -13,6 +13,9 @@ import { fileURLToPath } from 'node:url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const REPO_ROOT = path.resolve(__dirname, '../..');
+const pkg = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8'));
+const appVer = String(pkg.version || '0.1.0');
+const vp = appVer.split('.').map(x => parseInt(x, 10) || 0);
 
 // 命令行参数简单解析
 const args = process.argv.slice(2);
@@ -78,8 +81,8 @@ async function main() {
     vi.outputToResourceEntries(res.entries);
   }
 
-  vi.setFileVersion(0, 1, 0, 0);
-  vi.setProductVersion(0, 1, 0, 0);
+  vi.setFileVersion(vp[0] || 0, vp[1] || 0, vp[2] || 0, 0);
+  vi.setProductVersion(vp[0] || 0, vp[1] || 0, vp[2] || 0, 0);
   vi.setStringValues(
     { lang: 1033, codepage: 1200 },
     {
@@ -89,17 +92,24 @@ async function main() {
       InternalName: 'PicNest',
       OriginalFilename: 'PicNest.exe',
       LegalCopyright: 'Copyright (C) 2026 Ranbow29. Derived from PicRand 2.77.0 under GPL-3.0.',
-      ProductVersion: '0.1.0',
-      FileVersion: '0.1.0.0',
+      ProductVersion: appVer,
+      FileVersion: `${vp[0] || 0}.${vp[1] || 0}.${vp[2] || 0}.0`,
     }
   );
   vi.outputToResourceEntries(res.entries);
-  console.log('  [ok] 已写入 VersionInfo (v0.1.0, Ranbow29, GPL-3.0)');
+  console.log(`  [ok] 已写入 VersionInfo (v${appVer}, Ranbow29, GPL-3.0)`);
 
-  // 3. 生成新二进制
+  // 3. 生成新二进制（原地覆盖前先留一份 .bak，避免写坏后无法回退）
   res.outputResource(exe);
   const newBuf = Buffer.from(exe.generate());
 
+  if (path.resolve(outPath) === path.resolve(exePath)) {
+    const bak = exePath + '.bak'
+    if (!fs.existsSync(bak)) {
+      fs.copyFileSync(exePath, bak)
+      console.log(`  [bak] 原始 exe 已备份: ${bak}`)
+    }
+  }
   const tmpOut = outPath + '.tmp';
   fs.writeFileSync(tmpOut, newBuf);
   fs.renameSync(tmpOut, outPath);

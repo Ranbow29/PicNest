@@ -19,6 +19,13 @@ if (!fs.existsSync(MAIN) && fs.existsSync(SOURCE_DIR)) {
   console.log('[init] 源码镜像初始化完毕！')
 }
 
+// 干净 clone 只有源码镜像，没有 Electron 运行时/依赖；提醒开发者按 README 准备 app/
+const hasRuntimeExe = ['PicNest.exe', 'PicRand.exe'].some((n) => fs.existsSync(path.join(ROOT, 'app', n)))
+if (!hasRuntimeExe || !fs.existsSync(path.join(ROOT, 'app', 'resources', 'app', 'node_modules'))) {
+  console.warn('[warn] 未检测到 app 可执行文件或 app/resources/app/node_modules：apply 只生成源码与补丁，当前不能直接启动。')
+  console.warn('[warn] 请按 README「开发者构建 → 准备 app/ 运行时」先放入便携包或 PicRand 2.77.0 运行时。')
+}
+
 let src = fs.readFileSync(MAIN, 'utf8')
 if (!fs.existsSync(MAIN + '.bak')) {
   fs.writeFileSync(MAIN + '.bak', src)

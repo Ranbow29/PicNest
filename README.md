@@ -28,7 +28,7 @@
 - **直链索引（In-place Direct Link）**：直接以你的本地文件夹为根。PicNest **绝不复制、绝不搬迁、绝不打散**你的原图，物理目录就是分类树。
 - **数据随盘（In-root Metadata）**：根内隐藏 `.picnest/meta.json` 自动跟随硬盘漫游，标签、注释、评分与层级信息拔盘即走。
 - **移出不伤骨肉**：在 PicNest 中“移出根目录”只解除索引，磁盘文件永不触碰。
-- **自由与纯净**：开源遵循 **GPL-3.0**，彻底剥离第三方商业平台与遥测代码，无内购、无联网绑定，完全离线可用。
+- **自由与纯净**：开源遵循 **GPL-3.0**，彻底剥离第三方商业平台与遥测代码，无内购、无联网绑定；核心功能完全离线可用，只有可选的 AI 查重需要你自备 OpenAI 兼容 API。
 
 ---
 
@@ -78,6 +78,8 @@ PicNest 是专为创作者打造的绿色便携软件：
 2. 解压到你的电脑任意目录（如 `D:\PicNest`）。
 3. 双击运行 `PicNest.exe`，点击左侧添加你的本地图片文件夹，即刻开启极致看图体验！
 
+> 便携包发布在 [Releases](https://github.com/Ranbow29/PicNest/releases) 页面；源码以本仓库 + `source/` 镜像提供。
+
 > 💡 **绿色便携**：数据存储在本地，不写注册表。若想卸载，直接将软件目录扔进回收站即可，你的原始图片绝不受任何影响。
 
 ---
@@ -112,36 +114,55 @@ PicNest 是专为创作者打造的绿色便携软件：
 
 ---
 
-## 💻 开发者从零构建 (Developer Setup)
+## 💻 开发者构建 (Developer Setup)
 
-PicNest 采用 Electron 33 + Vite 6 + Vue 3.5 技术栈：
+本仓库包含 **UI 源码 + 主进程补丁 + PicRand 2.77.0 主进程/preload 源码镜像**，不包含便携运行时。
+`app/`（Electron/Chromium 运行时、`node_modules`、`PicNest.exe`、前端 dist）约 1.4 GB，已在 `.gitignore`
+中排除；**全新 clone 不能直接 `npm run dev`**，需要先准备运行时。
+
+### 1. 准备 app/ 运行时（二选一）
+
+- **只改 UI / 本地使用**：从 [Releases](https://github.com/Ranbow29/PicNest/releases) 下载便携包，
+  解压后把整个 `app/` 放到仓库根；或在已解压的 PicNest 目录旁开发。
+- **从源码重建主进程**：准备 PicRand 2.77.0 的原始 `app/` 运行时（可执行文件 + `app/resources/app/node_modules`）。
+  `source/picrand-2.77.0/` 只提供主进程/preload/worker 源码镜像，不包含 Electron 运行时与依赖。
+
+> `node tools/patches/apply.mjs` 在 `app/resources/app/out` 不存在时会从 `source/picrand-2.77.0`
+> 初始化源码并打补丁，但 Electron 运行时、原生依赖与可执行文件仍需由上面的 `app/` 提供。
+
+### 2. 构建 UI 与主进程补丁
 
 ```bash
-# 1. 克隆仓库
-git clone https://github.com/Ranbow29/PicNest.git
-cd PicNest
-
-# 2. 安装并构建前端界面 (产物自动同步至 app/resources/app/dist)
 cd ui
 npm ci
-npm run build
+npm run build          # 产物自动写入 app/resources/app/dist
 cd ..
-
-# 3. 运行主进程补丁 (自动从 source/ 源码镜像同步并幂等打补丁)
 node tools/patches/apply.mjs
+```
 
-# 4. (可选) 写入 exe 图标与 VersionInfo 资源
+### 3. 可选：写入 exe 图标与 VersionInfo
+
+```bash
+npm i -D resedit       # 仅首次
 node tools/patches/patch-exe-resources.mjs
+# 若运行时仍是 PicRand.exe：
+# node tools/patches/patch-exe-resources.mjs --exe app/PicRand.exe --out app/PicNest.exe
 ```
 
 ### 本地 Dev 调试模式
+
 ```bash
 # 终端 1: 启动 Vite 开发服务器
 cd ui && npm run dev
 
-# 终端 2: 启动 Electron (监听 9222 调试端口与本地开发服务)
+# 终端 2: 启动 Electron（需先准备 app/ 运行时）
 powershell "$env:PICNEST_DEV='1'; Start-Process 'app\PicNest.exe' -ArgumentList '--remote-debugging-port=9222' -WorkingDirectory 'app'"
 ```
+
+### 浏览器采集扩展
+
+`edge://extensions` / `chrome://extensions` 打开开发者模式 → 「加载解压缩的扩展」→ 选择 `extension/`。
+当前扩展版本 **0.1.2**；更新扩展后需重载并刷新已打开的网页。
 
 ---
 
