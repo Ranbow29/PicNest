@@ -89,7 +89,7 @@ function thumbOf(file) {
             <b>{{ stats.groups }}</b> 组 · <b>{{ stats.files }}</b> 个文件 · 可省 <b>{{ fmtSize(stats.wasted) }}</b>
             <span v-if="f.mode === 'ai'" class="df-cap">（dHash {{ stats.dhashPairs ?? stats.candidates }} 对 → 本地预筛后 {{ stats.candidates }} 对，已查 {{ stats.checked }}）</span>
           </div>
-          <button class="df-x" title="关闭" @click="lib.closeDupFinder()">✕</button>
+          <button class="df-x" title="关闭（Esc）" @click="lib.closeDupFinder()">✕</button>
         </header>
 
         <div v-if="f.mode === 'ai'" class="ai-box">

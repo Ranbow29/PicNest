@@ -44,7 +44,7 @@ function onKeydown(e) {
     if (isTypingTarget(e.target)) return
     if (lib.lightbox.open) return // Lightbox 自己处理（含裁剪态）
     if (lib.confirmDialog.open) { lib.resolveConfirm(false); return }
-    if (lib.dupFinder.open) return // 查重只能从右上角 ✕ 关闭，避免误关丢进度
+    if (lib.dupFinder.open) { lib.closeDupFinder(); return }
     if (lib.dupDialog.open) return // 重复三选一必须显式选择
     if (lib.dirMenu.open) { lib.closeDirMenu(); return }
     if (lib.contextMenu.open) { lib.closeContextMenu(); return }
