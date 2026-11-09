@@ -230,13 +230,23 @@ window.__picnestHoldCollectCleanup = () => { /* remove all listeners + host */ }
 ```bash
 node tools/test-collect-script.mjs      # 守卫/幂等/接管/cleanup/health/孤立脚本
 node tools/test-collect-background.mjs  # 注入/一次刷新/防循环/非 Pinterest/popup 修复/chrome://
+node tools/e2e-extension.mjs            # 真实 Chrome：CDP Extensions.loadUnpacked + 临时配置
 ```
 
-两套测试均用最小 DOM + chrome API 桩，在 Node 里加载真实 `content.js` / `background.js`；
+前两套用最小 DOM + chrome API 桩，在 Node 里加载真实 `content.js` / `background.js`；
 已覆盖：空白页注入、旧脚本（无 cleanup）刷新一次且重复激活不再刷新、刷新后自动注入、旧脚本（带 cleanup）原地接管、
 非 Pinterest 不刷新（status=stale）、孤立脚本（status=orphan + 刷新）、popup missing→injected / 就绪→none、chrome:// 不注入。
 
+第三套在**真实 Chrome 156**（`--enable-unsafe-extension-debugging`，headless，临时配置）里加载未打包扩展并驱动真实
+`chrome.scripting` / `chrome.storage.session` / `chrome.tabs.reload`，7 项全部通过：
+manifest 注入 + 健康探测、`collectStatus` current、旧版带 cleanup 原地接管（同 document 不刷新）、
+极旧脚本 Pinterest 自动刷新一次并重新注入、同一 tab+URL 防循环、非 Pinterest 不自动刷新（status=stale）、
+「修复本页」刷新后恢复。`tools/e2e-extension.mjs` 只碰临时 profile，不影响用户 Chrome。
+
 ### 9.5 待 Feb 验收（真实 Chrome）
+
+> 自动化部分已在临时 Chrome 156 通过（见 9.4）；下面是用你**日常主 Chrome + 真实 Pinterest 登录态**的物理验收，
+> 重点验证睡眠标签 / bookmarks / 多窗口切换这些自动化覆盖不到的路径。
 
 1. `chrome://extensions` 重载扩展，确认版本 **0.1.4**（**不需要**先刷新 Pinterest 页）。
 2. 切到已打开的 Pinterest 标签（旧脚本页）：
@@ -244,12 +254,14 @@ node tools/test-collect-background.mjs  # 注入/一次刷新/防循环/非 Pint
    - 刷新后长按图片 → 面板正常；
    - 再切走/切回，不再刷新，采集仍正常。
 3. 打开扩展面板：「本页采集」显示「已就绪 v0.1.4」；若显示异常，点「修复本页」应恢复。
-4. 多个 Pinterest 标签 / 两个 Chrome 窗口之间切换均正常；普通网页不被自动刷新。
-5. 关掉/重开 Chrome 后，已有 Pinterest 标签恢复，采集正常。
+4. 从书签栏 / 侧标入口进入 Pinterest（Feb 实测 100% 复现路径）：不应再需要手动刷新。
+5. 多个 Pinterest 标签 / 两个 Chrome 窗口之间切换均正常；普通网页不被自动刷新。
+6. 关掉/重开 Chrome 后，已有 Pinterest 标签恢复，采集正常。
 
 ### 9.6 剩余风险
 
 - 自动刷新只对 Pinterest 生效；其它站点遇到孤立/极旧脚本时不会自动刷新，需要 popup 手动「修复本页」或在扩展更新后刷新页面。
 - 自动刷新会丢失该 Pinterest 页的滚动位置（只发生一次；页面状态本来已失效）。
 - 0.1.4 之前的旧实例没有 cleanup，无法原地接管，只能刷新一次；0.1.4 之后应不再需要整页刷新。
-- 无头测试只覆盖状态机，真实 PointerEvent / Pinterest 覆盖层 / 睡眠标签恢复仍需物理验收。
+- Chrome 端到端已用临时 profile 覆盖 API 全流程；真实 PointerEvent（Pinterest `pointer-events:none` + 覆盖层）、
+  睡眠标签恢复、登录态下的长按面板仍需 Feb 物理鼠标验收。

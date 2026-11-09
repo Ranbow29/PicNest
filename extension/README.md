@@ -61,6 +61,16 @@
 - **权限与隐私说明**：扩展申请了 `<all_urls>` 权限，仅用于在画师浏览的任意图片站点（如 Pixiv、Pinterest、ArtStation、X 等）捕获图片长按手势与注入悬浮分类面板；扩展**绝不收集或上传任何个人隐私与浏览数据**，全部网络通信仅指向本机本地服务（`127.0.0.1:41600`）。
 - 与本项目一样以 **GPL-3.0** 发布；代码原创，与 Eagle 官方无关联，也不包含 Eagle 的任何资源。
 
+## 开发自测
+
+```bash
+npm run test:extension      # 无头：content.js 守卫/接管/cleanup/health + background 决策/popup 修复
+npm run test:extension:e2e  # 真实 Chrome：临时 profile 加载未打包扩展，跑注入/接管/自动刷新
+```
+
+`e2e-extension.mjs` 需要 Chrome 137+ 与本机 Chrome 路径（可用 `CHROME_PATH` 覆盖）；只使用临时配置目录，
+不会读写日常 Chrome 的登录态/扩展数据。
+
 ## 目录
 
 | 文件 | 作用 |

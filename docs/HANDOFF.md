@@ -319,7 +319,7 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 | `tools/patches/apply.mjs` · `picnest-handlers.js` | 补丁 P1-P10 + 文件夹/录入/回收站/统计/排序/文本/查重/变换/根元数据/物理排序/缩略图修复/插件 IPC + **M6 采集本地服务（127.0.0.1:41600）** |
 | `extension/` | 自研 MV3 采集扩展（右键存图/页面截图 + popup 选根/文件夹 + 按住采集环 + 本页状态/修复）；**v0.1.4**：版本化探测 + cleanup 原地接管 + Pinterest 一次性自动刷新；安装见 `extension/README.md` |
 | `tools/cdp-*.mjs` · `shot-prod.ps1` · `verify_counts.py` | CDP 探针/截屏 · 多库对账 |
-| `tools/test-collect-script.mjs` · `test-collect-background.mjs` | 采集扩展无头回归：守卫/接管/cleanup/health · 注入/一次刷新/popup 状态与修复 |
+| `tools/test-collect-script.mjs` · `test-collect-background.mjs` · `e2e-extension.mjs` | 采集扩展回归：守卫/接管/cleanup/health · 注入/一次刷新/popup 状态与修复 · 真实 Chrome CDP 端到端 7 项 |
 | `docs/MOTION.md` | 动效规格/调参 |
 
 ## 六、工作纪律（血泪换的）
