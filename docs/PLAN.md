@@ -430,3 +430,9 @@ PicNest/
     ② **P13a 关窗 = 隐藏到托盘**：`mainWindow.on("close")` 不再发 `confirm-close` 等渲染层回包，而是 `event.preventDefault()` + `mainWindow.hide()`——点主窗口 X 后主窗口/任务栏运行按钮消失，进程和托盘图标保留（图2 的隐藏区）。**这里不能置 `allowClose = true`**，否则关窗会直接退出，破坏两段式语义。
     ③ **P13b 托盘「退出」才彻底结束**：托盘退出项先 `allowClose = true` 再 `app.quit()`；`window-all-closed` 的顺序改为**先 `tray.destroy()`**，再用 try/catch 兜底 `cleanupOnExit()` / `closeDatabase()`，最后无条件 `app.exit(0)`。原实现先清理，任一步抛错会跳过托盘销毁和退出，表现为“退出后图标/进程还挂着，需要再关一次”。
     ④ 实测：`window.picrand.windowClose()` 后主窗口 HWND `IsWindowVisible=False`、5 个 `PicNest.exe` 进程仍在、任务栏只剩固定的 `PicNest 已固定`；随后模拟托盘退出路径（`allowClose=true` + `app.quit()`）→ 5s 内所有进程退出。托盘菜单模板只剩「显示 PicNest 图巢 / 退出」两项。
+
+73. **功能封版与开源交接（2026-11-09，Feb 指定「暂时所有功能完成，做个结尾，写交接文档给 Gemini 接手开源」）**：
+    ① **收尾构建**：`ui` 生产构建（88 modules，dist 更新）→ `node tools/patches/apply.mjs` 重放 0 失败 → 重启生产应用 → CDP smoke：`title=PicNest 图巢`、`bridge=true`、网格 12 cells、`broken=0`、侧栏/根文件正常；两段式关闭再次确认（关窗隐藏、托盘退出全退）。
+    ② **新增 `docs/HANDOFF-GEMINI.md`**：面向开源接手者的独立交接，含仓库现状（无 remote、根 README/LICENSE 缺失、`app/` 1.4GB 被 ignore、121 个跟踪文件）、GPL-3.0 义务与 PicRand 归属、**主进程/preload 对应源码缺口与两种补救方案**、隐私脱敏（docs 含真实路径/素材统计，建议新建公开仓库或重写历史）、第三方许可证/资产、已实现功能验收基线、已知限制、P0/P1/P2 开源 TODO、smoke 命令与交接结论。
+    ③ **仓库状态**：`docs/HANDOFF.md` 顶部与 P0 段加入指向新文档的链接；最终检查点标签 `checkpoint-2026-11-09-final`。功能封版，后续新功能走插件或新分支。
+    ④ 未做（留给 Gemini）：根 README/LICENSE/NOTICE、主进程源码入库、exe resedit 脚本固化、CI/Release、采集 token、扩展上架、插件 registry 签名。

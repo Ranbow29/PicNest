@@ -3,6 +3,7 @@
 > **2026-11-09 第十二版·插件 / 帮助 / PicNest 品牌收官**（插件库 P1/P2、15 节帮助、AI 查重风险提示、手动排序置顶/应用为手动、隐藏与清除编号、根内元数据、物理排序、纯黑 #000000 分级 N 图标、PicRand→PicNest 应用名与任务栏、两段式关闭（关窗隐藏到托盘 / 托盘退出彻底结束）、托盘移除参考板、裁剪模式窗控优先级）。
 > 之前：第七版录入语义、第八版多选收尾、第九版收官、第十版查重收尾、第十一版根元数据/主题/缩略图/插件设计。本版按「开窗 → 现状 → 数据约束 → 未做 → 文件地图 → 纪律 → 验收」组织。
 > 最新提交 `6486af9`；工作区干净；dist 已构建；dev 数据已清理（无测试目录、无手动封面残留）。
+> **开源接手**：看 `docs/HANDOFF-GEMINI.md`（GPL 合规、对应源码、隐私清理、README/Release/CI 的优先顺序与验收命令）。
 
 ## 〇、开窗三步走
 
@@ -240,7 +241,7 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 
 ### P0 发布前
 - **Eagle 向导打包**：向导主进程从项目根 `tools/eagle-migrate/` 调脚本；打包版必须把该目录随 app 分发，或在主进程内置迁移逻辑，否则打包版向导会找不到脚本。
-- **开源发布准备**：README/截图/构建脚本、许可证与第三方声明（PicRand GPL-3.0、Wenku8 GPL-2.0-or-later）、扩展打包、去除个人路径/示例库/测试数据。
+- **开源发布准备**：README/截图/构建脚本、许可证与第三方声明（PicRand GPL-3.0、Wenku8 GPL-2.0-or-later）、扩展打包、去除个人路径/示例库/测试数据。**详细交接与优先级见 `docs/HANDOFF-GEMINI.md`**（含 `app/` 源码缺口、对应源码方案、隐私清理清单）。
 - **查重收尾（余项）**：AI 候选超过上限时目前只查最接近的 200 对、不做多轮分批；`import-dir-copy` 的同名同大小 MD5 与整体 copy 仍是同步（超大文件夹拖入会卡主进程）；AI 定时后台扫描未做。
 
 ### 元数据 / 物理排序 / 缩略图（2026-11-09 新增）
@@ -286,6 +287,7 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 | `ui/src/components/DupFinder.vue` | 查重结果分组面板（精确/AI 页签、精确停止、AI 设置/预估、快捷保留、勾选、软删） |
 | `ui/src/components/HelpDialog.vue` | 顶栏 `?` 使用说明（排序前缀/清除方式重点、各功能与快捷键） |
 | `docs/PLUGIN.md` | 插件系统设计定稿 + 实现状态（theme/renderer 已实现；main/签名未做） |
+| `docs/HANDOFF-GEMINI.md` | 开源接手交接：GPL 合规/对应源码/隐私清理/README/Release/CI 优先级 + 验收命令 |
 | `branding/` | Logo 概念底稿（A 巢照片 / B 巢鸮 / C N 标）、2048 PSD 模板、深色变体与尺寸预览；终稿**纯黑底 N 标**在 `final/`（最新 PSD 母版 + 1212 原生 tile + 2048…16 PNG + 10 帧 ICO；纯白 N/浅金蛋点/底部保留分隔缺口，底色 `#000000`；16–48px N 88%，64px+ 76%）；已接入窗口/任务栏/exe 图标（`app/_internal_data/icon.png`/`icon.ico`，旧件备份 `icon-old.*`；exe 图标与 VersionInfo 已用 resedit 写入，原件备份 `PicNest.exe.picrand.bak`）；任务栏改图标后需清 Windows icon cache |
 | `ui/src/components/PluginManager.vue` · `ui/src/lib/plugins.js` | 插件库面板（已安装/仓库/文件夹安装/启停/卸载）· 主题注入 + 插件事件总线 |
 | `examples/plugins/` | 示例插件（mono-mint 主题、view-stats 沙箱面板）、registry.json、zip、开发指南 |
