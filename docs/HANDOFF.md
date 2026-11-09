@@ -194,6 +194,7 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 - **已知限制**：升级判定基于 PicNest 窗口 bounds + 左键；若另一个窗口覆盖在 PicNest 内部、光标坐标仍在 PicNest 范围内，不会升级。遇到这种情况把目标窗口拖到 PicNest 外侧即可。
 
 ### 详情 / 视觉分层
+- **灯箱平移（2026-11-10）**：拖动期间不要逐 mousemove 写 `lib.viewer.tx/ty`（会触发 Pinia/组件重渲染 + 裁剪 watcher）。Lightbox 的 `pan` 普通对象记录 base，`onMove` 用 rAF 合并，普通模式直接改 `imgEl.style.transform`，松手 `commitPan()` 才提交 tx/ty；裁剪模式仍逐帧写 store 以带动裁剪框。`.stage` 用 `will-change: transform / backface-visibility: hidden`。PSD 整幅 PNG 先 `new Image()+decode()` 预解码，成功后才切 src，期间保持缩略图。
 - 单选图片：预览/名称/注释/色板/评分/文件夹/操作（**URL 输入栏已删，DB url 字段保留**）。**图片的「文件夹」chip 必须由 `file_path` 反推**（`relOfImage`），不能用 `currentDirRel`——根文件夹开「显示子文件夹内容」或合并视图时，视图位置≠图片所在夹（否则子夹图片被标成库根）。
 - **灯箱详情是第二个 Inspector 实例**（`.insp-overlay` 新挂载）：`selectedPath` 的 meta/色板 watch 必须 `{ immediate: true }` 才能拿到当前选中项；`lib.palettes[p]` 的**空数组**必须视为未命中（`ensurePalettes` 用空数组标记 SKIP/失败），否则灯箱色板永远显示「—」。
 - 多选图片：前 4 张扇形堆叠 + 已选 N + 批量注释/评分/文件夹 chips/移动/复制；单选/多选文件夹三态。

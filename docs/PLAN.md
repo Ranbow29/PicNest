@@ -473,3 +473,8 @@ PicNest/
     ② **修法**：新增主进程 `picnest-psd-preview`（handlers）：`path.resolve` 统一路径 → 若缓存 PNG 比源 PSD 旧先删 → `ensurePsdPng` 返回整幅 PNG；preload `picnestPsdPreview` + api `psdPreview`。Lightbox 增加 `isPsd/psdFull/psdLoading/psdError`：打开 PSD 时先显示 400 缩略图 + 「PSD 原图渲染中」提示，IPC 返回后切整幅 PNG；失败显示提示并回退缩略图。stageUrl 对 PSD 不再返回原 `.psd`。
     ③ **实测**：`1.psd` → `picnest-psd-preview` 返回 49MB `psd-419e…png`；灯箱 `<img>` natural **4203×5939**，与 meta 尺寸一致，src 指向整幅 PNG，不是缩略图。首次 IPC 约 2.4s（随后缓存命中）。
     ④ **代价**：整幅 PSD PNG 13–51MB/张，`cleanupOnExit` 会保留 `psd-*`；若后续 PSD 特别多，可考虑 6k 上限或 LRU（当前先保证“原图”）。
+
+80. **灯箱平移跟手优化（2026-11-10，Feb 报「灯箱模式里拖图卡顿不跟手」）**：
+    ① **根因**：`onMove` 每个 mousemove 都 `lib.viewer.tx/ty += delta` 写 Pinia，触发 Lightbox 重渲染 + 裁剪 watcher + 大图 transform 字符串重建；PSD 整幅图（4203×5939）尤其明显。另外 PSD 整幅 PNG 在 IPC 返回后立刻换 src，几十 MB 图未解码完时会出现半张/空白的卡顿感。
+    ② **修法**：Lightbox 增加 `pan` 普通对象；`onDown` 记录 base，`onMove` 只算目标并用 rAF 合并（每帧最多一次）；普通模式直接 `imgEl.style.transform`，**不写 store**，松手 `commitPan()` 才提交最终 tx/ty。裁剪模式仍逐帧写 store，保证裁剪框跟随。`.stage` 加 `will-change: transform / backface-visibility`。PSD 整幅 PNG 先用 `new Image()` + `decode()` 预解码，成功后才切 `psdFull`，期间保持缩略图 + 渲染提示。
+    ③ **验证**：灯箱内焦点正常时 rAF `avg 8.2ms / p50 5.6ms / p95 6.6ms`（约 120Hz），740 帧中 34 帧 >33ms（主要在起止瞬间）；PSD 打开后 `complete=true`、natural 4203×5939 才切换。实际手感需 Feb 确认。
