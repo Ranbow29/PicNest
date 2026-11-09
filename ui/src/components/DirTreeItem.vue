@@ -2,7 +2,8 @@
 import { ref, computed, watch } from 'vue'
 import { useLibrary, extractDropUrls } from '../stores/library'
 import { isExternalDT, dndTypes } from '../lib/dnd'
-import FolderIcon from './FolderIcon.vue'
+import AnimIcon from './AnimIcon.vue'
+import { folderTint } from '../lib/folderColors'
 
 const props = defineProps({ node: { type: Object, required: true }, depth: { type: Number, default: 0 } })
 const emit = defineEmits(['open'])
@@ -156,7 +157,7 @@ async function onDrop(e) {
       <i v-if="dropMark === 'before'" class="drop-line top" />
       <i v-if="dropMark === 'after'" class="drop-line bottom" />
       <span class="caret" :class="{ open: expanded, leaf: !node.children?.length }" @click.stop="toggleExpand">▸</span>
-      <FolderIcon :color="colorKey" :size="17" :open="expanded" />
+      <AnimIcon name="folder" :size="17" :open="expanded" :tint="folderTint(colorKey)" :mount-shake="false" :stroke="1.6" :active="isActive" />
       <span class="name" :title="node.name">{{ node.name }}</span>
       <span class="count">{{ node.total }}</span>
     </div>

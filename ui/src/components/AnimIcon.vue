@@ -6,11 +6,14 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { GESTURE_MS, layerAt, scheduleAmbient, iconShake } from '../lib/iconMotion'
 
 const props = defineProps({
-  name: { type: String, required: true },   // filter | layout | grid | contents | pin
+  name: { type: String, required: true },   // filter | layout | grid | contents | justified | pin | folder
   size: { type: Number, default: 16 },
   ambient: { type: Boolean, default: false }, // 环境晃动（顶栏开）
   active: { type: Boolean, default: false },  // 选中态：填充加重
   stroke: { type: Number, default: 1.7 },
+  open: { type: Boolean, default: false },    // folder 专用：展开态（前板下压开口）
+  tint: { type: String, default: '' },        // folder 专用：染色（'' = currentColor）
+  mountShake: { type: Boolean, default: true }, // 挂载即晃一次（树上批量挂载可关）
 })
 
 const phase = ref(-1) // -1 = 静止
@@ -40,7 +43,7 @@ onMounted(() => {
   // 悬停按整个按钮算：图标只占按钮一小块，鼠标掠过留白/文字也要动
   hostBtn = root.value?.closest('button') || null
   hostBtn?.addEventListener('mouseenter', onHostEnter)
-  mountT = setTimeout(play, 80) // 让挂载与布局稳定，手势读起来像同一拍
+  if (props.mountShake) mountT = setTimeout(play, 80) // 让挂载与布局稳定，手势读起来像同一拍
   if (!props.ambient) return
   const loop = () => { cancelAmbient = scheduleAmbient(() => { play(); loop() }, 3000, 6000) }
   loop()
@@ -66,6 +69,7 @@ const clampArt = (v) => Math.max(-0.12, Math.min(v, 1))
   <svg
     ref="root"
     :width="size" :height="size" viewBox="0 0 24 24" class="anim-ico"
+    :style="tint ? { color: tint } : null"
     fill="none" stroke="currentColor" :stroke-width="stroke"
     stroke-linecap="round" stroke-linejoin="round"
     @mouseenter="play" @mousedown="play"
@@ -125,6 +129,24 @@ const clampArt = (v) => Math.max(-0.12, Math.min(v, 1))
       <rect :x="4" y="5" :width="8 + 8 * p" height="3.2" />
       <rect :x="4" y="10.4" :width="16 - 6 * q" height="3.2" />
       <rect :x="4" y="15.8" :width="11 + 5 * r" height="3.2" />
+    </g>
+
+    <!-- folder：Wenku8 折纸文件夹（描边版）——后纸随 q 上抽、前板随 p/展开态开合 -->
+    <g v-else-if="name === 'folder'" :style="tint ? { color: tint } : null">
+      <path
+        :d="`M6 ${(4.6 - 2.6 * q).toFixed(2)} L15.8 ${(4.6 - 2.6 * q).toFixed(2)} L18.6 ${(7.4 - 2.6 * q).toFixed(2)} L18.6 ${(17.9 - 2.6 * q).toFixed(2)} L6 ${(17.9 - 2.6 * q).toFixed(2)} Z`"
+        opacity="0.42"
+      />
+      <path
+        :d="(() => {
+          const o = (open ? 0.6 : 0) + p
+          const y0 = 8.4 + 2.1 * o
+          const y1 = 10 + 2.1 * o
+          return `M3 ${y0.toFixed(2)} L8 ${y0.toFixed(2)} L10.4 ${y1.toFixed(2)} L21.5 ${y1.toFixed(2)} L19.7 20.2 L4.4 20.2 Z`
+        })()"
+      />
+      <circle cx="6.2" cy="16.7" r="1.05" fill="currentColor" stroke="none" :opacity="0.55 + act * 0.3" />
+      <line x1="9.2" y1="17.4" x2="12.5" y2="17.4" opacity="0.55" />
     </g>
 
     <!-- pin：四角星随 p 旋转 + 缩放（twinkle） -->
