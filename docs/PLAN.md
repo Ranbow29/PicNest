@@ -437,9 +437,9 @@ PicNest/
     ③ **仓库状态**：`docs/HANDOFF.md` 顶部与 P0 段加入指向新文档的链接；最终检查点标签 `checkpoint-2026-11-09-final`。功能封版，后续新功能走插件或新分支。
     ④ 未做（留给 Gemini）：根 README/LICENSE/NOTICE、主进程源码入库、exe resedit 脚本固化、CI/Release、采集 token、扩展上架、插件 registry 签名。
 
-74. **浏览页直接拖到 CSP / PS（2026-11-09，Feb 指定「把图拖进 CSP 或 PS，我电脑只装了 CSP」）**：
-    ① **交互**：普通拖动保持图巢内部排序/移动；**Alt+拖动图片**，或从卡片右上角悬停出现的 **↗ 手柄**起拖 = Electron 原生文件拖拽，可拖进 Clip Studio Paint / Photoshop / 资源管理器；多选后拖其中一张会带上全部选中文件。帮助第 3 节补了说明。
-    ② **主进程**：新增 `picnest-start-drag`（`tools/patches/picnest-handlers.js`）→ `event.sender.startDrag({ file, files, icon })`；路径先 `fs.existsSync` 过滤，拖拽预览优先用首图（png/jpg/webp/gif/bmp）缩到 96px，失败回退 `_internal_data/icon.png`。preload 桥 `picnestStartDrag` + `onPicnestDragOutEnd`。
-    ③ **Windows 限制**：Electron 的 `startDrag` 与 HTML5 内部拖拽互斥（electron#7118），不能一个手势同时做两件事；所以用 Alt / ↗ 手柄明确分流，普通拖动不受影响。
-    ④ **落回保护**：原生拖出期间 `markNativeDragOut()`；App 在捕获阶段吞掉 `dragenter/dragover/drop` 的 Files，避免把刚拖出的文件落回 PicNest 时又当外部文件导入（会弹「重复添加」）。主进程 `startDrag` 结束（含失败/取消）在 finally 发 `picnest-drag-out-end`，渲染层延迟 500ms 清标记，60s 兜底。
-    ⑤ **实测**：build/apply 0 失败；CDP 确认 bridge `picnestStartDrag`/`onPicnestDragOutEnd` 均为 function、网格每张卡有 `.drag-out` 手柄、帮助文案已编译；Alt+拖动落回 PicNest 时，抑制前会弹重复添加（证明原生拖拽确实携带真实文件），抑制后不再弹。**实际拖入 CSP 画布需 Feb 手动确认**（未自动操作 CSP，避免动到正在编辑的画布）。
+74. **浏览页直接拖到 CSP / PS（统一拖拽，2026-11-09，Feb 指定「把图拖进 CSP 或 PS」→「和高亮拖动集成到一起，没必要分开」）**：
+    ① **交互**：只有一种拖动。窗口内 = 原 HTML5 内部拖拽（落点高亮、排序/移动）；把图拖出 PicNest 窗口 = 主进程自动升级为 Electron 原生文件拖拽，拖进 Clip Studio Paint / Photoshop / 资源管理器松开即可。多选后拖其中一张会带上全部选中文件。Alt+拖动 / ↗ 手柄已移除。
+    ② **主进程**：`picnest-drag-begin` 记录路径 + 所属 BrowserWindow，45ms 轮询 `screen.getCursorScreenPoint()` 与 `win.getBounds()`（外扩 4px），并用 koffi `GetAsyncKeyState(VK_LBUTTON)` 确认左键仍按下；连续 2 次在窗口外才升级，避免贴边误判。升级时发 `picnest-drag-out-start` → `sender.startDrag({ file, files, icon })` → 结束发 `picnest-drag-out-end`；`picnest-drag-end`（页面 dragend）清理轮询。拖拽预览优先首图（png/jpg/webp/gif/bmp）缩 96px，失败回退 `_internal_data/icon.png`。
+    ③ **为什么这样做**：Windows 上 `startDrag` 与 HTML5 内部拖拽互斥（electron#7118），不能在 dragstart 就调用；保持 HTML5 在窗口内工作，只在光标离开窗口后升级，才能一个手势同时覆盖内部高亮排序和拖出。
+    ④ **落回保护**：主进程在升级时发 out-start，渲染层 `markNativeDragOut()`；App 捕获阶段吞掉 `dragenter/dragover/drop` 的 Files，拖动途中又落回 PicNest 不会触发「重复添加」。out-end 后延迟 500ms 清标记，60s 兜底。
+    ⑤ **实测**：build/apply 0 失败；普通拖动（不按任何键）从网格拖出窗口 → 外部 WinForms 文件拖放目标收到真实文件路径；主进程日志 `begin → escalate → startDrag returned`；落回 PicNest 不再弹重复添加。**实际拖入 CSP 画布仍需 Feb 手动确认**（未自动操作 CSP，避免动到正在编辑的画布）。
