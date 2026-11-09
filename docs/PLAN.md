@@ -483,3 +483,9 @@ PicNest/
     ① **PSD 支持**：BriefMode 原来只用 `fileUrl(brief.path)`，PSD 直接给 `<img>` 无解；现在新增 `isPsd/mediaSrc`，PSD 走 `picnest-psd-preview` 的整幅 PNG（`new Image()+decode()` 预解码后才切 src，期间保留 400 缩略图 + `brief-note`），普通图片失败退 400 缩略图，再失败显示「图片加载失败」。实测 `1.psd` 简报 `<img>` natural **4203×5939**、`complete=true`。
     ② **平移跟手**：原 `onMove` 每个 pointermove 直接写 `brief.tx/ty`，触发 Pinia/组件重渲染；改成 `pan` 普通对象 + rAF 合并，拖动期间只改 `mediaEl.style.transform`（`translate3d`），松手才写回 `brief.tx/ty`；未移动仍按 4px 阈值判单击下一张。媒体元素已有 `will-change: transform`。
     ③ **验证**：简报全屏焦点正常时 rAF `avg 8.5ms / p50 5.6ms`，p95 55.6ms（715 帧中 38 帧 >33ms，集中起止/机械输入）；实际手感需 Feb 确认。
+
+82. **灯箱/简报改用 2048 视口预览（2026-11-10，Feb 反馈仍卡，参考 Eagle 后定位）**：
+    ① **观摩 Eagle**：Eagle 的 `jquery.smoothZoom` 不是巨图 DOM transform，而是 **canvas + 500px 瓦片 + thumbnail/viewport bitmap**（`BitmapViewer`），只合成可视区域，所以拖大图顺。PicNest 灯箱/简报此前直接把 4000×6000 的整幅 PNG 交给 `<img>` 做 transform，25MP 纹理/栅格化导致掉帧（实测 Full PSD 平移 p95 55.6ms；同一图 2048 预览 p95 6.5ms）。
+    ② **实现**：新增 `picnest-view-preview`：按 `path+mtime` 缓存 **2048px WebP**（PSD 先走 `ensurePsdPng` 整幅 PNG 再缩；普通图 sharp `rotate` 后缩；GIF/SVG/视频/文本跳过）。Lightbox/Brief 在适配视图使用 preview；Lightbox 放大到 `scale × max(width,height) > 2200` 或进入裁剪时换原图/整幅 PSD，Brief 在 `scale ≥ 2` 换原图。两者给 `<img>` 显式 `width/height = meta`，预览/原图切换不改变布局；预览先 `new Image()+decode()` 再切 src。
+    ③ **实测**：灯箱 2048 preview 平移 1071 帧 / 6.0s，avg 5.6ms、p95 6.2ms、max 7ms；简报 1075 帧，avg 5.6ms、p95 6.1ms、max 8.7ms；均 0 帧 >33ms。原全幅图 p95 55.6ms。 
+    ④ **边界**：高倍放大（Lightbox >2200px 显示、Brief ≥2×）仍换回原图，超大图在高倍下可能再抖；Eagle 式瓦片渲染是后续终极方案。

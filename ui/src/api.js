@@ -57,6 +57,7 @@ export const api = {
   dragBegin: (paths) => invoke('picnestDragBegin', paths),
   dragEnd: () => invoke('picnestDragEnd'),
   psdPreview: (filePath) => invoke('picnestPsdPreview', filePath),
+  viewPreview: (filePath) => invoke('picnestViewPreview', filePath),
   // 自动更新
   checkUpdate: (opts) => invoke('picnestCheckUpdate', opts),
   downloadUpdate: (opts) => invoke('picnestDownloadUpdate', opts),

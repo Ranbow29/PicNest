@@ -49,28 +49,46 @@ const isPsd = computed(() => extOf(lib.lightbox.path) === '.psd')
 const psdFull = ref('')
 const psdLoading = ref(false)
 const psdError = ref('')
+/* 大图显示用 2048 视口预览：平移只合成小纹理；放大到预览分辨率不够时才换原图 */
+const previewPath = ref('')
+const previewError = ref(false)
+const useFull = computed(() => {
+  if (lib.viewer.cropMode) return true
+  const m = meta.value
+  if (!m?.width || !m?.height) return false
+  return lib.viewer.scale * Math.max(m.width, m.height) > 2200
+})
 /* 大图加载兜底：原图失败→缩略图；都失败→错误提示（不显示裂图） */
 const stageFallback = ref(false)
 const stageDead = ref(false)
 const stageUrl = computed(() => {
   const img = meta.value
-  if (isPsd.value && psdFull.value && !stageFallback.value) {
-    return fileUrl(psdFull.value) + '?v=' + (img?.modify_time || 0)
-  }
-  if (stageFallback.value && img?.thumbnail_path && img.thumbnail_path !== 'SKIP') {
-    return fileUrl(img.thumbnail_path) + '?v=' + (img.modify_time || 0)
-  }
+  if (!img) return ''
+  const thumb = img.thumbnail_path && img.thumbnail_path !== 'SKIP'
+    ? fileUrl(img.thumbnail_path) + '?v=' + (img.modify_time || 0) : ''
+  if (stageFallback.value && thumb) return thumb
   if (isPsd.value) {
-    if (img?.thumbnail_path && img.thumbnail_path !== 'SKIP') {
-      return fileUrl(img.thumbnail_path) + '?v=' + (img.modify_time || 0)
+    const full = psdFull.value ? fileUrl(psdFull.value) + '?v=' + (img.modify_time || 0) : ''
+    if (useFull.value) return full || thumb
+    if (previewPath.value && !previewError.value) {
+      return fileUrl(previewPath.value) + '?v=' + (img.modify_time || 0)
     }
-    return ''
+    return thumb || full
+  }
+  if (useFull.value) return url.value
+  if (previewPath.value && !previewError.value) {
+    return fileUrl(previewPath.value) + '?v=' + (img.modify_time || 0)
   }
   return url.value
 })
 function onStageError() {
   const img = meta.value
   if (isPsd.value && psdLoading.value) return
+  /* 2048 预览失败：退回原图/缩略图，避免在同一个坏预览上循环 */
+  if (!useFull.value && previewPath.value && !previewError.value) {
+    previewError.value = true
+    return
+  }
   if (isPsd.value && psdFull.value && !stageFallback.value) {
     psdError.value = 'PSD 原图加载失败，显示缩略图'
     stageFallback.value = true
@@ -115,6 +133,25 @@ watch(() => lib.lightbox.path, async (p) => {
   } finally {
     if (lib.lightbox.path === p) psdLoading.value = false
   }
+}, { immediate: true })
+watch(() => lib.lightbox.path, async (p) => {
+  previewPath.value = ''
+  previewError.value = false
+  const ext = extOf(p)
+  if (!p || isVideoPath(p) || isTextPath(p) || ext === '.gif' || ext === '.svg') return
+  try {
+    const res = await api.viewPreview(p)
+    if (lib.lightbox.path !== p || !res?.ok || !res.path) return
+    const u = fileUrl(res.path) + '?v=' + (meta.value?.modify_time || 0)
+    await new Promise((resolve, reject) => {
+      const im = new Image()
+      im.decoding = 'async'
+      im.onload = () => { if (im.decode) im.decode().then(resolve).catch(resolve); else resolve() }
+      im.onerror = () => reject(new Error('preview load failed'))
+      im.src = u
+    })
+    if (lib.lightbox.path === p) previewPath.value = res.path
+  } catch (e) { /* 预览失败不阻塞原图 */ }
 }, { immediate: true })
 
 function fitToWindow() {
@@ -730,6 +767,8 @@ function onKey(e) {
       v-else-if="!stageDead"
       ref="imgEl" :src="stageUrl" class="stage" :class="{ gray: lib.grayscaleMode }" draggable="false"
       :style="{
+        width: meta?.width ? meta.width + 'px' : undefined,
+        height: meta?.height ? meta.height + 'px' : undefined,
         transform: `translate3d(${lib.viewer.tx}px, ${lib.viewer.ty}px, 0) scale(${lib.viewer.scale}) rotate(${lib.viewer.rot}deg)` + (lib.viewer.flopX ? ' scaleX(-1)' : ''),
         cursor: lib.viewer.cropMode ? 'default' : dragging ? 'grabbing' : 'grab',
       }"
