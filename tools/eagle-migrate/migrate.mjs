@@ -38,7 +38,7 @@ if (!fs.existsSync(metaPath) || !fs.existsSync(imagesDir)) {
 }
 const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'))
 const libName = path.basename(LIB).replace(/\.library$/i, '') || 'Eagle'
-const targetBase = path.resolve(val('target-base', 'D:\\图巢迁移'))
+const targetBase = path.resolve(val('target-base', path.join(process.cwd(), 'PicNestMigration')))
 const targetRoot = path.resolve(val('target', path.join(targetBase, libName)))
 const manifestPath = path.resolve(val('manifest', targetRoot + '.manifest.json'))
 const supported = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'avif', 'tif', 'tiff', 'svg', 'txt', 'md', 'markdown', 'log', 'json', 'jsonc', 'csv', 'tsv', 'ini', 'cfg', 'conf', 'yaml', 'yml', 'mp4', 'webm', 'mov', 'mkv', 'avi', 'm4v'])

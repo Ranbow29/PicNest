@@ -57,6 +57,12 @@ export const api = {
   dragBegin: (paths) => invoke('picnestDragBegin', paths),
   dragEnd: () => invoke('picnestDragEnd'),
   psdPreview: (filePath) => invoke('picnestPsdPreview', filePath),
+  // 自动更新
+  checkUpdate: (opts) => invoke('picnestCheckUpdate', opts),
+  downloadUpdate: (opts) => invoke('picnestDownloadUpdate', opts),
+  cancelDownloadUpdate: () => invoke('picnestCancelDownloadUpdate'),
+  quitAndInstall: (opts) => invoke('picnestQuitAndInstall', opts),
+  onUpdateProgress: (cb) => p().onPicnestUpdateProgress?.(cb),
 }
 
 // 本地文件（缩略图/原图）→ 可用的 img src

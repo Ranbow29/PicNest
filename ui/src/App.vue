@@ -17,6 +17,8 @@ import ImportResultCard from './components/ImportResultCard.vue'
 import TaskProgress from './components/TaskProgress.vue'
 import PluginManager from './components/PluginManager.vue'
 import HelpDialog from './components/HelpDialog.vue'
+import UpdateDialog from './components/UpdateDialog.vue'
+import { api } from './api.js'
 import { refreshPluginThemes } from './lib/plugins'
 import ResizeHandle from './components/ResizeHandle.vue'
 import InspResize from './components/InspResize.vue'
@@ -24,6 +26,42 @@ import InspResize from './components/InspResize.vue'
 // ZCode 式嵌套结构：左栏底层(可拖宽) → 主面板工作区（浏览 ⇄ 大图双模式）→ 详情计划式浮岛(可收起可拖宽)
 // 外部拖入 = 位置即意图：主展示区/树行/缝隙/资料库栏各自高亮 + 跟随光标的落点提示
 const lib = useLibrary()
+
+const updateDialogRef = ref(null)
+
+// 自动检测更新 (启动 5 秒后静默检测)
+async function checkForUpdatesSilently() {
+  try {
+    const res = await api.checkUpdate()
+    if (res?.ok && res.hasUpdate) {
+      const skipped = localStorage.getItem('picnest.skipUpdateTag')
+      if (skipped === res.latestVersion) return
+      updateDialogRef.value?.open(res)
+    }
+  } catch (e) {}
+}
+
+// 手动检查更新 (由帮助页或全局触发)
+async function checkForUpdatesManual() {
+  try {
+    const res = await api.checkUpdate({ manual: true })
+    if (res?.ok) {
+      if (res.hasUpdate) {
+        updateDialogRef.value?.open(res)
+      } else {
+        alert(`当前已是最新版本 (v${res.currentVersion || '0.1.0'}) ~ ✨`)
+      }
+    } else {
+      alert(`检查更新失败: ${res?.error || '网络连接异常'}`)
+    }
+  } catch (err) {
+    alert(`检查更新异常: ${String(err?.message || err)}`)
+  }
+}
+
+window.__picnestCheckUpdate__ = checkForUpdatesManual
+window.addEventListener('picnest-check-update-trigger', checkForUpdatesManual)
+
 /* 详情固定高度 = 用户偏好，但必须随窗口收缩钳制：否则最大化时设的 1137px 在窗口变矮后
    会从底部往上顶出视口（顶部内容被窗控盖住）。只影响显示，不改用户存的值；窗口放大后恢复。 */
 const browseEl = ref(null)
@@ -213,6 +251,7 @@ const chipStyle = computed(() => {
   <TaskProgress />
   <PluginManager />
   <HelpDialog />
+  <UpdateDialog ref="updateDialogRef" />
 </template>
 
 <style scoped>
