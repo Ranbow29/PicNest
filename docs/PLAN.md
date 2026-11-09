@@ -489,3 +489,10 @@ PicNest/
     ② **实现**：新增 `picnest-view-preview`：按 `path+mtime` 缓存 **2048px WebP**（PSD 先走 `ensurePsdPng` 整幅 PNG 再缩；普通图 sharp `rotate` 后缩；GIF/SVG/视频/文本跳过）。Lightbox/Brief 在适配视图使用 preview；Lightbox 放大到 `scale × max(width,height) > 2200` 或进入裁剪时换原图/整幅 PSD，Brief 在 `scale ≥ 2` 换原图。两者给 `<img>` 显式 `width/height = meta`，预览/原图切换不改变布局；预览先 `new Image()+decode()` 再切 src。
     ③ **实测**：灯箱 2048 preview 平移 1071 帧 / 6.0s，avg 5.6ms、p95 6.2ms、max 7ms；简报 1075 帧，avg 5.6ms、p95 6.1ms、max 8.7ms；均 0 帧 >33ms。原全幅图 p95 55.6ms。 
     ④ **边界**：高倍放大（Lightbox >2200px 显示、Brief ≥2×）仍换回原图，超大图在高倍下可能再抖；Eagle 式瓦片渲染是后续终极方案。
+
+83. **Canvas 视图舞台（clean-room，2026-11-10，Feb 要求继续对齐 Eagle）**：
+    ① **Eagle 参考边界**：只观摩行为/架构（canvas + 可视区 tile + thumbnail/viewport bitmap），未复制其代码、常量或 worker；临时提取的 Eagle 文件已删除，仓库无 Eagle 渲染代码。
+    ② **实现** `ui/src/components/CanvasStage.vue`：整窗 canvas（DPR 适配），按当前 scale/tx/ty 只 `drawImage` 可视源矩形；`previewSrc` 先加载，`fullSrc` 在 `useFull` 时懒加载，`fallbackSrc` 兜底；`fitMode` 给简报按视口算适配比例。Lightbox 在「非裁剪/非旋转/非翻转/非 GIF/SVG」时用 canvas，其余继续 `<img>` 保留既有裁剪/旋转坐标逻辑；Brief 图片默认 canvas，GIF/SVG 退回 `<img>` 保留动画/矢量。
+    ③ **预览/原图阈值**沿用 2048：Lightbox `scale×max(w,h)>2200` 或裁剪才用 full；Brief `scale≥2`。canvas 不依赖 DOM 大图纹理，1:1/2× 下仍只画可视区域。
+    ④ **实测**（PSD 4203×5939）：Lightbox canvas 适配与 1:1 平移均 1000+ 帧 / 6s，avg 5.7ms、p95 ≈6.2–6.3ms、0 帧 >33ms；Brief canvas 适配与 2× 平移同样 avg 5.7ms、p95 ≈6.1–6.2ms、0 帧 >33ms。截图确认 canvas 正常出图、PSD 预览/整幅切换无空白。
+    ⑤ **限制**：当前是单 canvas + 可视源裁剪，不是 Eagle 的多级 tile cache/worker；超大图首次加载 full 仍有一次解码开销，裁剪/旋转回退 `<img>` 时高倍平移可能仍抖。

@@ -4,6 +4,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useLibrary } from '../stores/library'
 import { fileUrl, api } from '../api'
 import { isTextPath, isVideoPath, extOf } from '../lib/fileKinds'
+import CanvasStage from './CanvasStage.vue'
 
 const lib = useLibrary()
 const url = computed(() => (lib.brief.path ? fileUrl(lib.brief.path) : ''))
@@ -16,30 +17,38 @@ const isPsd = computed(() => extOf(lib.brief.path) === '.psd')
 const idx = computed(() => Math.max(0, lib.images.findIndex((i) => i.file_path === lib.brief.path)))
 const dragging = ref(false)
 const mediaEl = ref(null)
+const canvasStage = ref(null)
 const psdFull = ref('')
 const psdLoading = ref(false)
 const psdError = ref('')
-const imgFallback = ref(false)
 const imgDead = ref(false)
 const previewPath = ref('')
 const previewError = ref(false)
 /* 简报显示 2048 视口预览，放大到 2× 才换原图：大图平移只合成小纹理 */
 const useFull = computed(() => (lib.brief.scale || 1) >= 2)
-/* 简报图源：PSD 用主进程合成的整幅 PNG；普通图片失败时退到 400 缩略图 */
-const mediaSrc = computed(() => {
-  if (kind.value !== 'image') return url.value
+const noCanvas = computed(() => {
+  const ext = extOf(lib.brief.path)
+  return ext === '.gif' || ext === '.svg' // 保留 GIF 动画 / SVG 矢量，不塞进 canvas
+})
+const thumbSrc = computed(() => {
   const m = meta.value
-  const thumb = m?.thumbnail_path && m.thumbnail_path !== 'SKIP' ? fileUrl(m.thumbnail_path) + '?v=' + (m.modify_time || 0) : ''
-  const preview = previewPath.value && !previewError.value ? fileUrl(previewPath.value) + '?v=' + (m?.modify_time || 0) : ''
-  const full = isPsd.value ? (psdFull.value ? fileUrl(psdFull.value) + '?v=' + (m?.modify_time || 0) : '') : url.value
-  if (useFull.value) return full || thumb
-  if (preview) return preview
-  if (isPsd.value) return thumb || full
-  if (imgFallback.value && thumb) return thumb
-  return full
+  return m?.thumbnail_path && m.thumbnail_path !== 'SKIP'
+    ? fileUrl(m.thumbnail_path) + '?v=' + (m.modify_time || 0) : ''
+})
+const canvasFullSrc = computed(() => {
+  const m = meta.value
+  if (!m) return ''
+  if (isPsd.value) return psdFull.value ? fileUrl(psdFull.value) + '?v=' + (m.modify_time || 0) : ''
+  return url.value
+})
+const canvasPreviewSrc = computed(() => {
+  const m = meta.value
+  if (previewPath.value && !previewError.value) {
+    return fileUrl(previewPath.value) + '?v=' + (m?.modify_time || 0)
+  }
+  return thumbSrc.value || canvasFullSrc.value
 })
 watch(() => lib.brief.path, async (p) => {
-  imgFallback.value = false
   imgDead.value = false
   psdFull.value = ''
   psdError.value = ''
@@ -90,30 +99,17 @@ watch(() => lib.brief.path, async (p) => {
 const mediaStyle = computed(() => ({
   transform: `translate3d(${lib.brief.tx || 0}px, ${lib.brief.ty || 0}px, 0) scale(${lib.brief.scale || 1})`,
   cursor: dragging.value ? 'grabbing' : 'grab',
-  ...(kind.value === 'image' && meta.value?.width ? { width: meta.value.width + 'px', height: meta.value.height + 'px' } : {}),
 }))
-function onImgError() {
-  if (!useFull.value && previewPath.value && !previewError.value) {
-    previewError.value = true
-    return
-  }
-  if (isPsd.value && psdFull.value && !imgFallback.value) {
-    psdError.value = 'PSD 原图加载失败，显示缩略图'
-    imgFallback.value = true
-    return
-  }
-  if (!imgFallback.value && mediaSrc.value && meta.value?.thumbnail_path) {
-    imgFallback.value = true
-    return
-  }
-  imgDead.value = true
-}
 function next() { lib.briefNav(1) }
 function prev() { lib.briefNav(-1) }
 
 /* 平移：拖动期间 rAF + 直接改媒体 transform，松手才写回 brief.tx/ty */
 const pan = { active: false, x0: 0, y0: 0, tx0: 0, ty0: 0, tx: 0, ty: 0, raf: 0, moved: false }
 function applyPan(tx, ty) {
+  if (kind.value === 'image' && canvasStage.value?.drawAt) {
+    canvasStage.value.drawAt(tx, ty, lib.brief.scale || 1)
+    return
+  }
   const el = mediaEl.value
   if (el) el.style.transform = `translate3d(${tx}px, ${ty}px, 0) scale(${lib.brief.scale || 1})`
 }
@@ -188,9 +184,16 @@ onBeforeUnmount(() => {
 <template>
   <Teleport to="body">
     <div v-if="lib.brief.open" class="brief"
+         :style="{ cursor: dragging ? 'grabbing' : (kind === 'image' ? 'grab' : 'default') }"
          @wheel.prevent="onWheel" @pointerdown="onDown" @contextmenu.prevent="onContext">
-      <img v-if="kind === 'image' && mediaSrc && !imgDead" ref="mediaEl" :src="mediaSrc" :class="{ gray: lib.grayscaleMode }"
-           :style="mediaStyle" draggable="false" alt="" @error="onImgError" />
+      <CanvasStage v-if="kind === 'image' && !imgDead && !noCanvas"
+        ref="canvasStage" :class="{ gray: lib.grayscaleMode }"
+        :preview-src="canvasPreviewSrc" :full-src="canvasFullSrc" :fallback-src="thumbSrc"
+        :width="meta?.width || 0" :height="meta?.height || 0"
+        :scale="lib.brief.scale || 1" :tx="lib.brief.tx || 0" :ty="lib.brief.ty || 0"
+        :use-full="useFull" fit-mode @error="imgDead = true" />
+      <img v-else-if="kind === 'image' && !imgDead" ref="mediaEl" :src="url" :class="{ gray: lib.grayscaleMode }"
+           :style="mediaStyle" draggable="false" alt="" @error="imgDead = true" />
       <video v-else-if="kind === 'video'" ref="mediaEl" :src="url" autoplay muted loop playsinline
              :class="{ gray: lib.grayscaleMode }" :style="mediaStyle" />
       <div v-else class="brief-empty">
@@ -222,6 +225,7 @@ onBeforeUnmount(() => {
   border-radius: 0; box-shadow: none; /* 沉浸模式：图片不做浮岛 */
 }
 .brief img.gray, .brief video.gray { filter: grayscale(1); }
+.brief :deep(.canvas-stage.gray) { filter: grayscale(1); }
 .brief-empty { color: #8d877c; font-size: 14px; line-height: 2; text-align: center; }
 .brief-empty span { font-size: 11.5px; opacity: 0.7; }
 .brief-note {

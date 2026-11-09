@@ -197,6 +197,8 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 ### 详情 / 视觉分层
 - **灯箱平移（2026-11-10）**：拖动期间不要逐 mousemove 写 `lib.viewer.tx/ty`（会触发 Pinia/组件重渲染 + 裁剪 watcher）。Lightbox 的 `pan` 普通对象记录 base，`onMove` 用 rAF 合并，普通模式直接改 `imgEl.style.transform`，松手 `commitPan()` 才提交 tx/ty；裁剪模式仍逐帧写 store 以带动裁剪框。`.stage` 用 `will-change: transform / backface-visibility: hidden`。PSD 整幅 PNG 先 `new Image()+decode()` 预解码，成功后才切 src，期间保持缩略图。
 - **2048 视口预览（2026-11-10，Eagle 参考）**：灯箱/简报适配视图不再直接合成 25MP 整幅图。新增 `picnest-view-preview` 生成 `view-<md5(abs|2048|mtime)>.webp`（PSD 先走整幅 PNG，再 sharp 缩到 2048；GIF/SVG/视频/文本跳过）。Lightbox 在 `scale×max(w,h) > 2200` 或裁剪时换原图/整幅 PSD；Brief 在 `scale ≥ 2` 换原图。`<img>` 显式 `width/height = meta` 保证预览→原图不改变布局；预览先预解码再切。实测 2048 平移 avg 5.6ms / p95 ≈6.1–6.2ms、0 帧 >33ms（全幅图 p95 55.6ms）。高倍仍会换原图，Eagle 式 canvas 瓦片是后续终极方案。
+- **Canvas 视图舞台（2026-11-10，clean-room）**：`ui/src/components/CanvasStage.vue` 用整窗 canvas + DPR，按 scale/tx/ty 只 `drawImage` 可视源矩形；preview 先加载、full 在 `useFull` 时懒加载、fallback 缩略图兜底，`fitMode` 给简报按视口适配。Lightbox 在非裁剪/非旋转/非翻转/非 GIF/SVG 时走 canvas（其余 `<img>` 保留裁剪/旋转坐标逻辑）；Brief 图片默认 canvas，GIF/SVG 退回 `<img>`。PSD 4203×5939：Lightbox 适配/1:1、Brief 适配/2× 平移均 avg 5.7ms、p95 ≈6.1–6.3ms、0 帧 >33ms。**只参考 Eagle 行为，未复制其代码/常量/worker；提取文件已删。** 当前不是多级 tile cache，超大图 first full 解码与裁剪/旋转回退仍有成本。
+
 - 单选图片：预览/名称/注释/色板/评分/文件夹/操作（**URL 输入栏已删，DB url 字段保留**）。**图片的「文件夹」chip 必须由 `file_path` 反推**（`relOfImage`），不能用 `currentDirRel`——根文件夹开「显示子文件夹内容」或合并视图时，视图位置≠图片所在夹（否则子夹图片被标成库根）。
 - **灯箱详情是第二个 Inspector 实例**（`.insp-overlay` 新挂载）：`selectedPath` 的 meta/色板 watch 必须 `{ immediate: true }` 才能拿到当前选中项；`lib.palettes[p]` 的**空数组**必须视为未命中（`ensurePalettes` 用空数组标记 SKIP/失败），否则灯箱色板永远显示「—」。
 - 多选图片：前 4 张扇形堆叠 + 已选 N + 批量注释/评分/文件夹 chips/移动/复制；单选/多选文件夹三态。
