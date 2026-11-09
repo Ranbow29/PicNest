@@ -103,13 +103,13 @@ onBeforeUnmount(() => {
 })
 
 const SORTS = [
+  { key: 'manual', label: '手动排序' }, // 默认/最常用：物理顺序与拖动换位都以它为准
   { key: 'name', label: '标题' },
   { key: 'added', label: '添加日期' },
   { key: 'mtime', label: '修改日期' },
   { key: 'size', label: '文件大小' },
   { key: 'dims', label: '尺寸' },
   { key: 'rating', label: '评分' },
-  { key: 'manual', label: '手动排序' },
   { key: 'random', label: '随机模式' },
 ]
 const sortLabel = computed(() => (SORTS.find((x) => x.key === lib.sortMode) || SORTS[0]).label)

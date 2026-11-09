@@ -107,7 +107,7 @@ export const useLibrary = defineStore('library', {
     layout: localStorage.getItem('picnest.layout') || 'grid',       // grid | justified | masonry（持久化）
     hideOrderNumbers: localStorage.getItem('picnest.hideOrderNumbers') !== '0', // 显示层隐藏 01_ 排序前缀（默认开）
     zoom: Number(localStorage.getItem('picnest.zoom')) || 1,          // 顶栏缩放滑条（持久化）
-    sortMode: localStorage.getItem('picnest.sortMode') || 'name',    // name|added|mtime|size|dims|rating|random
+    sortMode: localStorage.getItem('picnest.sortMode') || 'manual',    // manual 默认/最重要；name|added|mtime|size|dims|rating|random
     physicalOrder: localStorage.getItem('picnest.physicalOrder') === '1', // 手动排序同步改文件名前缀（实验，默认关）
     sortAsc: localStorage.getItem('picnest.sortAsc') !== '0',
     randomNonce: 0,       // 随机排序的种子换代
