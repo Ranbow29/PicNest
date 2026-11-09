@@ -384,3 +384,5 @@ PicNest/
     ② **裁剪模式滚轮缩放**：删掉 `onWheel` 的 `cropMode` 早退；缩放时裁剪框由既有 watcher 按图片矩形宽度比例重映射（实测 scale 0.334→0.374，crop 240.7/564.7 → 288.2/613.0 同步放大）。
     ③ **裁剪模式非选区拖拽**：`onDown` 只在「落在选区内 / 手柄上 / cropAction 已激活」时让位给裁剪层，其余保留平移；`onMove` 只在 `cropAction` 激活时跳过。实测选区外拖 26/18 → `tx/ty` 26/18、裁剪框同步位移；选区内拖 → 只改 crop.x、图片 tx 不变。`.crop-layer` 光标 grab / 选区内 move / 手柄 resize。
     ④ 坑：改 Inspector 时删掉 `const palette = ref([])`/`paletteLoading` 会直接让整个 `<aside class="inspector">` 渲染失败（Vue 捕获 ReferenceError → DOM 里连 `.inspector` 都没有），排查时先看 console.error。
+
+57. **窗口收缩后详情浮岛溢出（2026-11-09，Feb 报）**：详情固定高度存在 localStorage（`inspectorHeight`，如最大化时设到 1137px）；窗口从大框缩小时 CSS 仍用 `--insp-h: 1137px` + `bottom:10`，浮岛向上顶出视口、顶部被窗控盖住。修法：App.vue 用 `ResizeObserver` 监听 `.browse` 高度，渲染用 `inspEffH = min(inspectorHeight, browseH - 50)` 写进 `--insp-h`（偏好值保留，窗口放大自动恢复）；`.insp-overlay` 同值。`InspResize` 起拖的 `h0` 改用当前显示高度（`insp.height`）而不是偏好值，避免钳制后拖拽跳变。实测 1400×901 → 1000×651：偏好 1137 不变，`--insp-h` 821→570，浮岛 y=48/h=570/bottom=618 不越界；恢复窗口后回到 820。
