@@ -67,7 +67,8 @@ function createPageWorld({ runtimeAlive = true } = {}) {
   }
   const ctx = vm.createContext({
     window: win, document: doc, chrome: chromePage, Event: FakeEvent,
-    setTimeout: () => 0, clearTimeout: () => {}, console,
+    setTimeout: () => 0, clearTimeout: () => {},
+    setInterval: () => 0, clearInterval: () => {}, console,
   })
   const script = new vm.Script(contentCode, { filename: 'content.js' })
   return {
@@ -261,6 +262,28 @@ function addTab(tabs, worlds, id, url, world = createPageWorld()) {
   assert.equal(bg.reloads.length, 0, '带 cleanup 不刷新')
   assert.equal(worlds.get(3).doc.count('pointerdown'), 2, '监听器不叠加')
   console.log('ok 旧脚本（带 cleanup）：原地接管，不刷新')
+}
+
+/* ---------- 3b. 当前版本但 document 监听器失效：原地重建，不刷新 ---------- */
+{
+  const worlds = new Map()
+  const tabs = new Map()
+  const dead = createPageWorld()
+  dead.runContent()
+  dead.doc.listeners.clear()
+  dead.win.listeners.clear()
+  const bg = createBackground(worlds, tabs, { activeTabId: 8 })
+  await settle()
+  addTab(tabs, worlds, 8, 'https://www.pinterest.com/', dead)
+  const st = await bg.message({ type: 'collect-status' })
+  assert.equal(st.state, 'unhealthy')
+  await bg.events.onActivated.emit({ tabId: 8 })
+  assert.equal(worlds.get(8).win.__picnestHoldCollectVersion, CONTENT_VERSION, '原地重建到当前版本')
+  assert.equal(bg.reloads.length, 0, '监听器失效优先重建，不刷新')
+  assert.equal(worlds.get(8).doc.count('pointerdown'), 2, '新监听器已挂上')
+  const after = await bg.message({ type: 'collect-status' })
+  assert.equal(after.state, 'current')
+  console.log('ok 当前版本监听器失效：原地重建，不刷新')
 }
 
 /* ---------- 4. 旧脚本无 cleanup（非 Pinterest）：不自动刷新 ---------- */

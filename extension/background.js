@@ -19,7 +19,7 @@ chrome.runtime.onInstalled.addListener(() => {
    - 更老的脚本（无 cleanup）/ 扩展更新后失去 runtime 的孤立脚本 / document 监听器失效
      → 只在 Pinterest 标签自动刷新一次（chrome.storage.session 记标记防循环），其它站点走 popup「修复本页」。
    content.js 在监听器全部注册完成之后才置 Loaded，并提供健康事件，部分初始化也能被发现。 */
-const CONTENT_VERSION = '0.1.4'
+const CONTENT_VERSION = '0.1.5'
 const RELOAD_KEY = 'picnestCollectReloads'
 const INJECTABLE_RE = /^(https?|file):\/\//i
 const PINTEREST_HOST_RE = /(^|\.)pinterest\.[a-z.]+$/i
@@ -132,14 +132,42 @@ async function reloadTabOnce(tab) {
   }
 }
 
-async function handleStale(tab, probe, allowReload) {
-  /* 仍在运行、只是版本旧的实例：注入新 content.js 会先清理旧监听器再初始化，无需刷新 */
-  if (probe?.cleanup && probe.alive && probe.version !== CONTENT_VERSION) {
-    await injectCollect(tab.id)
-    const after = await probeCollect(tab.id)
-    if (probeCurrent(after)) return true
+/* 原地重建：调用旧实例 cleanup 移除监听器 → 清掉隔离世界全局 → 注入新 content.js。
+   适用于旧版本（带 cleanup）/ 扩展更新后 runtime 失效 / document 监听器被清掉但全局还在的页面。
+   比重载整页温和，且能修复“healthy=false 但 version 已是当前版”的死监听器状态。 */
+async function rebuildCollect(tabId) {
+  try {
+    const [r] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        let cleaned = false
+        try {
+          if (typeof window.__picnestHoldCollectCleanup === 'function') {
+            window.__picnestHoldCollectCleanup()
+            cleaned = true
+          }
+        } catch { cleaned = false }
+        if (!cleaned) return false
+        for (const k of ['__picnestHoldCollectLoaded', '__picnestHoldCollectVersion', '__picnestHoldCollectHealth', '__picnestHoldCollectCleanup']) {
+          try { delete window[k] } catch { /* 静默 */ }
+        }
+        return true
+      },
+    })
+    if (!r?.result) return false
+    if (!(await injectCollect(tabId))) return false
+    return probeCurrent(await probeCollect(tabId))
+  } catch {
+    return false
   }
-  /* 无 cleanup / 孤立脚本 / 监听器失效：只在 Pinterest 页自动刷新一次 */
+}
+
+async function handleStale(tab, probe, allowReload) {
+  /* 旧版（带 cleanup）/ 孤立脚本 / 监听器失效：优先原地重建，不刷新页面 */
+  if (probe?.loaded && probe.cleanup) {
+    if (await rebuildCollect(tab.id)) return true
+  }
+  /* 无 cleanup 的极旧脚本：只在 Pinterest 页自动刷新一次；其它站点交给 popup */
   if (allowReload && isPinterestUrl(tab.url)) return await reloadTabOnce(tab)
   return false
 }
@@ -340,10 +368,9 @@ async function repairCollect(tabId) {
   }
   let probe = await probeCollect(tab.id)
   if (probeCurrent(probe)) return { ok: true, action: 'none' }
-  if (probe && probe.loaded && probe.version !== CONTENT_VERSION && probe.cleanup) {
-    await injectCollect(tab.id)
-    probe = await probeCollect(tab.id)
-    if (probeCurrent(probe)) return { ok: true, action: 'injected' }
+  /* 有 cleanup 的实例（包括当前版本但监听器失效）：原地重建，不刷新页面 */
+  if (probe && probe.loaded && probe.cleanup) {
+    if (await rebuildCollect(tab.id)) return { ok: true, action: 'rebuilt' }
   }
   if (!probe || !probe.loaded) {
     await injectCollect(tab.id)

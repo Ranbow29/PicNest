@@ -2,7 +2,7 @@
 // 在网页图片上左键按住 → 光标处环形进度 → 弹出双栏面板（左：未分类/库根；右：全部文件夹）
 // 拖到目标松开即保存；松开在面板空白处则面板停留，可点击/滚动选择；Esc / 点外部取消。
 (() => {
-  const VERSION = '0.1.4'
+  const VERSION = '0.1.5'
   const prevLoaded = !!window.__picnestHoldCollectLoaded
   const prevVersion = String(window.__picnestHoldCollectVersion || '')
   /* 同版本重复注入：幂等返回。旧版本实例：0.1.4 起会挂 __picnestHoldCollectCleanup，
@@ -711,40 +711,81 @@
   function onProbe() {
     probeTicks++
   }
+  function onPageShow(e) {
+    if (e?.persisted) selfCheck()
+  }
 
-  document.addEventListener('pointerdown', onDown, true)
-  document.addEventListener('pointermove', onMove, true)
-  document.addEventListener('pointerup', onUp, true)
-  document.addEventListener('pointercancel', closePanel, true)
-  document.addEventListener('keydown', onKey, true)
-  document.addEventListener('dragstart', onDragStart, true)
-  document.addEventListener('contextmenu', onCtx, true)
-  document.addEventListener('pointerdown', onOutside, true)
-  document.addEventListener('visibilitychange', onVisibility)
-  document.addEventListener(PROBE_EVENT, onProbe)
-  window.addEventListener('scroll', onScroll, true)
-  window.addEventListener('blur', closePanel)
-  window.addEventListener('resize', closePanel)
+  let listenersOn = false
+  let watchdogTimer = 0
+  let firstCheckTimer = 0
+  let selfHeals = 0
+
+  /* document.open()/页面重建会清掉已注册的监听器，但保留隔离世界里的 window 全局：
+     用户表现为“按住无反应”，后台表现为 healthy=false。这里每 2.5s 自检一次，
+     发现 document 监听器收不到私有事件就地重建；window 捕获哨兵让第一次按下也能自愈。 */
+  function selfCheck() {
+    if (disposed) return
+    const before = probeTicks
+    try { document.dispatchEvent(new Event(PROBE_EVENT)) } catch { /* 页面销毁中 */ }
+    if (probeTicks !== before) return
+    closePanel()
+    removeListeners()
+    installListeners()
+    selfHeals++
+  }
+
+  function installListeners() {
+    if (disposed || listenersOn) return
+    try {
+      document.addEventListener('pointerdown', onDown, true)
+      document.addEventListener('pointermove', onMove, true)
+      document.addEventListener('pointerup', onUp, true)
+      document.addEventListener('pointercancel', closePanel, true)
+      document.addEventListener('keydown', onKey, true)
+      document.addEventListener('dragstart', onDragStart, true)
+      document.addEventListener('contextmenu', onCtx, true)
+      document.addEventListener('pointerdown', onOutside, true)
+      document.addEventListener('visibilitychange', onVisibility)
+      document.addEventListener(PROBE_EVENT, onProbe)
+      document.addEventListener('pageshow', onPageShow)
+      window.addEventListener('scroll', onScroll, true)
+      window.addEventListener('blur', closePanel)
+      window.addEventListener('resize', closePanel)
+      /* window 捕获哨兵：document 监听器被清掉后，下一次按下仍能触发自愈 */
+      window.addEventListener('pointerdown', selfCheck, true)
+      listenersOn = true
+    } catch { /* 页面销毁/权限异常：保持 Loaded，后台下次探测再修 */ }
+  }
+
+  function removeListeners() {
+    if (!listenersOn) return
+    listenersOn = false
+    try { document.removeEventListener('pointerdown', onDown, true) } catch { /* 静默 */ }
+    try { document.removeEventListener('pointermove', onMove, true) } catch { /* 静默 */ }
+    try { document.removeEventListener('pointerup', onUp, true) } catch { /* 静默 */ }
+    try { document.removeEventListener('pointercancel', closePanel, true) } catch { /* 静默 */ }
+    try { document.removeEventListener('keydown', onKey, true) } catch { /* 静默 */ }
+    try { document.removeEventListener('dragstart', onDragStart, true) } catch { /* 静默 */ }
+    try { document.removeEventListener('contextmenu', onCtx, true) } catch { /* 静默 */ }
+    try { document.removeEventListener('pointerdown', onOutside, true) } catch { /* 静默 */ }
+    try { document.removeEventListener('visibilitychange', onVisibility) } catch { /* 静默 */ }
+    try { document.removeEventListener(PROBE_EVENT, onProbe) } catch { /* 静默 */ }
+    try { document.removeEventListener('pageshow', onPageShow) } catch { /* 静默 */ }
+    try { window.removeEventListener('scroll', onScroll, true) } catch { /* 静默 */ }
+    try { window.removeEventListener('blur', closePanel) } catch { /* 静默 */ }
+    try { window.removeEventListener('resize', closePanel) } catch { /* 静默 */ }
+    try { window.removeEventListener('pointerdown', selfCheck, true) } catch { /* 静默 */ }
+  }
 
   /* 供后台/新版脚本接管：移除全部页面监听器与悬浮 UI。0.1.4 起每个版本都必须挂这个入口，
      下次扩展更新后向仍打开的页面注入新 content.js 即可原地重建，不必刷新整页。 */
   function cleanup() {
     if (disposed) return
     disposed = true
+    if (watchdogTimer) { clearInterval(watchdogTimer); watchdogTimer = 0 }
+    if (firstCheckTimer) { clearTimeout(firstCheckTimer); firstCheckTimer = 0 }
     closePanel()
-    document.removeEventListener('pointerdown', onDown, true)
-    document.removeEventListener('pointermove', onMove, true)
-    document.removeEventListener('pointerup', onUp, true)
-    document.removeEventListener('pointercancel', closePanel, true)
-    document.removeEventListener('keydown', onKey, true)
-    document.removeEventListener('dragstart', onDragStart, true)
-    document.removeEventListener('contextmenu', onCtx, true)
-    document.removeEventListener('pointerdown', onOutside, true)
-    document.removeEventListener('visibilitychange', onVisibility)
-    document.removeEventListener(PROBE_EVENT, onProbe)
-    window.removeEventListener('scroll', onScroll, true)
-    window.removeEventListener('blur', closePanel)
-    window.removeEventListener('resize', closePanel)
+    removeListeners()
     try { chrome.storage.onChanged.removeListener(onStorageChanged) } catch { /* 静默 */ }
     try { document.getElementById(HOST_ID)?.remove() } catch { /* 静默 */ }
   }
@@ -754,12 +795,15 @@
   function health() {
     let alive = false
     try { alive = !!chrome.runtime?.id } catch { alive = false }
-    return { version: VERSION, ticks: probeTicks, alive, enabled, disposed }
+    return { version: VERSION, ticks: probeTicks, alive, enabled, disposed, selfHeals }
   }
 
+  installListeners()
   window.__picnestHoldCollectCleanup = cleanup
   window.__picnestHoldCollectHealth = health
   /* 只有监听器全部注册成功后才置 Loaded：部分初始化失败的页面可以被后台补注入修复 */
   window.__picnestHoldCollectLoaded = true
   window.__picnestHoldCollectVersion = VERSION
+  firstCheckTimer = setTimeout(() => { firstCheckTimer = 0; selfCheck() }, 1200)
+  watchdogTimer = setInterval(selfCheck, 2500)
 })()

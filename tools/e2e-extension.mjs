@@ -12,6 +12,8 @@ import { fileURLToPath } from 'node:url'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const extDir = path.join(root, 'extension')
+const contentCode = fs.readFileSync(path.join(extDir, 'content.js'), 'utf8')
+const CONTENT_VERSION = contentCode.match(/const VERSION = '([^']+)'/)[1]
 const chromePath = process.env.CHROME_PATH || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
@@ -146,7 +148,7 @@ try {
     let last = null
     while (Date.now() - t0 < timeout) {
       last = await probe(tabId)
-      if (last && last.loaded && last.version === '0.1.4' && last.alive && last.healthy) return last
+      if (last && last.loaded && last.version === CONTENT_VERSION && last.alive && last.healthy) return last
       await sleep(200)
     }
     throw new Error('脚本未就绪：' + JSON.stringify(last))
@@ -156,8 +158,8 @@ try {
   }
 
   const manifestVersion = await evalSW('chrome.runtime.getManifest().version')
-  assert.equal(manifestVersion, '0.1.4')
-  ok('扩展 v0.1.4 加载成功')
+  assert.equal(manifestVersion, CONTENT_VERSION)
+  ok('扩展 v' + CONTENT_VERSION + ' 加载成功')
 
   /* ---------- Pinterest 页面：注入 + 状态 ---------- */
   const pinUrl = `http://www.pinterest.test:${port}/`
@@ -170,8 +172,8 @@ try {
   await sleep(300)
   let st = await evalSW('collectStatus()')
   assert.equal(st.state, 'current')
-  assert.equal(st.version, '0.1.4')
-  ok('popup collectStatus：current v0.1.4')
+  assert.equal(st.version, CONTENT_VERSION)
+  ok('popup collectStatus：current v' + CONTENT_VERSION)
 
   /* ---------- 旧版带 cleanup：原地接管，不刷新 ---------- */
   await pageEval(pinTab.id, () => {
@@ -181,12 +183,44 @@ try {
   const beforeMarker = await pageEval(pinTab.id, () => window.__pnE2eMarker || null)
   await evalSW(`(async () => ensureCollectScript(await chrome.tabs.get(${pinTab.id}), 0, true))()`)
   const afterProbe = await probe(pinTab.id)
-  assert.equal(afterProbe.version, '0.1.4')
+  assert.equal(afterProbe.version, CONTENT_VERSION)
   assert.equal(afterProbe.healthy, true)
   const afterMarker = await pageEval(pinTab.id, () => window.__pnE2eMarker || null)
   assert.equal(beforeMarker, 'takeover')
   assert.equal(afterMarker, 'takeover', '原地接管没有刷新页面')
   ok('旧版带 cleanup：原地接管（同 document，不刷新）')
+
+  /* ---------- document.open 清空监听器：后台「修复本页」原地重建 ---------- */
+  await pageEval(pinTab.id, () => {
+    document.open()
+    document.write('<!doctype html><html><body><img id="x" src="/pic.svg" width="320" height="200"><p>rebuilt</p></body></html>')
+    document.close()
+  })
+  await sleep(350)
+  const wiped = await probe(pinTab.id)
+  assert.equal(wiped.loaded, true)
+  assert.equal(wiped.version, CONTENT_VERSION)
+  assert.equal(wiped.healthy, false)
+  const repairedPin = await evalSW(`repairCollect(${pinTab.id})`)
+  assert.ok(['rebuilt', 'none'].includes(repairedPin.action), '修复动作：' + repairedPin.action)
+  const afterRepair = await probe(pinTab.id)
+  assert.equal(afterRepair.healthy, true)
+  ok('document.open 清空监听器：popup 修复原地重建')
+
+  /* ---------- content 看门狗：document.open 后不靠后台也能自愈 ---------- */
+  await pageEval(pinTab.id, () => {
+    document.open()
+    document.write('<!doctype html><html><body><img id="y" src="/pic.svg" width="320" height="200"></body></html>')
+    document.close()
+  })
+  await sleep(350)
+  const wiped2 = await probe(pinTab.id)
+  assert.equal(wiped2.healthy, false)
+  await sleep(3500)
+  const healed = await probe(pinTab.id)
+  assert.equal(healed.healthy, true)
+  assert.equal(healed.version, CONTENT_VERSION)
+  ok('document.open 清空监听器：content 看门狗自愈')
 
   /* ---------- 极旧脚本（无 cleanup）：Pinterest 自动刷新一次 ---------- */
   await pageEval(pinTab.id, () => {
@@ -204,7 +238,7 @@ try {
   await waitCurrent(pinTab.id, 12000)
   const gone = await pageEval(pinTab.id, () => window.__pnE2eMarker || null)
   assert.equal(gone, null, '自动刷新换掉了 document')
-  ok('极旧脚本：Pinterest 自动刷新一次 + 刷新后注入 0.1.4')
+  ok('极旧脚本：Pinterest 自动刷新一次 + 刷新后注入当前版')
 
   /* ---------- 防循环：同一 tab+URL 不再刷新 ---------- */
   await pageEval(pinTab.id, () => {

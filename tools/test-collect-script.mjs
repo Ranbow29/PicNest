@@ -63,21 +63,27 @@ function createPage({ runtimeAlive = true } = {}) {
       onChanged: storageChanged,
     },
   }
+  const timers = { timeouts: [], intervals: [] }
   const ctx = vm.createContext({
     window: win,
     document: doc,
     chrome,
     Event: FakeEvent,
-    setTimeout,
-    clearTimeout,
+    setTimeout(fn, ms) { timers.timeouts.push({ fn, ms, cleared: false }); return timers.timeouts.length },
+    clearTimeout(id) { const t = timers.timeouts[id - 1]; if (t) t.cleared = true },
+    setInterval(fn, ms) { timers.intervals.push({ fn, ms, cleared: false }); return timers.intervals.length },
+    clearInterval(id) { const t = timers.intervals[id - 1]; if (t) t.cleared = true },
     console,
   })
   const script = new vm.Script(contentCode, { filename: 'content.js' })
   return {
-    win, doc, chrome, storageChanged, ctx,
+    win, doc, chrome, storageChanged, ctx, timers,
     run: () => script.runInContext(ctx),
     probeTicks() { return win.__picnestHoldCollectHealth ? win.__picnestHoldCollectHealth().ticks : -1 },
     dispatchProbe() { doc.dispatchEvent(new FakeEvent('picnest-collect-probe')) },
+    tickWatchdog() {
+      for (const t of timers.intervals) if (!t.cleared) t.fn()
+    },
   }
 }
 
@@ -164,10 +170,29 @@ console.log('ok 版本一致：', manifest.version)
   assert.equal(page.win.count('scroll'), 0)
   assert.equal(page.storageChanged.count('change'), 0)
   assert.equal(page.win.__picnestHoldCollectHealth().disposed, true)
+  page.tickWatchdog()
+  assert.equal(page.doc.count('pointerdown'), 0, 'cleanup 后看门狗不再重建')
   console.log('ok cleanup：监听器全部移除')
 }
 
-/* 7. 孤立脚本（扩展更新后 runtime 失效）：alive=false，供后台判定需刷新 */
+/* 7. document 监听器被清空（模拟 document.open/页面重建）：看门狗原地重建 */
+{
+  const page = createPage()
+  page.run()
+  page.dispatchProbe()
+  const before = page.probeTicks()
+  page.doc.listeners.clear()
+  page.win.listeners.clear()
+  page.tickWatchdog()
+  page.dispatchProbe()
+  assert.equal(page.probeTicks(), before + 1, '看门狗重建后探测恢复')
+  assert.equal(page.doc.count('pointerdown'), 2)
+  assert.equal(page.win.count('pointerdown'), 1, 'window 捕获哨兵重新挂上')
+  assert.equal(page.win.__picnestHoldCollectHealth().disposed, false)
+  console.log('ok document 监听器被清空：看门狗原地重建')
+}
+
+/* 8. 孤立脚本（扩展更新后 runtime 失效）：alive=false，供后台判定需刷新 */
 {
   const page = createPage({ runtimeAlive: false })
   page.run()

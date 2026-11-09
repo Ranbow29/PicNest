@@ -154,6 +154,9 @@ elRepair.addEventListener('click', () => {
     if (res.action === 'reloaded') {
       msg('页面已刷新，采集脚本将重新注入')
       setTimeout(refreshPageState, 1500)
+    } else if (res.action === 'rebuilt') {
+      msg('已原地重建采集脚本')
+      setTimeout(refreshPageState, 400)
     } else if (res.action === 'injected') {
       msg('已重新注入采集脚本')
       setTimeout(refreshPageState, 400)

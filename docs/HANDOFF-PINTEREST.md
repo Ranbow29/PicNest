@@ -3,8 +3,8 @@
 > 给下一个窗口的专注交接。**这是目前唯一剩下的硬骨头。**
 > 阅读顺序：本文 → `extension/background.js` / `extension/content.js` → `docs/HANDOFF.md` 的「采集（M6）」小节 → `extension/README.md`。
 >
-> **2026-11-10 状态：已按方案 A+B+C 实现扩展 v0.1.4（`dev`），待 Feb 在 Chrome 重载扩展后物理验收。**
-> 实现细节与决策表见第 9 节；无头回归 `node tools/test-collect-script.mjs` / `node tools/test-collect-background.mjs`。
+> **2026-11-10 状态：v0.1.4 已实现并实测；v0.1.5 补上「监听失效」自愈（popup 原地重建 + content 看门狗），真实 Chrome 9 项端到端全过，待 Feb 在主 Chrome 重载 0.1.5 后物理验收。**
+> 实现细节与决策表见第 9 节；无头回归 `node tools/test-collect-script.mjs` / `node tools/test-collect-background.mjs`，真实 Chrome 冒烟 `node tools/e2e-extension.mjs`。
 
 ## 0. 一句话结论
 
@@ -248,12 +248,12 @@ manifest 注入 + 健康探测、`collectStatus` current、旧版带 cleanup 原
 > 自动化部分已在临时 Chrome 156 通过（见 9.4）；下面是用你**日常主 Chrome + 真实 Pinterest 登录态**的物理验收，
 > 重点验证睡眠标签 / bookmarks / 多窗口切换这些自动化覆盖不到的路径。
 
-1. `chrome://extensions` 重载扩展，确认版本 **0.1.4**（**不需要**先刷新 Pinterest 页）。
+1. `chrome://extensions` 重载扩展，确认版本 **0.1.5**（**不需要**先刷新 Pinterest 页）。
 2. 切到已打开的 Pinterest 标签（旧脚本页）：
    - 若旧脚本无 cleanup / 孤立 → 页面应自动刷新一次，并出现「Pinterest 页面已自动刷新」通知；
    - 刷新后长按图片 → 面板正常；
    - 再切走/切回，不再刷新，采集仍正常。
-3. 打开扩展面板：「本页采集」显示「已就绪 v0.1.4」；若显示异常，点「修复本页」应恢复。
+3. 打开扩展面板：「本页采集」显示「已就绪 v0.1.5」；若显示异常，点「修复本页」（监听失效会原地重建，不刷新）。
 4. 从书签栏 / 侧标入口进入 Pinterest（Feb 实测 100% 复现路径）：不应再需要手动刷新。
 5. 多个 Pinterest 标签 / 两个 Chrome 窗口之间切换均正常；普通网页不被自动刷新。
 6. 关掉/重开 Chrome 后，已有 Pinterest 标签恢复，采集正常。
@@ -265,3 +265,50 @@ manifest 注入 + 健康探测、`collectStatus` current、旧版带 cleanup 原
 - 0.1.4 之前的旧实例没有 cleanup，无法原地接管，只能刷新一次；0.1.4 之后应不再需要整页刷新。
 - Chrome 端到端已用临时 profile 覆盖 API 全流程；真实 PointerEvent（Pinterest `pointer-events:none` + 覆盖层）、
   睡眠标签恢复、登录态下的长按面板仍需 Feb 物理鼠标验收。
+
+## 10. v0.1.5：监听器失效自愈（2026-11-10 实测）
+
+### 10.1 现象与证据
+
+Feb 从书签同一标签跳 Pinterest 后，popup「本页采集」显示 **监听失效**，长按无环/无面板，但：
+- `probe`：`loaded=true / version=0.1.4 / alive=true / cleanup=true / healthy=false`
+- `health()`：`disposed=false`，`ticks` 卡在 1；手动派发 `picnest-collect-probe` 后 ticks 仍不增加
+- 同时该 tab 的 **隔离世界全局仍在**，说明不是脚本没注入，也不是扩展更新后的 runtime 失效
+- 对同一 tab 执行 `cleanup() → delete 全局 → 注入 content.js`，**立即恢复 healthy**
+
+也就是说：页面/某个扩展把 **document 上的事件监听器清掉了**（典型是 `document.open()` / 页面重建），
+但隔离世界的 `window` 全局与 `disposed` 状态保留，形成“脚本在、监听器没了”的死状态。具体触发源尚未锁定
+（Pinterest bfcache 已排除：返回 `CacheControlNoStore`，不会复用旧页面；Eagle for Chrome 加载后长按仍正常）。
+
+### 10.2 修法
+
+**content.js（0.1.5）**
+- 监听器安装抽成 `installListeners()/removeListeners()`，幂等。
+- 自检：初始化 1.2s 后 + 每 2.5s 派发一次私有探测事件；若 `ticks` 不增长，判定监听器被清空 →
+  `closePanel()` + `removeListeners()` + `installListeners()` 原地重建（`selfHeals` 计数进 health）。
+- `window` 捕获阶段加 `pointerdown` 哨兵，调用同一个自检；document 监听器刚被清掉时，第一次按下也能自愈。
+- `cleanup()` 同时清掉看门狗定时器；`pageshow(persisted)` 时立即自检。
+
+**background.js**
+- 新增 `rebuildCollect(tabId)`：注入函数调用旧实例 `cleanup()` → 删除四个隔离世界全局 → 注入新 `content.js`；
+  只有 `cleanup()` 成功才重建（无 cleanup 的极旧实例仍走刷新）。
+- `handleStale`：`loaded && cleanup` 一律优先原地重建（包括版本旧、runtime 孤立、`healthy=false` 的死监听器），
+  失败才在 Pinterest 上 `tabs.reload` 一次；非 Pinterest 留给 popup。
+- `repairCollect`：新增 `action: 'rebuilt'`；「修复本页」对监听失效不再刷新，直接原地重建。
+- service worker 启动补注入时 `allowReload=false`，但现在会走原地重建，所以**重载扩展后已打开的 Pinterest 标签会直接升级到新版本，不刷新页面**。
+
+### 10.3 验证
+
+- 无头：`test-collect-script.mjs` 新增「document 监听器被清空 → 看门狗重建」；`test-collect-background.mjs`
+  新增「当前版本 healthy=false → 原地重建、不刷新」。
+- 真实 Chrome：`e2e-extension.mjs` 9 项全过，新增两项：
+  `document.open()` 清空监听器后 `repairCollect` 原地重建；以及不调用后台、仅靠 content 看门狗自愈。
+- 测试窗口把扩展从 0.1.4 卸载重载到 0.1.5 后，三个已打开的 Pinterest 标签**全部原地升到 0.1.5、无页面刷新**，
+  `probe` 全 healthy。
+- 主 Chrome 需 Feb 重载到 **0.1.5** 后按书签路径物理验收；若 popup 仍显示「监听失效」，
+  等 1.2–2.5s 看门狗自愈，或点「修复本页」（现在会显示“已原地重建采集脚本”）。
+
+### 10.4 版本
+
+- 0.1.4 的 cleanup/health/rebuild 机制保留；0.1.5 新增看门狗 + 原地重建优先。
+- 以后每次升版本仍必须保留 `cleanup + health + VERSION` 三件套，否则下一次更新退化为整页刷新。
