@@ -192,7 +192,7 @@ const patches = [
   if (process.platform !== "darwin") electron.app.exit(0);
 });`,
     to: `electron.app.on("window-all-closed", () => {
-  /* PicNest:P13 先收托盘、兜住清理异常，再强制退出；任一步抛错都不能把托盘/进程留在后台 */
+  /* PicNest:P13b 先收托盘、兜住清理异常，再强制退出；任一步抛错都不能把托盘/进程留在后台 */
   allowClose = true;
   if (tray) {
     try {
