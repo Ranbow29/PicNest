@@ -10,7 +10,25 @@ const V = computed(() => lib.viewer)
 const stageEl = ref(null)
 const imgEl = ref(null)
 const dragging = ref(false)
-let lastX = 0, lastY = 0
+/* 灯箱平移：拖动期间每帧最多一次 rAF，普通模式直接改 img.style.transform（不走 Pinia 响应式），
+   松手才把最终 tx/ty 写回 store；裁剪模式仍逐帧写 store 以便裁剪框跟随。 */
+const pan = { active: false, startX: 0, startY: 0, baseTx: 0, baseTy: 0, curTx: 0, curTy: 0, raf: 0 }
+function stageTransform(tx, ty) {
+  return `translate(${tx}px, ${ty}px) scale(${lib.viewer.scale}) rotate(${lib.viewer.rot}deg)`
+    + (lib.viewer.flopX ? ' scaleX(-1)' : '')
+}
+function applyPan(tx, ty) {
+  const el = imgEl.value
+  if (el) el.style.transform = stageTransform(tx, ty)
+}
+function commitPan() {
+  if (!pan.active) return
+  if (pan.raf) { cancelAnimationFrame(pan.raf); pan.raf = 0 }
+  pan.active = false
+  dragging.value = false
+  lib.viewer.tx = pan.curTx
+  lib.viewer.ty = pan.curTy
+}
 
 const meta = computed(() => lib.images.find((i) => i.file_path === lib.lightbox.path) || null)
 const kind = computed(() => {
@@ -74,8 +92,24 @@ watch(() => lib.lightbox.path, async (p) => {
   try {
     const res = await api.psdPreview(p)
     if (lib.lightbox.path !== p) return
-    if (res?.ok && res.path) psdFull.value = res.path
-    else psdError.value = res?.error || 'PSD 原图渲染失败'
+    if (res?.ok && res.path) {
+      /* 整幅 PNG 可能几十 MB：先在内存里解码完再切 src，避免灯箱从缩略图切到半张/空白大图 */
+      const fullUrl = fileUrl(res.path) + '?v=' + (meta.value?.modify_time || 0)
+      await new Promise((resolve, reject) => {
+        const im = new Image()
+        im.decoding = 'async'
+        im.onload = () => {
+          if (im.decode) im.decode().then(resolve).catch(resolve)
+          else resolve()
+        }
+        im.onerror = () => reject(new Error('PSD 原图加载失败'))
+        im.src = fullUrl
+      })
+      if (lib.lightbox.path !== p) return
+      psdFull.value = res.path
+    } else {
+      psdError.value = res?.error || 'PSD 原图渲染失败'
+    }
   } catch (e) {
     if (lib.lightbox.path === p) psdError.value = String(e?.message || e)
   } finally {
@@ -144,16 +178,30 @@ function onDown(e) {
   if (e.button !== 0) return // 右键交给菜单
   /* 裁剪中：落在选区/手柄上交给裁剪层；**选区外保留平移**（用户规格） */
   if (lib.viewer.cropMode && (cropAction.value || insideRect(e) || handleAt(e))) return
-  dragging.value = true; lastX = e.clientX; lastY = e.clientY
+  pan.active = true
+  pan.startX = e.clientX; pan.startY = e.clientY
+  pan.baseTx = lib.viewer.tx; pan.baseTy = lib.viewer.ty
+  pan.curTx = lib.viewer.tx; pan.curTy = lib.viewer.ty
+  dragging.value = true
 }
 function onMove(e) {
   if (lib.viewer.cropMode && cropAction.value) return // 裁剪框拖拽由 window 级监听独占
-  if (!dragging.value) return
-  lib.viewer.tx += e.clientX - lastX
-  lib.viewer.ty += e.clientY - lastY
-  lastX = e.clientX; lastY = e.clientY
+  if (!pan.active) return
+  pan.curTx = pan.baseTx + e.clientX - pan.startX
+  pan.curTy = pan.baseTy + e.clientY - pan.startY
+  if (pan.raf) return
+  pan.raf = requestAnimationFrame(() => {
+    pan.raf = 0
+    if (!pan.active) return
+    if (lib.viewer.cropMode) {
+      lib.viewer.tx = pan.curTx
+      lib.viewer.ty = pan.curTy
+    } else {
+      applyPan(pan.curTx, pan.curTy)
+    }
+  })
 }
-function onUp() { dragging.value = false }
+function onUp() { commitPan() }
 /* 灯箱右键：图片/视频/文本舞台都可呼出同一套图片菜单；输入框保留原生右键 */
 function onContext(e) {
   const t = e.target
@@ -783,6 +831,8 @@ function onKey(e) {
   /* 基础尺寸=原始像素，适配完全由 transform scale 负责（单一权威）
      沉浸模式不做浮岛：无投影/圆角，图片平面贴在正文上 */
   user-select: none;
+  will-change: transform; /* 平移交给合成器，避免每帧重绘整张大图 */
+  backface-visibility: hidden;
 }
 .glass-pill {
   position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%);
