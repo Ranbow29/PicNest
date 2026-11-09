@@ -378,3 +378,9 @@ PicNest/
 55. **图标动效幅度加码 + 插件仓库设计（2026-11-09，Feb 指定）**：
     ① `grid` 四格上浮 1.3 → **2.8**（首轮 1.3 被 Feb 判"幅度不够"）；`sidebar` 面板抬升 0.8→1.4、分隔线横移 0.8→2.4、列内短线 0.5→1.2、收起态 CSS 位移 -3.6px→-5.4px（过渡 0.26s）。CDP 连拍两帧确认位移肉眼可见。Feb 口径再验证：动效幅度"宜大不宜小"，第一版宁大勿小。
     ② **插件仓库**：完整设计落 `docs/PLUGIN.md`——三种插件类型（theme 纯 CSS / renderer 沙箱 iframe / main utilityProcess）、plugin.json 清单（deny-by-default 权限）、宿主 RPC 网关（快照传递、无活引用）、GitHub 仓库即 marketplace（registry.json + zip + sha256，人工 PR 收录）、四阶段路线（P1 theme+管理页 → P2 renderer → P3 main → P4 在线仓库+签名）。红线：不给插件裸 db 句柄/Node，网络只走声明 origin 的代理，主题插件只许叠 token 不许整页覆盖。
+
+56. **灯箱详情色板 / 裁剪交互修复（2026-11-09，Feb 报）**：
+    ① **灯箱色板消失**：灯箱的详情浮岛是**另一个 Inspector 实例**（`.insp-overlay` 里新挂载），`watch(() => lib.selectedPath)` 没有 `immediate` → 挂载时拿不到当前选中项，meta/色板都空。给 meta 与色板 watch 加 `{ immediate: true }`；同时 `lib.palettes[p]` 的**空数组**要当成未命中（`ensurePalettes` 用空数组标记 SKIP/失败，旧逻辑 truthy 直接 return，永远显示 —）。
+    ② **裁剪模式滚轮缩放**：删掉 `onWheel` 的 `cropMode` 早退；缩放时裁剪框由既有 watcher 按图片矩形宽度比例重映射（实测 scale 0.334→0.374，crop 240.7/564.7 → 288.2/613.0 同步放大）。
+    ③ **裁剪模式非选区拖拽**：`onDown` 只在「落在选区内 / 手柄上 / cropAction 已激活」时让位给裁剪层，其余保留平移；`onMove` 只在 `cropAction` 激活时跳过。实测选区外拖 26/18 → `tx/ty` 26/18、裁剪框同步位移；选区内拖 → 只改 crop.x、图片 tx 不变。`.crop-layer` 光标 grab / 选区内 move / 手柄 resize。
+    ④ 坑：改 Inspector 时删掉 `const palette = ref([])`/`paletteLoading` 会直接让整个 `<aside class="inspector">` 渲染失败（Vue 捕获 ReferenceError → DOM 里连 `.inspector` 都没有），排查时先看 console.error。
