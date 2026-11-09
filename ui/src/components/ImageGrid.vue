@@ -69,6 +69,7 @@ function onViewportWheel(e) {
 
 /* 拖拽：窗口内是普通 HTML5 内部排序/移动（高亮落点），拖出窗口由主进程升级为原生文件拖拽。 */
 function onCellDragStart(e, img) {
+  dragging.value = true
   const group = (lib.selectedPaths.length > 1 && lib.selectedPaths.includes(img.file_path))
     ? lib.selectedPaths.slice()
     : []
@@ -595,6 +596,7 @@ onBeforeUnmount(onMarqueeUp)
 /* ---------- 拖动：格内排序 / 拖进子文件夹卡片 ---------- */
 const reorderCtx = ref(null) // { path, before, x, y, h }：插入线跟随最近的图
 const subDropRel = ref(null)
+const dragging = ref(false) // 图片拖动中：禁用卡片悬停上浮，避免拖拽时整片网格抖动
 function dtTypes(e) { return [...(e.dataTransfer?.types || [])] }
 function isExternalDT(e) { return isDnDExternal(e) }
 function isInternalImageDT(e) { const t = dtTypes(e); return t.includes('application/x-picnest-file') || t.includes('application/x-picnest-files') }
@@ -636,7 +638,19 @@ function onCanvasDragOver(e) {
     if (d < bestD) { bestD = d; best = item }
   }
   if (!best) { reorderCtx.value = null; return }
-  const before = cx < best.x + best.w / 2
+  const mid = best.x + best.w / 2
+  const prev = reorderCtx.value
+  let before
+  if (prev && prev.path === best.file_path) {
+    /* 光标在同一张卡里小幅移动时不要来回翻边：中点附近留死区，否则插入线会左右跳。 */
+    const dead = Math.max(6, Math.min(14, best.w * 0.04))
+    if (prev.before && cx > mid + dead) before = false
+    else if (!prev.before && cx < mid - dead) before = true
+    else before = prev.before
+    if (prev.before === before) return
+  } else {
+    before = cx < mid
+  }
   reorderCtx.value = {
     path: best.file_path,
     before,
@@ -658,6 +672,7 @@ async function onCanvasDrop(e) {
   const ctx = reorderCtx.value
   const paths = internalImages(e)
   reorderCtx.value = null
+  dragging.value = false
   if (!lib.canReorder()) {
     /* 非手动排序模式：不写 sort_order，保护已有手动排序 */
     lib.showNote('拖动换位需先切换到「手动排序」', [], 'muted')
@@ -710,6 +725,7 @@ async function onSubDrop(e, f) {
 function clearDragUi() {
   reorderCtx.value = null
   subDropRel.value = null
+  dragging.value = false
   try { api.dragEnd() } catch (err) { console.error('[drag-end]', err) }
 }
 onMounted(() => window.addEventListener('dragend', clearDragUi))
@@ -721,7 +737,7 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
           @pointerdown.prevent="onRulerDown" @pointermove="onRulerMove"
           @pointerup="onRulerUp" @pointercancel="onRulerUp" />
   <div ref="viewport" class="grid-viewport" @wheel="onViewportWheel">
-    <div ref="canvasEl" class="canvas" :style="{ height: totalH + 'px' }"
+    <div ref="canvasEl" class="canvas" :class="{ dragging }" :style="{ height: totalH + 'px' }"
          @click.self="onBackgroundClick"
          @pointerdown.self="onMarqueeDown"
          @dragover="onCanvasDragOver" @dragleave="onCanvasDragLeave" @drop="onCanvasDrop">
@@ -856,6 +872,12 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
 }
 .cell.selected:hover .thumb {
   box-shadow: 0 0 0 2px var(--accent), 0 0 0 6px var(--accent-weak), var(--shadow-tile-hover);
+}
+/* 拖动图片时禁用悬停上浮与过渡：否则拖过每张卡都会抬起/落下，整片网格看起来在抖 */
+.canvas.dragging .cell .thumb { transition: none; }
+.canvas.dragging .cell:hover .thumb { transform: none; box-shadow: var(--shadow-tile); }
+.canvas.dragging .cell.selected:hover .thumb {
+  box-shadow: 0 0 0 2px var(--accent), 0 0 0 6px var(--accent-weak), var(--shadow-tile);
 }
 .reorder-line {
   position: absolute; width: 3px; border-radius: 2px;
