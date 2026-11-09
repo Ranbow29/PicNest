@@ -156,12 +156,13 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 
 ### Eagle 库迁移（M7，2026-11-09 本库已执行）
 - **结论**：不直接索引 `.library/images`。Eagle 把文件平铺在 `images/<id>.info/`，文件夹层级只在 `metadata.json`，直接登记会丢整棵树；物化成普通文件夹树。
-- **工具** `tools/eagle-migrate/`：`migrate.mjs`（默认 dry-run，`--apply` 完整复制）、`import-meta.cjs`（URL/注释/评分/标签）、`import-thumbs.cjs`（Eagle `_thumbnail.png` 预置缓存）、`gen-missing-thumbs.cjs`（400px 并发补缺）、README。
+- **工具** `tools/eagle-migrate/`：`migrate.mjs`（默认 dry-run，`--apply` 完整复制，`--json` 给向导预检）、`import-meta.cjs`（URL/注释/评分/标签）、`import-thumbs.cjs`（Eagle `_thumbnail.png` 预置缓存）、`gen-missing-thumbs.cjs`（400px 并发补缺）、README。
+- **应用内向导**：根文件 ⌂ 选目录 → 主进程 `picnest-eagle-inspect` 检测 `metadata.json` + `images/*.info`；普通目录原样加根，Eagle `.library` 才弹 `EagleImportWizard`。向导预览（条目/大小/文件夹/重名/未归类/标签 URL/空间）→ `picnest-eagle-copy`（复制 + 预置缩略图，进度事件）→ 渲染层 `addRootByPath` 索引 → `picnest-eagle-finish`（URL/注释/评分/标签写 DB，复用缩略图）→ 完成页；支持取消复制、目标已存在/已导入检测、同名根自动显示 `（Eagle）`。IPC/preload：`picnestEagleInspect/Copy/Finish/Cancel` + `onPicnestEagleProgress`。
 - **本次实测**：源 `D:\OneDrive\好图\好图.library`；目标 `D:\图巢迁移\好图`；根 id 456，显示名改为 `好图（Eagle）`（物理文件夹仍按库名 `好图`）。11,365 活跃条目 → 11,372 个目标文件（7 个多文件夹各两份）→ 18.25GB；2 个 PDF 已复制但 PicNest 不索引。293 未归类 + 40 个全部文件夹引用失效 → `_未分类`/`_未分类\失效文件夹`；16 个多文件夹条目有一个失效引用（放有效文件夹）；589 个目标路径重名加 `(2)` 后缀。
 - **元数据**：导入 23 个标签（保留 `#白系` 等原名）、2,538 个 URL、1 条注释、1 个评分，共 411 条标签关联；`metaUpdated` 2,544。
 - **缩略图**：预置 8,654 张 Eagle 缩略图，另用 sharp 生成 2,500 张；当前 11,370 个索引行全部有缩略图。
 - **回滚**：PicNest 移出目标根（只删索引）→ 删除 `D:\图巢迁移\好图`；Eagle 原库只读未动。
-- **后续**：应用内导入向导、增量同步、PDF 索引、多文件夹条目在 UI 中的重复提示。
+- **后续**：增量同步、PDF 索引、多文件夹条目在 UI 中的重复提示；打包时需把 `tools/eagle-migrate/` 一起分发（当前向导从项目根调用脚本）。
 
 ## 三、数据模型 / 关键约束
 
@@ -184,7 +185,7 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 
 ### 下一批（建议顺序）
 - **标签系统 v1 已完成**：Inspector 编辑/批量、FilterBar 任一筛选、搜索命中、改名/删除；后续是采集带标签、标签颜色、层级/合并。
-- **Eagle 迁移后续**：本库已完成（见 M7 节）；产品化应用内导入向导、增量同步、PDF 索引、多文件夹条目提示。
+- **Eagle 迁移后续**：本库已完成、根文件 ⌂ 应用内向导已接；剩余增量同步、PDF 索引、多文件夹条目提示、打包时携带迁移脚本。
 - **查重收尾**：精确查重可取消；候选默认 40/上限 200，超过上限只查最接近的；按 API 价格预估费用/分批；文件夹整包 MD5 改异步/进度化（当前主进程同步，超大文件夹首扫会卡）。
 
 ### 采集 / 扩展
@@ -208,7 +209,8 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 | `ui/src/stores/library.js` | 全部状态/动作：资料库、树、录入、选择、排序/增量、复制粘贴、回收站、浏览历史、详情、查重、简报/灰度/封面/变换 |
 | `ui/src/lib/winDrag.js` · `iconMotion.js` · `wave.js` · `fileKinds.js` · `dnd.js` · `theme.js` | 手动拖窗 · 图标弹簧/集体晃动 · 入场波 · 文本/视频后缀 · 拖拽载荷分类 · 主题解析切换（auto/light/dark → data-theme） |
 | `ui/src/components/TitleBar.vue` | 顶栏：面包屑/历史/筛选/布局/缩放/搜索/窗控；大图模式 `.lb-clear` 透明 |
-| `ui/src/components/SideBar.vue` · `DirTreeItem.vue` | 根文件+视图入口/树行/拖拽落点/右键；未分类/回收站拖入 |
+| `ui/src/components/SideBar.vue` · `DirTreeItem.vue` | 根文件+视图入口/树行/拖拽落点/右键；未分类/回收站拖入；⌂ 目录检测分流 Eagle 向导 |
+| `ui/src/components/EagleImportWizard.vue` | Eagle 库预览/复制/索引/元数据/完成/取消向导 |
 | `ui/src/components/ImageGrid.vue` | 布局引擎+虚拟滚动+滑尺+子文件夹卡片+选中/框选/拖动排序+卡片封面+拖入落点 |
 | `ui/src/components/Inspector.vue` · `InspResize.vue` | 图片/文件夹详情四态 · 详情三向尺寸拖拽 |
 | `ui/src/components/Lightbox.vue` | 大图：图片/视频/文本三态、透明顶栏/dock、A/D、右键菜单、旋转翻转保存 |

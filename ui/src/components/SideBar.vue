@@ -6,8 +6,12 @@ import DirTreeItem from './DirTreeItem.vue'
 import FolderIcon from './FolderIcon.vue'
 import NamePromptDialog from './NamePromptDialog.vue'
 import DirContextMenu from './DirContextMenu.vue'
+import EagleImportWizard from './EagleImportWizard.vue'
 
 const lib = useLibrary()
+const eagleImport = ref(null)
+const eagleChecking = ref(false)
+let eagleCheckTimer = null
 /* 从正文进入子文件夹后：祖先展开 + 选中行滚进树视口 */
 let revealTimer = null
 watch(() => lib.currentDirRel, async () => {
@@ -46,7 +50,22 @@ async function pickFolder() {
   const p = window.picrand
   const picked = await p.selectFolders?.()
   const path = Array.isArray(picked) ? picked[0] : picked
-  if (path) await lib.addRootByPath(path)
+  if (!path) return
+  // 只有选中的目录是 Eagle .library 才弹迁移向导；普通文件夹保持原加根流程
+  clearTimeout(eagleCheckTimer)
+  eagleCheckTimer = setTimeout(() => { eagleChecking.value = true }, 350)
+  try {
+    const info = await window.picrand.picnestEagleInspect?.(path)
+    if (info?.eagle) {
+      if (!info.ok) { lib.showNote(info.error || 'Eagle 库检测失败', [], 'error'); return }
+      eagleImport.value = info
+      return
+    }
+  } catch { /* 检测失败按普通文件夹处理 */ } finally {
+    clearTimeout(eagleCheckTimer)
+    eagleChecking.value = false
+  }
+  await lib.addRootByPath(path)
 }
 
 function openNode(node) {
@@ -190,7 +209,7 @@ async function dropOnLib(e, l) {
     <!-- 根文件（资料库根）：每个根一个节点，点击回到库根；当前库高亮；右键 = 文件夹菜单 -->
     <div class="section-head">
       <span>根文件</span>
-      <button class="add-btn lib-add" title="添加根文件（选择目录）" @click="pickFolder">⌂</button>
+      <button class="add-btn lib-add" title="添加根文件（支持 Eagle .library）" @click="pickFolder">⌂</button>
     </div>
     <div class="libs">
       <div v-for="l in libs" :key="l.id" class="lib-item" :class="{ active: l.active, 'drop-into': lib.dropHint.active && lib.dropHint.zone === 'lib' && lib.dropHint.key === l.id }"
@@ -219,6 +238,10 @@ async function dropOnLib(e, l) {
     <NamePromptDialog :visible="askNewFolder" title="在库根新建文件夹"
                       @confirm="(v) => { askNewFolder = false; newFolderInRoot(v) }"
                       @cancel="askNewFolder = false" />
+    <EagleImportWizard v-if="eagleImport" :info="eagleImport" @close="eagleImport = null" />
+    <div v-if="eagleChecking" class="eagle-check">
+      <div class="eagle-check-card"><span class="eagle-check-spin" />正在读取 Eagle 库…</div>
+    </div>
   </aside>
   <DirContextMenu />
 </template>
@@ -280,4 +303,17 @@ async function dropOnLib(e, l) {
 
 .scanning, .empty { padding: 12px; font-size: 12px; color: var(--text-2); }
 .error { padding: 8px 12px; font-size: 11px; color: #e5484d; }
+.eagle-check { position: fixed; inset: 0; z-index: 910; display: flex; align-items: center; justify-content: center; pointer-events: none; }
+.eagle-check-card {
+  display: flex; align-items: center; gap: 9px; padding: 10px 14px;
+  border: 1px solid var(--border); border-radius: 10px;
+  background: var(--panel-strong); color: var(--text); font-size: 12px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.22);
+}
+.eagle-check-spin {
+  width: 14px; height: 14px; border-radius: 50%;
+  border: 2px solid var(--border); border-top-color: var(--accent);
+  animation: eagle-spin 0.8s linear infinite;
+}
+@keyframes eagle-spin { to { transform: rotate(360deg); } }
 </style>

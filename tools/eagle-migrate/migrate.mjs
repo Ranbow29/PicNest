@@ -14,6 +14,7 @@ const val = (k, def) => {
   return i >= 0 && argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[i + 1] : def
 }
 const APPLY = has('apply')
+const JSON_ONLY = has('json')
 const DRY = !APPLY
 const settingsPath = path.join(os.homedir(), 'AppData', 'Roaming', 'Eagle', 'Settings')
 function detectLibrary() {
@@ -98,6 +99,8 @@ const dirs = fs.readdirSync(imagesDir).filter((d) => d.endsWith('.info'))
 const usedPaths = new Set()
 const items = []
 let skippedDeleted = 0, missingSource = 0, multiFolder = 0, multiPartial = 0, unfiled = 0, orphan = 0
+let tagItems = 0, urlItems = 0, annotationItems = 0, ratingItems = 0
+const uniqueTags = new Set()
 let conflictCount = 0, unsupportedCount = 0, sourceBytes = 0, targetCopies = 0
 let missingFolderRefs = 0
 
@@ -152,9 +155,15 @@ for (const infoName of dirs) {
   const fileExt = srcExt.slice(1).toLowerCase()
   const isSupported = supported.has(fileExt)
   if (!isSupported) unsupportedCount++
+  const itemTags = Array.isArray(m.tags) ? m.tags : []
+  if (itemTags.length) tagItems++
+  for (const t of itemTags) uniqueTags.add(String(t))
+  if (m.url) urlItems++
+  if (m.annotation) annotationItems++
+  if (m.star) ratingItems++
   items.push({
     id: m.id, name: m.name, ext: m.ext, size: st.size, width: m.width, height: m.height,
-    tags: Array.isArray(m.tags) ? m.tags : [], url: m.url || '', annotation: m.annotation || '', star: m.star || 0,
+    tags: itemTags, url: m.url || '', annotation: m.annotation || '', star: m.star || 0,
     source: srcPath, targets, supported: isSupported,
   })
 }
@@ -191,9 +200,15 @@ const summary = {
   missingFolderRefs,
   conflicts: conflictCount,
   unsupported: unsupportedCount,
+  tagItems,
+  urlItems,
+  annotationItems,
+  ratingItems,
+  uniqueTags: uniqueTags.size,
   targetExists: exists,
 }
 console.log(JSON.stringify(summary, null, 1))
+if (JSON_ONLY) process.exit(0)
 
 if (DRY) {
   const byExt = new Map()

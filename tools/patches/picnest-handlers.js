@@ -2232,6 +2232,211 @@ electron.ipcMain.handle("picnest-ai-dup-scan", async (event, folderId, rel, maxP
     return { ok: false, error: picnestAiMask(e?.message || e) };
   }
 });
+/* ==== Eagle 导入向导：根文件 ⌂ 选中 .library 时检测 → 复制 → 索引 → 元数据/标签 ==== */
+const PICNEST_EAGLE_PRE_EXT = new Set(["jpg", "jpeg", "png", "webp", "avif", "tif", "tiff", "bmp", "gif", "psd"]);
+let picnestEagleJob = null;
+let picnestEagleCancel = false;
+
+function picnestEagleProjectRoot() {
+  const candidates = [
+    path.resolve(electron.app.getAppPath(), "../../.."),
+    path.resolve(process.cwd(), ".."),
+    process.cwd(),
+  ];
+  for (const p of candidates) {
+    try { if (fs.existsSync(path.join(p, "tools", "eagle-migrate", "migrate.mjs"))) return p; } catch (e) {}
+  }
+  return candidates[0];
+}
+function picnestEagleNormalize(rawPath) {
+  try {
+    let p = path.resolve(String(rawPath || ""));
+    if (path.basename(p).toLowerCase() === "images" && fs.existsSync(path.join(p, "..", "metadata.json"))) p = path.dirname(p);
+    if (fs.existsSync(path.join(p, "metadata.json")) && fs.existsSync(path.join(p, "images"))) return p;
+  } catch (e) {}
+  return "";
+}
+function picnestEagleExec(args, timeout = 180000) {
+  return new Promise((resolve) => {
+    const { execFile } = require("child_process");
+    const root = picnestEagleProjectRoot();
+    execFile(process.execPath, args, {
+      cwd: root,
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+      maxBuffer: 64 * 1024 * 1024,
+      timeout,
+      windowsHide: true,
+    }, (err, stdout, stderr) => resolve({ err, stdout: String(stdout || ""), stderr: String(stderr || "") }));
+  });
+}
+function picnestEagleSend(event, payload) {
+  try { if (event?.sender && !event.sender.isDestroyed()) event.sender.send("picnest-eagle-progress", payload); } catch (e) {}
+}
+async function picnestEaglePreThumbs(event, manifestPath) {
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  const sharp = (await import("sharp")).default;
+  const jobs = [];
+  for (const it of manifest.items || []) {
+    const itemDir = path.dirname(it.source);
+    let thumbPath = "";
+    try {
+      const f = fs.readdirSync(itemDir).find((n) => /_thumbnail\.[^.]+$/i.test(n));
+      if (f) thumbPath = path.join(itemDir, f);
+    } catch (e) {}
+    const ext = path.extname(it.source).slice(1).toLowerCase();
+    const src = thumbPath || (PICNEST_EAGLE_PRE_EXT.has(ext) ? it.source : "");
+    if (!src) continue;
+    for (const t of it.targets || []) jobs.push({ src, target: t.path });
+  }
+  let next = 0, done = 0, ok = 0, fail = 0
+  const total = jobs.length
+  const worker = async () => {
+    while (true) {
+      const i = next++;
+      if (i >= total) return;
+      if (picnestEagleCancel) return;
+      const j = jobs[i];
+      const dest = path.join(cacheDir, crypto.createHash("md5").update(j.target).digest("hex") + ".jpg");
+      try {
+        if (!fs.existsSync(dest)) {
+          await sharp(j.src, { animated: false }).rotate().flatten({ background: "#ffffff" })
+            .resize({ width: 400, withoutEnlargement: true }).jpeg({ quality: 80 }).toFile(dest);
+        }
+        ok++;
+      } catch (e) { fail++; }
+      done++;
+      if (done % 200 === 0 || done === total) picnestEagleSend(event, { phase: "thumbs", done, total, ok, fail });
+    }
+  };
+  await Promise.all(Array.from({ length: 4 }, worker));
+  if (picnestEagleCancel) throw new Error("已取消");
+  return { total, ok, fail };
+}
+
+electron.ipcMain.handle("picnest-eagle-inspect", async (_event, rawPath) => {
+  const library = picnestEagleNormalize(rawPath);
+  if (!library) return { ok: true, eagle: false };
+  const script = path.join(picnestEagleProjectRoot(), "tools", "eagle-migrate", "migrate.mjs");
+  if (!fs.existsSync(script)) return { ok: false, eagle: true, error: "缺少迁移脚本 tools/eagle-migrate/migrate.mjs" };
+  const { err, stdout, stderr } = await picnestEagleExec([script, "--library", library, "--json"]);
+  if (err) return { ok: false, eagle: true, error: String(stderr || err.message || err).slice(0, 600) };
+  let summary = null;
+  try { summary = JSON.parse(stdout.trim()); } catch (e) {}
+  if (!summary) return { ok: false, eagle: true, error: "无法解析迁移预检结果" };
+  let existingRootId = null, existingRootName = "";
+  try {
+    const row = getDb().prepare("SELECT id, display_name FROM folders WHERE path = ? COLLATE NOCASE").get(summary.targetRoot);
+    if (row) { existingRootId = row.id; existingRootName = row.display_name || ""; }
+  } catch (e) {}
+  return { ok: true, eagle: true, library, ...summary, existingRootId, existingRootName };
+});
+electron.ipcMain.handle("picnest-eagle-copy", async (event, opts) => {
+  if (picnestEagleJob) return { ok: false, error: "已有 Eagle 导入任务在运行" };
+  const library = picnestEagleNormalize(opts?.library);
+  const targetRoot = path.resolve(String(opts?.targetRoot || ""));
+  if (!library) return { ok: false, error: "Eagle 库路径无效" };
+  if (!targetRoot) return { ok: false, error: "目标目录无效" };
+  const script = path.join(picnestEagleProjectRoot(), "tools", "eagle-migrate", "migrate.mjs");
+  if (!fs.existsSync(script)) return { ok: false, error: "缺少迁移脚本 tools/eagle-migrate/migrate.mjs" };
+  picnestEagleCancel = false;
+  const { spawn } = require("child_process");
+  const child = spawn(process.execPath, [script, "--apply", "--library", library, "--target", targetRoot], {
+    cwd: picnestEagleProjectRoot(),
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+    windowsHide: true,
+  });
+  picnestEagleJob = child;
+  let stdout = "", stderr = "", lineBuf = "";
+  child.stdout.on("data", (buf) => {
+    stdout += buf.toString();
+    lineBuf += buf.toString();
+    let idx;
+    while ((idx = lineBuf.indexOf("\n")) >= 0) {
+      const line = lineBuf.slice(0, idx).trim();
+      lineBuf = lineBuf.slice(idx + 1);
+      const m = /^copied (\d+)\/(\d+) · ([\d.]+) GB · (\d+)s/.exec(line);
+      if (m) picnestEagleSend(event, { phase: "copy", done: Number(m[1]), total: Number(m[2]), gb: Number(m[3]), sec: Number(m[4]) });
+    }
+  });
+  child.stderr.on("data", (buf) => { stderr += buf.toString(); });
+  const code = await new Promise((resolve) => child.on("close", (c) => resolve(c)));
+  picnestEagleJob = null;
+  if (picnestEagleCancel) return { ok: false, error: "已取消", canceled: true };
+  if (code !== 0) return { ok: false, error: String(stderr || stdout).slice(-800) || ("复制失败，退出码 " + code) };
+  const manifestPath = targetRoot + ".manifest.json";
+  if (!fs.existsSync(manifestPath)) return { ok: false, error: "复制完成但缺少 manifest" };
+  let thumbs = null;
+  try {
+    thumbs = await picnestEaglePreThumbs(event, manifestPath);
+  } catch (e) {
+    if (picnestEagleCancel) return { ok: false, error: "已取消", canceled: true };
+    // 缩略图失败不阻断导入，后续由应用后台补齐
+    thumbs = { total: 0, ok: 0, fail: 0, error: String(e?.message || e) };
+  }
+  return { ok: true, manifestPath, targetRoot, thumbs };
+});
+electron.ipcMain.handle("picnest-eagle-finish", async (event, opts) => {
+  try {
+    picnestMigrate();
+    const manifestPath = path.resolve(String(opts?.manifestPath || ""));
+    if (!fs.existsSync(manifestPath)) return { ok: false, error: "manifest 不存在" };
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    const db = getDb();
+    const root = opts?.rootId
+      ? db.prepare("SELECT id, path FROM folders WHERE id = ?").get(Number(opts.rootId))
+      : db.prepare("SELECT id, path FROM folders WHERE path = ? COLLATE NOCASE").get(manifest.targetRoot);
+    if (!root) return { ok: false, error: "目标根尚未加入 PicNest" };
+    const findImg = db.prepare("SELECT id FROM images WHERE folder_id = ? AND file_path = ? COLLATE NOCASE");
+    const updateMeta = db.prepare("UPDATE images SET url = ?, annotation = ?, rating = ? WHERE id = ?");
+    const updateThumb = db.prepare("UPDATE images SET thumbnail_path = ? WHERE id = ?");
+    const findTag = db.prepare("SELECT id FROM tags WHERE name = ? COLLATE NOCASE");
+    const insertTag = db.prepare("INSERT INTO tags(name, created_at) VALUES (?, ?)");
+    const linkTag = db.prepare("INSERT OR IGNORE INTO image_tags(image_id, tag_id, created_at) VALUES (?, ?, ?)");
+    const tagIds = new Map();
+    const ensureTag = (name) => {
+      const k = String(name || "").trim();
+      if (!k) return 0;
+      const key = k.toLowerCase();
+      if (tagIds.has(key)) return tagIds.get(key);
+      let row = findTag.get(k);
+      if (!row) row = { id: Number(insertTag.run(k, Date.now()).lastInsertRowid) };
+      tagIds.set(key, row.id);
+      return row.id;
+    };
+    const stats = { items: 0, targets: 0, found: 0, missing: 0, metaUpdated: 0, thumbUpdated: 0, tagsLinked: 0 };
+    const tx = db.transaction(() => {
+      for (const it of manifest.items || []) {
+        stats.items++;
+        const ids = [...new Set((it.tags || []).map((t) => String(t || "").trim()).filter(Boolean))].map(ensureTag).filter(Boolean);
+        for (const t of it.targets || []) {
+          stats.targets++;
+          const row = findImg.get(root.id, t.path);
+          if (!row) { stats.missing++; continue; }
+          stats.found++;
+          if (it.url || it.annotation || it.star) {
+            updateMeta.run(it.url || "", it.annotation || "", Number(it.star) || 0, row.id);
+            stats.metaUpdated++;
+          }
+          const thumb = path.join(cacheDir, crypto.createHash("md5").update(t.path).digest("hex") + ".jpg");
+          if (fs.existsSync(thumb)) { updateThumb.run(thumb, row.id); stats.thumbUpdated++; }
+          for (const tagId of ids) stats.tagsLinked += linkTag.run(row.id, tagId, Date.now()).changes || 0;
+        }
+        if (stats.items % 500 === 0) picnestEagleSend(event, { phase: "meta", done: stats.items, total: (manifest.items || []).length, found: stats.found, tags: tagIds.size });
+      }
+    });
+    tx();
+    picnestEagleSend(event, { phase: "meta", done: (manifest.items || []).length, total: (manifest.items || []).length, found: stats.found, tags: tagIds.size });
+    return { ok: true, rootId: root.id, ...stats, tags: tagIds.size };
+  } catch (e) {
+    return { ok: false, error: String(e?.message || e) };
+  }
+});
+electron.ipcMain.handle("picnest-eagle-cancel", () => {
+  picnestEagleCancel = true;
+  try { picnestEagleJob?.kill(); } catch (e) {}
+  return { ok: true };
+});
+
 /* ==== M6 采集：本地保存服务（自研扩展用，127.0.0.1:41600） ====
    协议：GET /api/v1/ping | /api/v1/context | /api/v1/folders?rootId=
         POST /api/v1/save {kind:'image'|'page', src|dataUrl, title, url, annotation, star, rootId, rel}
