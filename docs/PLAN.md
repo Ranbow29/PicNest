@@ -462,3 +462,8 @@ PicNest/
     ③ **最近卡片只扫可视区**：从 `items`（全量，可能几万张）改为 `visible`（视口 + 400px 缓冲），大库拖动不再每帧遍历全部图片。
     ④ **减少重绘**：拖动中隐藏 hover 信息条的透明度过渡（`.canvas.dragging .cell:hover .hover-overlay { opacity:0 }`）。
     ⑤ **验证**：构建通过；CDP 合成 dragstart + dragover → `.canvas.dragging` 生效、`.reorder-line` 在 rAF 后出现（left/top/height 正确）、dragend 后清除；实际拖影跟手需 Feb 手动确认。
+
+78. **窗口拖动掉帧修复（2026-11-10，Feb 澄清「是拖动窗口不是拖动鼠标」）**：
+    ① **根因**：旧方案在渲染层每个 mousemove 都 IPC 到主进程，主进程用 `setBounds` 逐帧改窗口位置；非 100% DPI 下每次 setBounds 都可能触发尺寸重算/内容重排，窗口移动也不与合成器同步，所以拖窗口明显掉帧。Eagle 的窗口拖动是系统原生循环，自然顺。
+    ② **修法**：改用 Chromium/Windows 原生拖拽区——`.bar-content`、`.brand`、`.page-head` 设 `-webkit-app-region: drag`；所有交互控件（button/input/a、`.vo-wrap`、`.zoom-slider`、`.search`、`.bar-controls`、`[data-no-drag]`）设 `no-drag`。删除渲染层 `startWindowDrag` mousedown 路径与 `winDrag.js`；Windows 原生移动循环负责跟手、DPI 与双击最大化。
+    ③ **验证**：注入 app-region 后拖动标题栏窗口位移 46px；no-drag 按钮能收到点击且窗口不动；最终构建计算样式 `bar-content=drag / theme-btn=no-drag / bar-controls=no-drag`，真实拖动窗口位移 47px（+60 物理 /1.25）。拖动手感需 Feb 确认。

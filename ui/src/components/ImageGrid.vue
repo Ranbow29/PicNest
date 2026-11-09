@@ -2,7 +2,6 @@
 import { computed, onMounted, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useLibrary, extractDropUrls } from '../stores/library'
 import { api, fileUrl } from '../api'
-import { startWindowDrag } from '../lib/winDrag'
 import { waveSeq, waveDelay, replayWave } from '../lib/wave'
 import { isExternalDT as isDnDExternal } from '../lib/dnd'
 import { isVideoPath, isTextPath, extOf } from '../lib/fileKinds'
@@ -72,12 +71,12 @@ function onViewportWheel(e) {
 function setCellDragImage(e) {
   try {
     const el = e.currentTarget?.querySelector?.('.thumb img')
-    if (!el || !el.complete || !el.naturalWidth || !el.naturalHeight) return
+    const c = dragImageEl.value
+    if (!el || !c || !el.complete || !el.naturalWidth || !el.naturalHeight) return
     const size = 96
-    const c = document.createElement('canvas')
-    c.width = c.height = size
     const ctx = c.getContext('2d')
     if (!ctx) return
+    ctx.clearRect(0, 0, size, size)
     const ar = el.naturalWidth / el.naturalHeight
     let sx = 0, sy = 0, sw = el.naturalWidth, sh = el.naturalHeight
     if (ar > 1) { sw = el.naturalHeight; sx = (el.naturalWidth - sw) / 2 }
@@ -614,9 +613,21 @@ function onMarqueeUp() {
 onBeforeUnmount(onMarqueeUp)
 
 /* ---------- 拖动：格内排序 / 拖进子文件夹卡片 ---------- */
-const reorderCtx = ref(null) // { path, before, x, y, h }：插入线跟随最近的图
+const reorderLineEl = ref(null)
+let reorderCtx = null // { path, before, x, y, h }：插入线跟随最近的图（普通变量，拖动时直接改 DOM，避免整组件重渲染）
+function setReorderLine(ctx) {
+  reorderCtx = ctx
+  const el = reorderLineEl.value
+  if (!el) return
+  if (!ctx) { el.style.display = 'none'; return }
+  el.style.display = 'block'
+  el.style.left = ctx.x + 'px'
+  el.style.top = ctx.y + 'px'
+  el.style.height = ctx.h + 'px'
+}
 const subDropRel = ref(null)
 const dragging = ref(false) // 图片拖动中：禁用卡片悬停上浮，避免拖拽时整片网格抖动
+const dragImageEl = ref(null) // 常驻 DOM 的 96px 小画布：detached canvas 在 Windows 上可能被 setDragImage 忽略
 function dtTypes(e) { return [...(e.dataTransfer?.types || [])] }
 function isExternalDT(e) { return isDnDExternal(e) }
 function isInternalImageDT(e) { const t = dtTypes(e); return t.includes('application/x-picnest-file') || t.includes('application/x-picnest-files') }
@@ -647,7 +658,7 @@ let reorderPointer = null
 function updateReorderAt(cx, cy) {
   /* 只扫可视区（含 400px 缓冲）：大库几万张时不必每帧遍历全部 items */
   const list = visible.value.length ? visible.value : items.value
-  if (!list.length) { reorderCtx.value = null; return }
+  if (!list.length) { setReorderLine(null); return }
   let best = null, bestD = Infinity
   for (const item of list) {
     const dx = cx - (item.x + item.w / 2)
@@ -655,9 +666,9 @@ function updateReorderAt(cx, cy) {
     const d = dx * dx + dy * dy
     if (d < bestD) { bestD = d; best = item }
   }
-  if (!best) { reorderCtx.value = null; return }
+  if (!best) { setReorderLine(null); return }
   const mid = best.x + best.w / 2
-  const prev = reorderCtx.value
+  const prev = reorderCtx
   let before
   if (prev && prev.path === best.file_path) {
     /* 光标在同一张卡里小幅移动时不要来回翻边：中点附近留死区，否则插入线会左右跳。 */
@@ -669,13 +680,13 @@ function updateReorderAt(cx, cy) {
   } else {
     before = cx < mid
   }
-  reorderCtx.value = {
+  setReorderLine({
     path: best.file_path,
     before,
     x: before ? best.x - 12 : best.x + best.w + 8,
     y: best.y - 3,
     h: best.h + 6,
-  }
+  })
 }
 
 function flushReorder(clientX, clientY) {
@@ -708,7 +719,7 @@ function onCanvasDragLeave(e) {
   if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) {
     if (reorderRAF) { cancelAnimationFrame(reorderRAF); reorderRAF = 0 }
     reorderPointer = null
-    reorderCtx.value = null
+    setReorderLine(null)
   }
 }
 async function onCanvasDrop(e) {
@@ -717,9 +728,9 @@ async function onCanvasDrop(e) {
   e.stopPropagation()
   /* 松手前把最后一帧的插入位置补算出来，避免 rAF 还没跑就 drop 导致插到旧位置 */
   flushReorder(e.clientX, e.clientY)
-  const ctx = reorderCtx.value
+  const ctx = reorderCtx
   const paths = internalImages(e)
-  reorderCtx.value = null
+  setReorderLine(null)
   dragging.value = false
   if (!lib.canReorder()) {
     /* 非手动排序模式：不写 sort_order，保护已有手动排序 */
@@ -773,7 +784,7 @@ async function onSubDrop(e, f) {
 function clearDragUi() {
   if (reorderRAF) { cancelAnimationFrame(reorderRAF); reorderRAF = 0 }
   reorderPointer = null
-  reorderCtx.value = null
+  setReorderLine(null)
   subDropRel.value = null
   dragging.value = false
   try { api.dragEnd() } catch (err) { console.error('[drag-end]', err) }
@@ -786,13 +797,14 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
   <canvas ref="rulerEl" class="ov-ruler"
           @pointerdown.prevent="onRulerDown" @pointermove="onRulerMove"
           @pointerup="onRulerUp" @pointercancel="onRulerUp" />
+  <canvas ref="dragImageEl" class="drag-image" width="96" height="96" />
   <div ref="viewport" class="grid-viewport" @wheel="onViewportWheel">
     <div ref="canvasEl" class="canvas" :class="{ dragging }" :style="{ height: totalH + 'px' }"
          @click.self="onBackgroundClick"
          @pointerdown.self="onMarqueeDown"
          @dragover="onCanvasDragOver" @dragleave="onCanvasDragLeave" @drop="onCanvasDrop">
       <!-- 编辑排印头块：滚动时整体穿入玻璃顶栏（同 Wenku8） -->
-      <header :key="'head-' + waveSeq" class="page-head wi" style="--d: 0ms" @mousedown="startWindowDrag">
+      <header :key="'head-' + waveSeq" class="page-head wi" style="--d: 0ms">
         <h2 class="head-big">{{ header.big }}</h2>
         <div class="head-caption">{{ header.caption }}</div>
         <div class="head-rule"><i /></div>
@@ -850,9 +862,8 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
       <div v-if="marquee" class="marquee"
            :style="{ left: marquee.x + 'px', top: marquee.y + 'px', width: marquee.w + 'px', height: marquee.h + 'px' }" />
 
-      <!-- 拖动排序插入线（画布级，缝隙也可命中） -->
-      <div v-if="reorderCtx" class="reorder-line"
-           :style="{ left: reorderCtx.x + 'px', top: reorderCtx.y + 'px', height: reorderCtx.h + 'px' }" />
+      <!-- 拖动排序插入线（画布级，缝隙也可命中；直接改 DOM，不走 Vue 重渲染） -->
+      <div ref="reorderLineEl" class="reorder-line" style="display: none" />
 
       <div
         v-for="img in cells" :key="img.id + '-' + waveSeq"
@@ -891,6 +902,8 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
   z-index: 10; /* 钉死窗口右缘不随详情缩放；详情浮岛(12/15)打开时覆盖滑尺 */
   cursor: pointer; touch-action: none;
 }
+/* 拖影画布必须留在 DOM 里：detached canvas 在 Windows 上可能被 setDragImage 忽略，退回整卡拖影 */
+.drag-image { position: fixed; left: -200px; top: -200px; width: 96px; height: 96px; pointer-events: none; }
 .grid-viewport {
   flex: 1; overflow-y: auto; overflow-x: hidden;
   transition: padding-right 0.2s ease;
@@ -985,7 +998,7 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
 .overlay-state { position: absolute; inset: 60px 0 auto 0; }
 
 /* 编辑排印头块 */
-.page-head { position: absolute; top: 0; left: 4px; right: 4px; padding: 56px 10px 0; }
+.page-head { position: absolute; top: 0; left: 4px; right: 4px; padding: 56px 10px 0; -webkit-app-region: drag; }
 .head-big {
   font-family: var(--font-serif); font-size: 30px; font-weight: 700;
   margin: 0 0 6px; letter-spacing: 2px;

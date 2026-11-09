@@ -4,7 +4,6 @@ import { useLibrary } from '../stores/library'
 import { isTextPath, isVideoPath } from '../lib/fileKinds'
 import FilterBar from './FilterBar.vue'
 import { api } from '../api'
-import { startWindowDrag, onBarDblclick } from '../lib/winDrag'
 import AnimIcon from './AnimIcon.vue'
 import { collectiveShake, springAt, GESTURE_MS, iconShake } from '../lib/iconMotion'
 import { useTheme } from '../lib/theme'
@@ -150,7 +149,7 @@ function onKey(e) {
 <template>
   <header class="titlebar" :class="{ 'lb-clear': lib.lightbox.open }">
     <div class="glass"></div>
-    <div class="drag-surface" @mousedown="startWindowDrag" @dblclick="onBarDblclick">
+    <div class="drag-surface">
     <div class="bar-content">
     <!-- ============ 大图工作模式 ============ -->
     <template v-if="lib.lightbox.open">
@@ -277,7 +276,7 @@ function onKey(e) {
   backdrop-filter: blur(26px) saturate(1.25);
   -webkit-backdrop-filter: blur(26px) saturate(1.25);
 }
-/* 拖拽命中面：透明全栏，mousedown 走手动拖窗（winDrag.js）；不再声明任何 app-region */
+/* 拖拽命中面：透明底层；实际标题栏拖动由 .bar-content 的 -webkit-app-region 交给 Windows 原生循环 */
 .drag-surface {
   position: absolute; inset: 0;
 }
@@ -300,7 +299,12 @@ function onKey(e) {
 .bar-content {
   /* 45 > 裁剪层 30 / 裁剪条 40：裁剪时左上返回与右上窗控必须可点 */
   position: relative; z-index: 45; height: 42px; display: flex; align-items: center;
+  -webkit-app-region: drag; /* 交给 Windows 原生标题栏移动循环：拖动窗口不再逐帧 IPC */
 }
+/* 拖拽区里的交互控件必须显式挖空，否则会被当成标题栏 */
+.bar-content button, .bar-content input, .bar-content a,
+.bar-content .vo-wrap, .bar-content .zoom-slider, .bar-content .search,
+.bar-content .bar-controls, .bar-content [data-no-drag] { -webkit-app-region: no-drag; }
 .left { display: flex; align-items: center; gap: 6px; padding-left: 16px; min-width: 0; overflow: hidden; }
 .nav-arrow {
   width: 24px; height: 24px; flex: none; border: none; border-radius: 7px;

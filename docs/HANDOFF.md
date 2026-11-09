@@ -179,6 +179,10 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 - **退出顺序**：P13b 的 `window-all-closed` 必须**先 `tray.destroy()`**，再用 try/catch 跑 `cleanupOnExit()` / `closeDatabase()`，最后无条件 `app.exit(0)`。原实现先清理，任一步抛错就会跳过托盘销毁和退出——表现为退出后托盘图标/进程滞留、需要再点一次退出。
 - **托盘菜单**：P12 已移除原 PicRand 的「新建/隐藏/显示/关闭参考板」四项（PicNest 未实现参考板），只保留「显示 PicNest 图巢 / 退出」。
 
+### 窗口拖动（2026-11-10）
+- **用 Windows 原生拖拽区**：`.bar-content`、`.brand`、`.page-head` 设 `-webkit-app-region: drag`；交互控件（button/input/a、`.vo-wrap`、`.zoom-slider`、`.search`、`.bar-controls`、`[data-no-drag]`）设 `no-drag`。窗口位置由系统移动循环驱动，不再逐 mousemove IPC `setBounds`，非 100% DPI 下也不会重排/掉帧；双击空白由原生处理最大化。
+- **不要再加**渲染层 `mousedown -> startWindowDrag / windowMoveBy` 路径（旧的 `ui/src/lib/winDrag.js` 已删除）；旧 IPC 仍留在主进程但无 UI 调用。新增顶栏/页头控件时记得给它 `no-drag`，否则会被当成标题栏拖走。
+
 ### 拖出到外部应用（CSP / PS，2026-11-09）
 - **统一手势**：只有一种拖动。窗口内 = HTML5 内部拖拽（落点高亮/排序/移动）；把图拖出 PicNest 窗口 = `picnest-drag-begin` 的轮询检测到光标离开（外扩 4px、连续 2 次、左键仍按下）→ 主进程 `webContents.startDrag({ file, files, icon })`，可拖进 Clip Studio Paint/Photoshop/资源管理器。多选后拖其中一张会带全部选中文件。
 - **为什么不在 dragstart 直接 startDrag**：Windows 上 `startDrag` 与 HTML5 内部拖拽互斥（electron#7118）；在 dragstart 调用会让内部高亮/排序失效。现在先保留 HTML5，离开窗口后才升级。
