@@ -1,0 +1,195 @@
+/* PicNest 设计 tokens —— 奶玻璃（参考 Wenku8_Flutter）+ 跟随系统明暗
+   动效规格移植自 Wenku8_Flutter (GPL-2.0-or-later) © MewX / mikufoxxx：
+   入场波 520ms easeOutCubic，墨水窗 0.35/步进 1/24，位移 (-8,-6)，过冲 Cubic(.2,1.06,.35,1) */
+
+/* ---- 入场波（wave.js 编排；元素 class="wi"，祖先任意层设 style="--d:延迟ms"） ----
+   注意：不能打在用 transform 定位的元素上（会覆盖定位），打其内层包裹 */
+.wi {
+  /* backwards 而非 both：入场结束后把样式还给常规规则，
+     否则 fill-mode 会永久压住 .thumb 的 hover translateY（浮岛抬升失效） */
+  animation: wave-in 520ms cubic-bezier(0.18, 0.72, 0.18, 1) backwards;
+  animation-delay: var(--d, 0ms);
+}
+.wi.nowi { animation: none; }
+@keyframes wave-in {
+  from { opacity: 0; transform: translate(-8px, -6px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wi { animation: none; }
+}
+
+/* ---- Wenku8 过冲曲线 token（切换/吸附类动作） ---- */
+:root { --ease-overshoot: cubic-bezier(0.2, 1.06, 0.35, 1); }
+
+:root {
+  --bg: #eee7da; /* 底座：比白窗深一档，左栏包裹浮岛的层次才看得出来 */
+  --bg-2: #e7dfd0;
+  --panel: rgba(255, 255, 255, 0.55);
+  --panel-strong: rgba(255, 253, 249, 0.95); /* 主内容：更实一档，和白底座拉开 */
+  --text: #2c2a26;
+  --text-2: #6f6a60;
+  --accent: #b4884b;
+  --accent-weak: rgba(180, 136, 75, 0.14);
+  --folder-default: #c9a86c; /* 默认文件夹图标（低饱和主题会换灰） */
+  --border: rgba(60, 50, 30, 0.12);
+  --shadow: 0 8px 30px rgba(60, 50, 30, 0.12);
+  /* 悬浮层：主面板压左栏 / 详情岛压正文（近影 + 主影 + 大范围柔光） */
+  --shadow-float: 0 3px 6px rgba(60, 50, 30, 0.09), 0 20px 48px rgba(60, 50, 30, 0.23), 0 56px 130px rgba(60, 50, 30, 0.16);
+  /* 图片浮岛：近影贴地 + 中景柔影，卡片在 14px 缝里读成一块块浮起的纸 */
+  --shadow-tile: 0 1px 2px rgba(60, 50, 30, 0.10), 0 5px 14px rgba(60, 50, 30, 0.13), 0 14px 30px rgba(60, 50, 30, 0.08);
+  --shadow-tile-hover: 0 2px 5px rgba(60, 50, 30, 0.13), 0 12px 26px rgba(60, 50, 30, 0.20), 0 28px 56px rgba(60, 50, 30, 0.12);
+  --tile-edge: rgba(255, 255, 255, 0.55); /* 浮岛顶缘高光（压在图片上的一线玻璃） */
+  --sidebar-glow: rgba(255, 255, 255, 0.88); /* 左栏底子顶部白色渐变（向下 150px 渐隐到 --bg） */
+  --panel-edge: rgba(255, 255, 255, 0.68); /* 顶缘高光，给出“有厚度的纸” */
+  --overlay-grad: linear-gradient(transparent, rgba(255, 255, 255, 0.94)); /* 网格悬停信息条（加高加深版） */
+  --overlay-text: #1c1a16;
+  --overlay-halo: 0 1px 3px rgba(255, 255, 255, 0.9), 0 0 1px rgba(255, 255, 255, 0.9); /* 亮色主题：白描边 */
+  --glass-strong: rgba(244, 239, 231, 0.92); /* 玻璃顶边：顶部浓、往下透 */
+  --glass-weak: rgba(244, 239, 231, 0.35);
+  --panel-inspector: rgba(255, 255, 255, 0.94); /* 详情浮岛（兼容旧引用） */
+  /* 详情浮岛玻璃渐变：顶部实白，往下渐透（仿顶栏玻璃，方向相反） */
+  --panel-insp-top: rgba(255, 255, 255, 0.97);
+  --panel-insp-mid: rgba(255, 255, 255, 0.93);
+  --panel-insp-low: rgba(255, 255, 255, 0.86);
+  --panel-insp-bot: rgba(255, 255, 255, 0.60);
+  --radius: 14px;
+  --radius-panel: 6px; /* 主面板：锐利小圆角（详情浮岛保持 14px，ZCode 层次） */
+  --blur: 22px;
+  --font-serif: Georgia, 'Times New Roman', 'Source Han Serif SC', 'Noto Serif SC', 'SimSun', serif;
+  --font-sans: 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
+}
+/* ---- 主题：lib/theme.js 在 <html data-theme="light|dark"> 上落值 ----
+   auto 模式由 JS 解析系统偏好后写成 light/dark；index.html 首屏内联脚本防闪白 */
+:root[data-theme="dark"] {
+    --bg: #262636;          /* 侧栏底层：暗色里最亮的一层（ZCode 节奏） */
+    --bg-2: #1d1d2a;
+    --panel: rgba(38, 38, 54, 0.55);
+    --panel-strong: rgba(20, 20, 32, 0.92); /* 主内容：比侧栏暗 */
+    --text: #e8e4da;
+    --text-2: #a49e90;
+    --accent: #d4a964;
+    --accent-weak: rgba(212, 169, 100, 0.16);
+    --folder-default: #c9a86c;
+    --border: rgba(255, 255, 255, 0.1);
+    --shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
+    --shadow-float: 0 3px 8px rgba(0, 0, 0, 0.5), 0 22px 52px rgba(0, 0, 0, 0.6), 0 60px 140px rgba(0, 0, 0, 0.46);
+    --shadow-tile: 0 1px 3px rgba(0, 0, 0, 0.42), 0 5px 16px rgba(0, 0, 0, 0.42), 0 14px 34px rgba(0, 0, 0, 0.26);
+    --shadow-tile-hover: 0 2px 6px rgba(0, 0, 0, 0.52), 0 12px 30px rgba(0, 0, 0, 0.56), 0 28px 60px rgba(0, 0, 0, 0.36);
+    --tile-edge: rgba(255, 255, 255, 0.13);
+    --sidebar-glow: rgba(255, 255, 255, 0.07);
+    --panel-edge: rgba(255, 255, 255, 0.09);
+    --overlay-grad: linear-gradient(transparent, rgba(0, 0, 0, 0.85));
+    --overlay-text: #f2efe8;
+    --overlay-halo: 0 1px 3px rgba(0, 0, 0, 0.8), 0 0 1px rgba(0, 0, 0, 0.8); /* 暗色主题：黑描边 */
+    --glass-strong: rgba(38, 38, 56, 0.9);
+    --glass-weak: rgba(38, 38, 56, 0.3);
+    --panel-inspector: rgba(52, 52, 72, 0.92); /* 详情浮岛：比内容亮一档（暗色节奏：侧栏亮→内容暗→详情亮） */
+    --panel-insp-top: rgba(52, 52, 72, 0.96);
+    --panel-insp-mid: rgba(52, 52, 72, 0.92);
+    --panel-insp-low: rgba(52, 52, 72, 0.84);
+    --panel-insp-bot: rgba(52, 52, 72, 0.62);
+}
+
+/* ---- 低饱和黑白 · 灰白（中性灰，强调色也去饱和） ---- */
+:root[data-theme="mono-light"] {
+    --bg: #ebebeb;
+    --bg-2: #e1e1e1;
+    --panel: rgba(255, 255, 255, 0.55);
+    --panel-strong: rgba(252, 252, 252, 0.95);
+    --text: #262626;
+    --text-2: #6b6b6b;
+    --accent: #5f5f5f;
+    --accent-weak: rgba(0, 0, 0, 0.07);
+    --folder-default: #6d6d6d;
+    --border: rgba(0, 0, 0, 0.11);
+    --shadow: 0 8px 30px rgba(0, 0, 0, 0.12);
+    --shadow-float: 0 3px 6px rgba(0, 0, 0, 0.08), 0 20px 48px rgba(0, 0, 0, 0.17), 0 56px 130px rgba(0, 0, 0, 0.10);
+    --shadow-tile: 0 1px 2px rgba(0, 0, 0, 0.09), 0 5px 14px rgba(0, 0, 0, 0.11), 0 14px 30px rgba(0, 0, 0, 0.07);
+    --shadow-tile-hover: 0 2px 5px rgba(0, 0, 0, 0.12), 0 12px 26px rgba(0, 0, 0, 0.17), 0 28px 56px rgba(0, 0, 0, 0.10);
+    --tile-edge: rgba(255, 255, 255, 0.55);
+    --sidebar-glow: rgba(255, 255, 255, 0.86);
+    --panel-edge: rgba(255, 255, 255, 0.7);
+    --overlay-grad: linear-gradient(transparent, rgba(255, 255, 255, 0.94));
+    --overlay-text: #1f1f1f;
+    --overlay-halo: 0 1px 3px rgba(255, 255, 255, 0.9), 0 0 1px rgba(255, 255, 255, 0.9);
+    --glass-strong: rgba(243, 243, 243, 0.92);
+    --glass-weak: rgba(243, 243, 243, 0.35);
+    --panel-inspector: rgba(255, 255, 255, 0.94);
+    --panel-insp-top: rgba(255, 255, 255, 0.97);
+    --panel-insp-mid: rgba(255, 255, 255, 0.93);
+    --panel-insp-low: rgba(255, 255, 255, 0.86);
+    --panel-insp-bot: rgba(255, 255, 255, 0.60);
+}
+
+/* ---- 低饱和黑白 · 炭黑（比墨黑浅一档的中性灰） ---- */
+:root[data-theme="mono-charcoal"] {
+    --bg: #3a3a3a;
+    --bg-2: #303030;
+    --panel: rgba(58, 58, 58, 0.55);
+    --panel-strong: rgba(45, 45, 45, 0.92);
+    --text: #efefef;
+    --text-2: #b9b9b9;
+    --accent: #d6d6d6;
+    --accent-weak: rgba(255, 255, 255, 0.13);
+    --folder-default: #cfcfcf;
+    --border: rgba(255, 255, 255, 0.13);
+    --shadow: 0 8px 30px rgba(0, 0, 0, 0.38);
+    --shadow-float: 0 3px 8px rgba(0, 0, 0, 0.4), 0 22px 52px rgba(0, 0, 0, 0.48), 0 60px 140px rgba(0, 0, 0, 0.34);
+    --shadow-tile: 0 1px 3px rgba(0, 0, 0, 0.35), 0 5px 16px rgba(0, 0, 0, 0.35), 0 14px 34px rgba(0, 0, 0, 0.22);
+    --shadow-tile-hover: 0 2px 6px rgba(0, 0, 0, 0.45), 0 12px 30px rgba(0, 0, 0, 0.48), 0 28px 60px rgba(0, 0, 0, 0.30);
+    --tile-edge: rgba(255, 255, 255, 0.14);
+    --sidebar-glow: rgba(255, 255, 255, 0.06);
+    --panel-edge: rgba(255, 255, 255, 0.10);
+    --overlay-grad: linear-gradient(transparent, rgba(0, 0, 0, 0.82));
+    --overlay-text: #f1f1f1;
+    --overlay-halo: 0 1px 3px rgba(0, 0, 0, 0.8), 0 0 1px rgba(0, 0, 0, 0.8);
+    --glass-strong: rgba(58, 58, 58, 0.90);
+    --glass-weak: rgba(58, 58, 58, 0.30);
+    --panel-inspector: rgba(70, 70, 70, 0.92);
+    --panel-insp-top: rgba(70, 70, 70, 0.96);
+    --panel-insp-mid: rgba(70, 70, 70, 0.92);
+    --panel-insp-low: rgba(70, 70, 70, 0.84);
+    --panel-insp-bot: rgba(70, 70, 70, 0.62);
+}
+
+/* ---- 低饱和黑白 · 墨黑（中性炭灰） ---- */
+:root[data-theme="mono-dark"] {
+    --bg: #212121;
+    --bg-2: #171717;
+    --panel: rgba(33, 33, 33, 0.55);
+    --panel-strong: rgba(17, 17, 17, 0.92);
+    --text: #e7e7e7;
+    --text-2: #a3a3a3;
+    --accent: #b5b5b5;
+    --accent-weak: rgba(255, 255, 255, 0.10);
+    --folder-default: #b0b0b0;
+    --border: rgba(255, 255, 255, 0.10);
+    --shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
+    --shadow-float: 0 3px 8px rgba(0, 0, 0, 0.5), 0 22px 52px rgba(0, 0, 0, 0.6), 0 60px 140px rgba(0, 0, 0, 0.46);
+    --shadow-tile: 0 1px 3px rgba(0, 0, 0, 0.42), 0 5px 16px rgba(0, 0, 0, 0.42), 0 14px 34px rgba(0, 0, 0, 0.26);
+    --shadow-tile-hover: 0 2px 6px rgba(0, 0, 0, 0.52), 0 12px 30px rgba(0, 0, 0, 0.56), 0 28px 60px rgba(0, 0, 0, 0.36);
+    --tile-edge: rgba(255, 255, 255, 0.13);
+    --sidebar-glow: rgba(255, 255, 255, 0.07);
+    --panel-edge: rgba(255, 255, 255, 0.09);
+    --overlay-grad: linear-gradient(transparent, rgba(0, 0, 0, 0.85));
+    --overlay-text: #f2f2f2;
+    --overlay-halo: 0 1px 3px rgba(0, 0, 0, 0.8), 0 0 1px rgba(0, 0, 0, 0.8);
+    --glass-strong: rgba(33, 33, 33, 0.90);
+    --glass-weak: rgba(33, 33, 33, 0.30);
+    --panel-inspector: rgba(48, 48, 48, 0.92);
+    --panel-insp-top: rgba(48, 48, 48, 0.96);
+    --panel-insp-mid: rgba(48, 48, 48, 0.92);
+    --panel-insp-low: rgba(48, 48, 48, 0.84);
+    --panel-insp-bot: rgba(48, 48, 48, 0.62);
+}
+
+* { box-sizing: border-box; }
+html, body, #app { height: 100%; margin: 0; }
+body {
+  font-family: var(--font-sans);
+  color: var(--text);
+  background: var(--bg);
+  overflow: hidden;
+  user-select: none;
+}

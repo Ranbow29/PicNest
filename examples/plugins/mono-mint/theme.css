@@ -1,0 +1,15 @@
+/* 薄荷纸 demo theme：仅覆盖 token，不碰布局；插件 CSS 在应用样式之后注入 */
+:root {
+  --bg: #e8efe9;
+  --bg-2: #dfe8e2;
+  --panel: #f3f8f4;
+  --panel-strong: rgba(246, 251, 247, 0.95);
+  --text: #1f2d26;
+  --text-2: #5d7166;
+  --border: rgba(40, 70, 55, 0.16);
+  --accent: #2f8f6f;
+  --accent-weak: rgba(47, 143, 111, 0.14);
+  --glass-strong: rgba(246, 251, 247, 0.78);
+  --glass-weak: rgba(246, 251, 247, 0.35);
+  --sidebar-glow: rgba(255, 255, 255, 0.55);
+}

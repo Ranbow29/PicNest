@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PicNest 图巢</title>
+    <script>
+      /* 首屏防闪白：在样式/应用加载前落定 data-theme（运行期由 src/lib/theme.js 接管）
+         支持 light | dark | mono-light | mono-charcoal | mono-dark；auto 跟随系统解析 */
+      ;(function () {
+        try {
+          var m = localStorage.getItem('picnest.theme') || 'auto'
+          var allowed = { light: 1, dark: 1, 'mono-light': 1, 'mono-charcoal': 1, 'mono-dark': 1 }
+          var t = allowed[m] ? m : (m === 'auto' ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'mono-dark' : 'mono-light') : 'mono-light')
+          document.documentElement.dataset.theme = t
+          document.documentElement.style.colorScheme = (t === 'light' || t === 'mono-light') ? 'light' : 'dark'
+        } catch (e) {}
+      })()
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

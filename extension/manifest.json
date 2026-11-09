@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "PicNest 图巢采集",
+  "version": "0.1.0",
+  "description": "把网页图片与页面截图保存进 PicNest 图巢（本机 127.0.0.1:41600，不上传云端）",
+  "permissions": ["contextMenus", "notifications", "storage", "activeTab", "tabs", "scripting"],
+  "host_permissions": ["<all_urls>", "http://127.0.0.1:41600/*"],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*", "file:///*"],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "PicNest 图巢采集"
+  },
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "plugins": [
+    {
+      "id": "com.picnest.example.mono-mint",
+      "name": "薄荷纸（示例主题）",
+      "version": "1.0.0",
+      "api": "1.0.0",
+      "type": "theme",
+      "author": "PicNest examples",
+      "license": "MIT",
+      "description": "低饱和薄荷绿纸面 + 青绿强调色的主题插件示例。只叠 CSS token，不改布局。",
+      "download": "zips/mono-mint-1.0.0.zip",
+      "sha256": "e7235454011646bdefd13004c2e5d503fc5ed7bb1aa635dfdbd3048e1682d899"
+    },
+    {
+      "id": "com.picnest.example.view-stats",
+      "name": "当前视图统计（示例插件）",
+      "version": "1.0.0",
+      "api": "1.0.0",
+      "type": "renderer",
+      "author": "PicNest examples",
+      "license": "MIT",
+      "description": "沙箱界面插件示例：读取当前资料库元数据，显示前 20 张评分，并响应选择/视图变化事件。",
+      "download": "zips/view-stats-1.0.0.zip",
+      "sha256": "ccd16c125884631a603fd34d79c5c973844d04ee39fed564e42ccfcedE0284a6"
+    }
+  ]
+}

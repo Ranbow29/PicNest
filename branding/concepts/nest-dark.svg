@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- PicNest 概念 A：巢 · 照片卡
+       一张照片卡（带太阳/山）被巢的 U 形弧线托住，金色小蛋作为视觉落点。
+       目标：16px 仍能读出「圆角照片 + 巢 + 金点」三层。 -->
+  <g fill="none" stroke="#F4EFE7" stroke-width="52" stroke-linecap="round" stroke-linejoin="round">
+    <!-- 后层扇形照片卡 -->
+    <rect x="300" y="220" width="424" height="360" rx="56" transform="rotate(-13 512 400)" opacity="0.38"/>
+    <rect x="300" y="220" width="424" height="360" rx="56" transform="rotate(13 512 400)" opacity="0.38"/>
+    <!-- 前层照片卡 -->
+    <rect x="300" y="220" width="424" height="360" rx="56"/>
+    <!-- 照片内容：太阳 + 山 -->
+    <circle cx="432" cy="336" r="27" stroke-width="28"/>
+    <path d="M336 520 L430 430 L500 498 L562 444 L688 548" stroke-width="32"/>
+    <!-- 巢的 U 形弧线 -->
+    <path d="M196 606 C196 780 338 852 512 852 C686 852 828 780 828 606" stroke-width="54"/>
+  </g>
+  <circle cx="512" cy="690" r="52" fill="#B4884B"/>
+</svg>
