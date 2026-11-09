@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- PicNest 概念 C：N 字母标
+       圆角画框 + 一条贯穿的 N（Nest）；右上金色圆点像一颗蛋/图钉。
+       目标：最稳的缩略图/任务栏可读性，适合作为最终 app icon 的最小结构。 -->
+  <rect x="236" y="236" width="552" height="552" rx="120" fill="none" stroke="#2C2A26" stroke-width="54"/>
+  <path d="M352 680 V344 L672 680 V344" fill="none" stroke="#2C2A26" stroke-width="66" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="714" cy="298" r="44" fill="#B4884B"/>
+</svg>

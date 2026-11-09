@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- PicNest 概念 B：巢鸮（猫头鹰）
+       猫头鹰=收藏/夜巡/注视细节，和「图巢」的巢同音；金色瞳孔是唯一彩色落点。
+       目标：16px 读耳朵 + 双眼 + 喙；不要羽毛细节。 -->
+  <g fill="none" stroke="#2C2A26" stroke-width="50" stroke-linecap="round" stroke-linejoin="round">
+    <!-- 耳朵 -->
+    <path d="M306 338 L252 202 L418 264"/>
+    <path d="M718 338 L772 202 L606 264"/>
+    <!-- 头 -->
+    <path d="M262 470 C262 330 360 236 512 236 C664 236 762 330 762 470 C762 620 664 716 512 716 C360 716 262 620 262 470 Z"/>
+    <!-- 眼睛 -->
+    <circle cx="408" cy="466" r="90"/>
+    <circle cx="616" cy="466" r="90"/>
+    <!-- 喙 -->
+    <path d="M512 520 L470 574 L512 626 L554 574 Z" fill="#2C2A26" stroke-width="20"/>
+    <!-- 巢 -->
+    <path d="M196 752 C196 872 340 916 512 916 C684 916 828 872 828 752" stroke-width="54"/>
+  </g>
+  <circle cx="408" cy="466" r="30" fill="#B4884B"/>
+  <circle cx="616" cy="466" r="30" fill="#B4884B"/>
+</svg>
