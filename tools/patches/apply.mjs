@@ -138,6 +138,77 @@ const patches = [
     from: 'wmic process where "name=\'PicRand.exe\'" get ProcessId,CommandLine /format:list',
     to: 'wmic process where "name=\'PicNest.exe\'" get ProcessId,CommandLine /format:list /* PicNest:P11e */',
   },
+  {
+    /* 参考板是原 PicRand 的功能，PicNest 没做：托盘菜单里这几项点了也没有意义，直接移除。 */
+    id: 'P12', desc: '托盘菜单移除未实现的「参考板」四项',
+    from: `    { type: "separator" },
+    { label: "新建参考板", click: async () => {
+      const result = await electron.dialog.showOpenDialog({
+        properties: ["openFile"],
+        filters: [{ name: "图片", extensions: ["jpg", "jpeg", "png", "gif", "bmp", "webp", "tiff", "tif", "ico", "heic", "heif", "avif", "svg", "psd", "mp4", "webm", "mov", "mkv", "avi", "flv", "f4v"] }]
+      });
+      if (result.canceled || !result.filePaths[0]) return;
+      const [cx, cy] = computeCascadePos();
+      createRefWin(crypto.randomUUID(), result.filePaths[0], cx, cy).catch(() => {
+      });
+    } },
+    { type: "separator" },
+    { label: "隐藏所有参考板", click: () => _refBoardWindows("hide") },
+    { label: "显示所有参考板", click: () => _refBoardWindows("show") },
+    { label: "关闭所有参考板", click: () => _refBoardWindows("close") },
+    { type: "separator" },`,
+    to: `    { type: "separator" }, /* PicNest:P12 参考板未实现，托盘菜单移除 */`,
+  },
+  {
+    /* 关闭窗口时原逻辑 preventDefault + 等渲染层 confirm-close 回包；一旦回包丢失/异常，
+       窗口关了但主进程和托盘还在。PicNest 的语义就是关闭即退出，这里直接放行。 */
+    id: 'P13a', desc: '关闭窗口直接放行（不再等渲染层二次确认）',
+    from: `  mainWindow.on("close", async (event) => {
+    if (allowClose) return;
+    event.preventDefault();
+    mainWindow?.webContents.send("confirm-close");
+  });`,
+    to: `  mainWindow.on("close", () => {
+    allowClose = true; /* PicNest:P13 关闭即退出，不再拦截等待渲染层二次确认 */
+  });`,
+  },
+  {
+    /* 原 window-all-closed 先 cleanupOnExit/closeDatabase，任一步抛错都会跳过 tray.destroy
+       和 app.exit，表现为窗口没了、托盘图标和进程还挂在后台。先收托盘，再做兜底清理，最后必退。 */
+    id: 'P13b', desc: 'window-all-closed 先销毁托盘并保证进程退出',
+    from: `electron.app.on("window-all-closed", () => {
+  cleanupOnExit();
+  closeDatabase();
+  if (tray) {
+    try {
+      tray.destroy();
+    } catch {
+    }
+    tray = null;
+  }
+  if (process.platform !== "darwin") electron.app.exit(0);
+});`,
+    to: `electron.app.on("window-all-closed", () => {
+  /* PicNest:P13 先收托盘、兜住清理异常，再强制退出；任一步抛错都不能把托盘/进程留在后台 */
+  allowClose = true;
+  if (tray) {
+    try {
+      tray.destroy();
+    } catch {
+    }
+    tray = null;
+  }
+  try {
+    cleanupOnExit();
+  } catch {
+  }
+  try {
+    closeDatabase();
+  } catch {
+  }
+  if (process.platform !== "darwin") electron.app.exit(0);
+});`,
+  },
 ]
 
 let ok = 0, skip = 0, fail = 0
