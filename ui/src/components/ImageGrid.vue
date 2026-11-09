@@ -101,6 +101,8 @@ const sortedImages = computed(() => {
   else arr.sort((a, b) => asc * ((key(a) || 0) - (key(b) || 0)))
   return arr
 })
+/* 回写当前实际显示顺序：「应用为手动排序」按 WYSIWYG 固化（含筛选/前端排序） */
+watch(sortedImages, (arr) => { lib.gridOrder = arr.map((i) => i.file_path) }, { immediate: true })
 
 /* ---------- 布局引擎：grid（等格）/ justified（自适应行高） ---------- */
 const GAP = 14

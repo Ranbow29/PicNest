@@ -211,6 +211,10 @@ function onKey(e) {
           </div>
           <div class="vo-grid c4">
             <button v-for="o in SORTS" :key="o.key" class="vo-cell sm" :class="{ on: lib.sortMode === o.key }" @click="lib.setSort(o.key)">{{ o.label }}</button>
+            <button class="vo-cell sm apply-manual"
+                    :disabled="lib.sortMode === 'manual' || !lib.gridOrder.length || lib.view === 'trash'"
+                    :title="lib.sortMode === 'manual' ? '当前已经是手动排序' : '把当前显示顺序写成手动排序（只写 sort_order，不改文件名）'"
+                    @click="lib.applyGridOrderToManual()">{{ lib.sortMode === 'manual' ? '已是手动排序' : '应用为手动排序' }}</button>
           </div>
         </div>
       </div>
@@ -422,6 +426,8 @@ button.tool.funnel .badge {
 .vo-cell:hover { border-color: var(--accent); color: var(--text); }
 .vo-cell.on { background: var(--accent-weak); border-color: var(--accent); color: var(--accent); font-weight: 600; }
 .vo-cell.sm { flex-direction: row; justify-content: center; padding: 6px 2px; }
+.vo-cell.apply-manual { grid-column: 1 / -1; margin-top: 2px; border-style: dashed; font-size: 11.5px; }
+.vo-cell.apply-manual:disabled { opacity: 0.45; cursor: not-allowed; }
 
 .search {
   display: flex; align-items: center; gap: 4px;

@@ -91,6 +91,7 @@ export const useLibrary = defineStore('library', {
     searchQuery: '',
     currentDirRel: null,  // null=全部；''=根层；'a/b'=子目录
     images: [],
+    gridOrder: [],           // 当前网格实际显示顺序（ImageGrid 回写；「应用为手动排序」用）
     loading: false,
     scanning: false,
     scanNote: '',
@@ -1848,6 +1849,43 @@ export const useLibrary = defineStore('library', {
       if (this.currentDirRel || this.selectionView || this.view === 'all') {
         if (this.currentDirRel || this.selectionView || this.sortMode === 'manual' || prev === 'manual') this.loadImages()
       }
+    },
+    /* 把当前网格显示顺序（含筛选/前端排序）固化成手动排序：按所在文件夹分组写 sort_order */
+    async applyGridOrderToManual() {
+      const paths = [...(this.gridOrder || [])].filter(Boolean)
+      if (!paths.length) return { ok: false, error: '当前视图没有图片' }
+      if (this.view === 'trash') return { ok: false, error: '回收站不支持手动排序' }
+      const rid = this.activeRootId
+      const rootPath = String(this.tree?.rootPath || this.activeRoot?.path || '')
+      const rootParts = rootPath.split(/[\\/]/).filter(Boolean)
+      const groups = new Map()
+      for (const p of paths) {
+        let rel = ''
+        if (rootParts.length) {
+          const parts = String(p).split(/[\\/]/).filter(Boolean)
+          const relParts = parts.slice(rootParts.length)
+          relParts.pop() // 去掉文件名
+          rel = relParts.join('/')
+        } else {
+          rel = this.currentDirRel || ''
+        }
+        if (!groups.has(rel)) groups.set(rel, [])
+        groups.get(rel).push(p)
+      }
+      let applied = 0, failed = 0
+      for (const [rel, list] of groups) {
+        try {
+          const r = await api.imagesReorder(rid, rel, list)
+          if (r?.ok) applied += list.length
+          else failed++
+        } catch { failed++ }
+      }
+      if (!applied) return { ok: false, error: '写入手动排序失败' }
+      this.sortMode = 'manual'
+      localStorage.setItem('picnest.sortMode', 'manual')
+      await this.loadImages()
+      this.showNote(`已将当前显示顺序应用为手动排序（${applied} 张${failed ? ` · 失败 ${failed}` : ''}）`)
+      return { ok: failed === 0, applied, failed }
     },
     /* 图片拖动排序：仅文件夹视图；写入 sort_order 并切到手动排序 */
     canReorder() {
