@@ -176,7 +176,7 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 - 单选图片：预览/名称/注释/色板/评分/文件夹/操作（**URL 输入栏已删，DB url 字段保留**）。**图片的「文件夹」chip 必须由 `file_path` 反推**（`relOfImage`），不能用 `currentDirRel`——根文件夹开「显示子文件夹内容」或合并视图时，视图位置≠图片所在夹（否则子夹图片被标成库根）。
 - **灯箱详情是第二个 Inspector 实例**（`.insp-overlay` 新挂载）：`selectedPath` 的 meta/色板 watch 必须 `{ immediate: true }` 才能拿到当前选中项；`lib.palettes[p]` 的**空数组**必须视为未命中（`ensurePalettes` 用空数组标记 SKIP/失败），否则灯箱色板永远显示「—」。
 - 多选图片：前 4 张扇形堆叠 + 已选 N + 批量注释/评分/文件夹 chips/移动/复制；单选/多选文件夹三态。
-- 详情浮岛 right/bottom 10，竖向玻璃渐变（0.97 → 0.93@46% → 0.86@74% → 0.60）+ blur(22px)。**顶缘 top 40**（面板相对）：压进玻璃顶栏 2px、停在右上角窗控按钮下缘（39）之下；分层 `玻璃 20 < 详情 24 < 栏内容/窗控 26`——`.titlebar` 不再建 z 上下文，`.glass`/`::after` z20、`.bar-content` z26（Feb 指定「详情高于顶栏、低于右上角按钮」）。
+- 详情浮岛 right/bottom 10，竖向玻璃渐变（0.97 → 0.93@46% → 0.86@74% → 0.60）+ blur(22px)。**顶缘 top 40**（面板相对）：压进玻璃顶栏 2px、停在右上角窗控按钮下缘（39）之下；分层 `玻璃 20 < 详情 24 < 裁剪层 30 < 裁剪条 40 < 栏内容/窗控 45`——`.titlebar` 不建 z 上下文，`.glass`/`::after` z20、`.bar-content` z45（**裁剪时左上返回/右上窗控必须优先于裁剪层**）。
 - **左栏开合（2026-11-09）**：窗控组最左（详情按钮左边）新增 sidebar 按钮，`AnimIcon name="sidebar"`（收起时分隔线左移、列内线段淡出；挂载/悬停/`iconShake` 集体晃动都走同一套弹簧）。`lib.sidebarCollapsed` 持久化 `localStorage['picnest.sidebarCollapsed']`；收起时 SideBar 宽度 0 + padding 0 + opacity 0，`ResizeHandle` 隐藏，主面板自动铺满；展开恢复 `sidebarWidth`。
 - **动效图标幅度（2026-11-09 加码）**：`grid` 四格上浮 2.8（原 1.3 被判不够）；`sidebar` 面板 1.4 / 分隔线 2.4 / 短线 1.2 / 收起位移 -5.4px。**Feb 口径：动效幅度宜大不宜小，第一版宁大勿小**（与滑尺波浪同教训）。
 - **插件系统**：P1/P2 已实现（theme + renderer 沙箱 + 插件库/registry zip 安装），详见上文「插件」小节与 `docs/PLUGIN.md`；main/P3、签名/在线默认仓库未做。
@@ -281,7 +281,7 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 | `ui/src/components/DupFinder.vue` | 查重结果分组面板（精确/AI 页签、精确停止、AI 设置/预估、快捷保留、勾选、软删） |
 | `ui/src/components/HelpDialog.vue` | 顶栏 `?` 使用说明（排序前缀/清除方式重点、各功能与快捷键） |
 | `docs/PLUGIN.md` | 插件系统设计定稿 + 实现状态（theme/renderer 已实现；main/签名未做） |
-| `branding/` | Logo 概念底稿（A 巢照片 / B 巢鸮 / C N 标）、2048 PSD 模板、深色变体与尺寸预览；终稿**黑底 N 标**在 `final/`（最新 PSD 母版 + 2048…16 PNG + ICO；纯白 N/浅金蛋点/底部保留分隔缺口）；已接入窗口/任务栏/exe 图标（`app/_internal_data/icon.png`/`icon.ico`，旧件备份 `icon-old.*`）；exe 内嵌图标待 rcedit |
+| `branding/` | Logo 概念底稿（A 巢照片 / B 巢鸮 / C N 标）、2048 PSD 模板、深色变体与尺寸预览；终稿**黑底 N 标**在 `final/`（最新 PSD 母版 + 2048…16 PNG + ICO；纯白 N/浅金蛋点/底部保留分隔缺口，N 组缩至 76% 黑边加大）；已接入窗口/任务栏/exe 图标（`app/_internal_data/icon.png`/`icon.ico`，旧件备份 `icon-old.*`）；exe 内嵌图标待 rcedit |
 | `ui/src/components/PluginManager.vue` · `ui/src/lib/plugins.js` | 插件库面板（已安装/仓库/文件夹安装/启停/卸载）· 主题注入 + 插件事件总线 |
 | `examples/plugins/` | 示例插件（mono-mint 主题、view-stats 沙箱面板）、registry.json、zip、开发指南 |
 | `ui/src/components/ConfirmDialog.vue` · `NamePromptDialog.vue` · `DuplicateDialog.vue` · `ImportResultCard.vue` · `TrashMenu.vue` · `TaskProgress.vue` | 确认/命名/录入三选一/结果卡/回收站菜单/长任务进度浮条 |
@@ -329,6 +329,7 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 33. **缩略图缓存固定 `dataDir/picnest-thumbs`**（禁止 `dataDir/cache`，Windows 大小写不敏感会撞 Chromium `Cache`）；生成/迁移/修复都遵守 `md5(file_path)+ext` 寻址；`imagesByDir` 发现缩略图文件丢失必须同时清 DB 字段。
 34. **物理改名必须暂停 watcher**（rename 旧路径会触发 unlink，主进程会按旧路径删 DB 行），用两阶段临时名避免互换撞名；同步 DB `file_path`、缩略图缓存名（按新路径 md5）、dirMemory/dirOrder 键、回收站 `abs_path`，完成后重开 watcher。默认开关关闭，仅手动排序时生效。
 35. **同一组件可能有两个实例**（详情在 `.browse` 与灯箱 `.insp-overlay` 各一份）：所有依赖 `selectedPath` 的 watch 必须 `{ immediate: true }`，否则新挂载的灯箱详情拿不到当前值；`palettes[p]` 空数组是「未命中/SKIP」不是命中。改 Inspector 的 ref 声明时别顺手删掉 `palette`/`paletteLoading`——ReferenceError 会让整个 `<aside>` 渲染消失，DOM 里连 `.inspector` 都查不到（先看 console.error）。
+37. **裁剪层层级**：`.crop-layer` z30、`.crop-bar` z40、`.bar-content`（面包屑/返回/窗控）z45；裁剪时顶栏按钮必须盖住裁剪层，否则大图里左上返回和右上窗控点不到。改这几个 z-index 要一起核对。
 36. **网格禁止直链原图**（gif 大格除外）：大格用 `picnest-display-thumbs` 的 1024px 有界缓存，缺失时先用 400 thumb；`img` 必须带 `loading="lazy" decoding="async"` + `@error` 降级链（显示图→thumb→原图 nonce 重试→占位）。Chromium 解码缓存有预算，大图 `decode()` 失败 ≠ 文件损坏；原图只在灯箱/详情显式预览里加载，也要有缩略图回退。
 
 ## 七、验收状态 / 最近提交

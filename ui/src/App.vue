@@ -228,7 +228,7 @@ const chipStyle = computed(() => {
 .browse.insp-open { --insp-reserve: calc(var(--insp-w, 296px) + 16px); }
 /* 详情统一 overlay：悬浮于内容之上（滚动条自然到最右），两模式同位同尺寸
    top 40 = 顶缘压进玻璃顶栏 2px（高于顶栏），但停在右上角窗控按钮下缘 39 之下 1px；
-   z-index 24：玻璃层 20 < 详情 24 < 栏内容/按钮 26，拖尾不会盖住岛顶 */
+   z-index 24：玻璃层 20 < 详情 24 < 裁剪层 30 < 栏内容/按钮 45，拖尾不会盖住岛顶；裁剪时返回/窗控优先 */
 .browse :deep(.inspector), .insp-overlay :deep(.inspector) {
   position: absolute; top: 40px; right: 10px; bottom: 10px; z-index: 24;
   width: var(--insp-w, 296px); margin: 0; height: auto;

@@ -298,7 +298,8 @@ function onKey(e) {
 }
 .titlebar.lb-clear::after { display: none; }
 .bar-content {
-  position: relative; z-index: 26; height: 42px; display: flex; align-items: center;
+  /* 45 > 裁剪层 30 / 裁剪条 40：裁剪时左上返回与右上窗控必须可点 */
+  position: relative; z-index: 45; height: 42px; display: flex; align-items: center;
 }
 .left { display: flex; align-items: center; gap: 6px; padding-left: 16px; min-width: 0; overflow: hidden; }
 .nav-arrow {
