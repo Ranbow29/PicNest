@@ -794,29 +794,99 @@ electron.ipcMain.handle("picnest-copy-images", async (_event, paths, targetDir) 
 });
 
 /* 拖出到外部应用（CSP / PS / 资源管理器）：Electron 原生文件拖拽。
-   Windows 上 startDrag 与 HTML5 内部拖拽互斥，渲染层只在 Alt+拖动 / 右上角 ↗ 手柄时调用。 */
-electron.ipcMain.on("picnest-start-drag", (event, paths) => {
+   统一拖拽：窗口内普通 HTML5 拖动继续走内部高亮/排序；主进程轮询光标，光标离开
+   PicNest 且左键仍按下时升级为 startDrag。这样不需要 Alt/单独手柄。 */
+const picnestDragSessions = new Map();
+let _picnestGetAsyncKeyState = null;
+
+function picnestLeftButtonDown() {
   try {
+    if (!_picnestGetAsyncKeyState) {
+      const koffi = require("koffi");
+      const user32 = koffi.load("user32.dll");
+      _picnestGetAsyncKeyState = user32.func("GetAsyncKeyState", "int16", ["int"]);
+    }
+    return (_picnestGetAsyncKeyState(1) & 0x8000) !== 0;
+  } catch (e) {
+    return true;
+  }
+}
+
+function picnestDragIcon(list) {
+  const iconPath = isDev
+    ? path.join(process.cwd(), "_internal_data", "icon.png")
+    : path.join(__dirname, "../../../../_internal_data", "icon.png");
+  let icon = electron.nativeImage.createEmpty();
+  if (/\.(png|jpe?g|webp|gif|bmp)$/i.test(list[0])) {
+    try { icon = electron.nativeImage.createFromPath(list[0]); } catch (e) {}
+  }
+  if (icon.isEmpty()) icon = electron.nativeImage.createFromPath(iconPath);
+  if (!icon.isEmpty()) icon = icon.resize({ width: 96 });
+  return icon;
+}
+
+function picnestEndDragSession(id) {
+  const st = picnestDragSessions.get(id);
+  if (st?.timer) clearInterval(st.timer);
+  picnestDragSessions.delete(id);
+}
+
+/* 普通拖拽开始：先让渲染层继续 HTML5 内部拖拽；光标离开窗口再升级为原生拖出。 */
+electron.ipcMain.on("picnest-drag-begin", (event, paths) => {
+  try {
+    const sender = event.sender;
     const list = (Array.isArray(paths) ? paths : [paths])
       .filter((p) => typeof p === "string" && p && fs.existsSync(p));
     if (!list.length) return;
-    const iconPath = isDev
-      ? path.join(process.cwd(), "_internal_data", "icon.png")
-      : path.join(__dirname, "../../../../_internal_data", "icon.png");
-    let icon = electron.nativeImage.createEmpty();
-    if (/\.(png|jpe?g|webp|gif|bmp)$/i.test(list[0])) {
-      try { icon = electron.nativeImage.createFromPath(list[0]); } catch (e) {}
-    }
-    if (icon.isEmpty()) icon = electron.nativeImage.createFromPath(iconPath);
-    if (!icon.isEmpty()) icon = icon.resize({ width: 96 });
-    event.sender.startDrag({ file: list[0], files: list, icon });
+    picnestEndDragSession(sender.id);
+    const win = electron.BrowserWindow.fromWebContents(sender);
+    if (!win) return;
+    const state = { list, timer: null, escalated: false };
+    let outsideTicks = 0;
+    state.timer = setInterval(() => {
+      if (state.escalated) return;
+      try {
+        if (sender.isDestroyed()) { picnestEndDragSession(sender.id); return; }
+        if (!picnestLeftButtonDown()) {
+          picnestEndDragSession(sender.id);
+          return;
+        }
+        const pt = electron.screen.getCursorScreenPoint();
+        const b = win.getBounds();
+        const outside = pt.x < b.x - 4 || pt.x > b.x + b.width + 4 ||
+          pt.y < b.y - 4 || pt.y > b.y + b.height + 4;
+        if (!outside) { outsideTicks = 0; return; }
+        outsideTicks++;
+        if (outsideTicks < 2) return;
+        state.escalated = true;
+        clearInterval(state.timer);
+        state.timer = null;
+        try { sender.send("picnest-drag-out-start"); } catch (e) {}
+        try {
+          sender.startDrag({ file: list[0], files: list, icon: picnestDragIcon(list) });
+        } catch (e) {
+          console.error("[picnest-drag-out]", e);
+        }
+        try {
+          if (!sender.isDestroyed()) sender.send("picnest-drag-out-end");
+        } catch (e) {}
+        picnestDragSessions.delete(sender.id);
+      } catch (e) {
+        console.error("[picnest-drag-poll]", e);
+        try {
+          if (!sender.isDestroyed()) sender.send("picnest-drag-out-end");
+        } catch (e2) {}
+        picnestEndDragSession(sender.id);
+      }
+    }, 45);
+    picnestDragSessions.set(sender.id, state);
   } catch (e) {
-    console.error("[picnest-start-drag]", e);
-  } finally {
-    try {
-      if (!event.sender.isDestroyed()) event.sender.send("picnest-drag-out-end");
-    } catch (e) {}
+    console.error("[picnest-drag-begin]", e);
   }
+});
+
+electron.ipcMain.on("picnest-drag-end", (event) => {
+  picnestEndDragSession(event.sender.id);
 });
 
 /* 手动排序：把当前文件夹的可见顺序写进 images.sort_order（未排序=0 的排最后） */

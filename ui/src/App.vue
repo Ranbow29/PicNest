@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useLibrary, extractDropUrls } from './stores/library'
-import { isExternalDT, isNativeDragOutActive, endNativeDragOut } from './lib/dnd'
+import { isExternalDT, isNativeDragOutActive, markNativeDragOut, endNativeDragOut } from './lib/dnd'
 import TitleBar from './components/TitleBar.vue'
 import SideBar from './components/SideBar.vue'
 import ImageGrid from './components/ImageGrid.vue'
@@ -108,7 +108,8 @@ onMounted(() => {
   window.addEventListener('dragenter', onNativeDragOutOver, true)
   window.addEventListener('dragover', onNativeDragOutOver, true)
   window.addEventListener('drop', onNativeDragOutOver, true)
-  /* 原生拖拽结束后延迟清标记：让“落回窗口”的 drop 先被吞掉 */
+  /* 主进程把拖拽升级为原生文件拖出后，标记开始；结束后延迟清标记 */
+  window.picrand?.onPicnestDragOutStart?.(() => markNativeDragOut())
   window.picrand?.onPicnestDragOutEnd?.(() => setTimeout(endNativeDragOut, 500))
   /* 窗口尺寸变化 → 详情固定高度的显示上限跟着走（grip 与浮岛共用 --insp-h） */
   try {
