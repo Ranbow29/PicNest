@@ -347,6 +347,7 @@ const bridge = [
   '  onPicnestDirDupProgress: (cb) => electron.ipcRenderer.on("picnest-dir-dup-progress", (_e, d) => cb(d)),',
   '  picnestThumbsMissing: (folderId) => electron.ipcRenderer.invoke("picnest-thumbs-missing", folderId),',
   '  picnestDisplayThumbs: (paths) => electron.ipcRenderer.invoke("picnest-display-thumbs", paths),',
+  '  picnestPsdPreview: (filePath) => electron.ipcRenderer.invoke("picnest-psd-preview", filePath),',
   '  picnestRepairThumbs: (folderId) => electron.ipcRenderer.invoke("picnest-repair-thumbs", folderId),',
   '  picnestRepairThumbsCancel: () => electron.ipcRenderer.invoke("picnest-repair-thumbs-cancel"),',
   '  onPicnestThumbRepairProgress: (cb) => electron.ipcRenderer.on("picnest-thumb-repair-progress", (_e, d) => cb(d)),',

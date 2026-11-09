@@ -373,6 +373,25 @@ electron.ipcMain.handle("picnest-display-thumbs", async (_event, paths) => {
   } catch (e) { /* sharp 不可用：前端用 400 缩略图 */ }
   return { ok: true, results };
 });
+/* PSD 灯箱原图：复用 ensurePsdPng 生成的整幅 PNG（不是 400/1024 缩略图）。
+   缓存 PNG 比源 PSD 旧时先删掉再重建，外部修改 PSD 后灯箱不会显示旧画面。 */
+electron.ipcMain.handle("picnest-psd-preview", async (_event, filePath) => {
+  try {
+    if (!filePath) return { ok: false, error: "文件不存在" };
+    const abs = path.resolve(String(filePath)); /* 统一分隔符，避免同一 PSD 生成两份整幅 PNG 缓存 */
+    if (!fs.existsSync(abs)) return { ok: false, error: "文件不存在" };
+    if (path.extname(abs).toLowerCase() !== ".psd") return { ok: false, error: "不是 PSD" };
+    const pngPath = path.join(cacheDir, "psd-" + crypto.createHash("md5").update(abs).digest("hex") + ".png");
+    try {
+      if (fs.existsSync(pngPath) && fs.statSync(pngPath).mtimeMs < fs.statSync(abs).mtimeMs) fs.unlinkSync(pngPath);
+    } catch (e) { /* 删除失败就沿用现有缓存 */ }
+    const out = await ensurePsdPng(abs);
+    if (!out || out === abs || !fs.existsSync(out)) return { ok: false, error: "PSD 渲染失败" };
+    return { ok: true, path: out, size: fs.statSync(out).size };
+  } catch (e) {
+    return { ok: false, error: String(e?.message || e) };
+  }
+});
 electron.ipcMain.handle("picnest-repair-thumbs-cancel", () => { picnestThumbRepairCancel = true; return { ok: true }; });
 electron.ipcMain.handle("picnest-repair-thumbs", async (event, folderId) => {
   const send = (p) => { try { if (!event.sender.isDestroyed()) event.sender.send("picnest-thumb-repair-progress", p); } catch (e) {} };

@@ -56,6 +56,7 @@ export const api = {
   exportDir: (dirPath) => invoke('picnestExportDir', dirPath),
   dragBegin: (paths) => invoke('picnestDragBegin', paths),
   dragEnd: () => invoke('picnestDragEnd'),
+  psdPreview: (filePath) => invoke('picnestPsdPreview', filePath),
 }
 
 // 本地文件（缩略图/原图）→ 可用的 img src
