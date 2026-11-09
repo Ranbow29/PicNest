@@ -450,3 +450,8 @@ PicNest/
     ③ **验证**：把 `content.js` 注入真实 Pinterest 搜索页（stub `chrome.runtime`），先把 img 设 `pointer-events:none` 再 synthetic pointerdown → 面板正常打开（428×216）；随后把 pointermove/pointerup 派发到 `document.body`（模拟 capture 重定向）但坐标落在「文件夹A」行 → 行高亮 + `save-panel`，保存 URL 为 474x 的 `i.pinimg.com` 图片。未写真实文件（stub 只记录消息）。
     ④ **发布（v0.1.1）**：扩展版本 `0.1.1`；改动先落纯净版 `D:\zcode工作区\PicNest-Public`（commit `44f36ff`），再同步回开发版；沿用“重载扩展后必须刷新已打开网页”的纪律。
     ⑤ **追加根因：切回标签时 content script 根本不在（v0.1.2）**：Feb 补充「每次从标签进入 Pinterest 都失效，点开图片也没用，刷新就恢复」。这是另一条链路——Edge 睡眠标签/bfcache/扩展重载后遗留的旧页面不会自动重新注入 content script，切换标签或 Pinterest SPA 点开图片都不会触发注入，只有刷新才会。修法：`background.js` 在 `tabs.onActivated`、`tabs.onUpdated`（`status=complete` 或 `changeInfo.url`）主动 `chrome.scripting.executeScript({files:['content.js']})`，并在 `onStartup`/`onInstalled` 时补注入所有 Pinterest 标签；`content.js` 顶部 `__picnestHoldCollectLoaded` 守卫保证重复注入幂等。扩展版本 `0.1.2`；Public commit `b1a751b`。
+
+76. **正文图片拖动抖动修复（2026-11-10，Feb 报「出现正文拖动的时候抖动问题」）**：
+    ① **根因**：拖动图片时 `.cell:hover .thumb` 仍有 `translateY(-3px)` + `0.26s var(--ease-overshoot)` 过渡；光标扫过每张卡都会触发抬起/落下，整片网格看起来在抖。排序插入线按「最近卡片中心左/右」即时翻边，光标停在中心附近时也会左右跳。
+    ② **修法**（`ui/src/components/ImageGrid.vue`）：新增 `dragging` 状态，`dragstart` 置 true、`dragend`/drop 置 false；`.canvas.dragging` 下关闭 thumb 的 transition 和 hover 位移（保留选中环）。`onCanvasDragOver` 对同一张卡加 6–14px 中点死区，`path`/`before` 不变时直接 return，插入线不再反复赋值/跳边。
+    ③ **验证**：构建后 CDP 合成 `dragstart` → `.canvas.dragging` 生效，`.thumb` computed `transition-property: none`；`dragend` 后 class 清除。实际拖动手感需 Feb 确认。
