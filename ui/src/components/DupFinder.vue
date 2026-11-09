@@ -27,6 +27,21 @@ const aiPct = computed(() => {
   const p = f.value.ai.progress
   return p.total ? Math.min(100, Math.round((p.done / p.total) * 100)) : 0
 })
+/* 费用/上传量粗估：384px 缩略图按 ~45KB、每对约 340 tokens（2×85 视觉 + 提示/输出）估；
+   单价由用户自填（不同厂商/模型差异大，不内置价目表），只作量级参考 */
+const aiEstimate = computed(() => {
+  const pairs = Math.max(1, Math.min(200, Number(f.value.ai.maxPairs) || 40))
+  const imgs = pairs * 2
+  const mb = (imgs * 45) / 1024
+  const tokens = pairs * 340
+  let s = `最多 ${pairs} 对 · ≈ ${imgs} 张缩略图 / ${mb.toFixed(1)} MB`
+  const price = Number(f.value.ai.pricePerM) || 0
+  if (price > 0) {
+    const cost = (tokens / 1e6) * price
+    s += ` · ≈ ${cost < 0.01 ? cost.toFixed(4) : cost.toFixed(2)} 元`
+  }
+  return s
+})
 const activePct = computed(() => (f.value.mode === 'ai' ? aiPct.value : pct.value))
 const activeLoadingText = computed(() => {
   if (f.value.mode !== 'ai') {
@@ -87,7 +102,7 @@ function thumbOf(file) {
           </div>
           <div v-if="stats && !activeLoading" class="df-stats">
             <b>{{ stats.groups }}</b> 组 · <b>{{ stats.files }}</b> 个文件 · 可省 <b>{{ fmtSize(stats.wasted) }}</b>
-            <span v-if="f.mode === 'ai'" class="df-cap">（dHash {{ stats.dhashPairs ?? stats.candidates }} 对 → 本地预筛后 {{ stats.candidates }} 对，已查 {{ stats.checked }}）</span>
+            <span v-if="f.mode === 'ai'" class="df-cap">（dHash {{ stats.dhashPairs ?? stats.candidates }} 对 → 本地预筛后 {{ stats.candidates }} 对，已查 {{ stats.checked }}<template v-if="stats.capped">；候选超出上限，只查最接近的 {{ stats.caps }} 对</template>）</span>
           </div>
           <button class="df-x" title="关闭（Esc）" @click="lib.closeDupFinder()">✕</button>
         </header>
@@ -97,8 +112,10 @@ function thumbOf(file) {
             <label>API 地址<input v-model="f.ai.baseUrl" placeholder="https://api.openai.com/v1" spellcheck="false" /></label>
             <label>模型<input v-model="f.ai.model" list="picnest-ai-models" placeholder="gpt-4o-mini" spellcheck="false" /></label>
             <label>API Key<input v-model="aiKey" type="password" autocomplete="off" :placeholder="f.ai.hasKey ? '已保存（留空不改）' : 'sk-…'" /></label>
-            <label class="ai-num">最多比对<input v-model.number="f.ai.maxPairs" type="number" min="1" max="200" /> 对</label>
+            <label class="ai-num">最多比对<input v-model.number="f.ai.maxPairs" type="number" min="1" max="200" /></label>
+            <label class="ai-num">单价 ¥/1M tok<input v-model.number="f.ai.pricePerM" type="number" min="0" step="0.01" placeholder="可选" @change="lib.setAiPricePerM($event.target.value)" /></label>
           </div>
+          <div class="ai-estimate">{{ aiEstimate }}</div>
           <datalist id="picnest-ai-models">
             <option v-for="m in f.ai.models" :key="m" :value="m" />
           </datalist>
@@ -136,12 +153,16 @@ function thumbOf(file) {
           <div class="df-spin" />
           <div class="df-progress"><i :style="{ width: activePct + '%' }" /></div>
           <div class="df-ptext">{{ activeLoadingText }}</div>
-          <button v-if="f.mode === 'ai'" class="df-btn" :disabled="f.ai.canceling" @click="lib.aiCancel()">{{ f.ai.canceling ? '停止中…' : '停止' }}</button>
+          <button
+            class="df-btn"
+            :disabled="f.mode === 'ai' ? f.ai.canceling : f.canceling"
+            @click="f.mode === 'ai' ? lib.aiCancel() : lib.dupCancel()"
+          >{{ (f.mode === 'ai' ? f.ai.canceling : f.canceling) ? '停止中…' : '停止' }}</button>
         </div>
 
         <div v-else-if="activeError" class="df-empty">{{ activeError }}</div>
         <div v-else-if="!groups.length" class="df-empty">
-          {{ f.mode === 'ai' ? '没有发现相似图片' : '没有发现重复文件' }}
+          {{ f.mode === 'ai' ? '没有发现相似图片' : (f.canceled ? '已停止扫描' : '没有发现重复文件') }}
           <span v-if="stats">（扫描 {{ stats.scopes }} 个文件）</span>
         </div>
 
@@ -229,7 +250,7 @@ function thumbOf(file) {
   flex: none; margin: 10px 16px 0; padding: 10px 12px;
   border: 1px solid var(--border); border-radius: 12px; background: var(--bg);
 }
-.ai-grid { display: grid; grid-template-columns: 1.2fr 1fr 1.2fr 110px; gap: 8px; }
+.ai-grid { display: grid; grid-template-columns: 1.2fr 1fr 1.2fr 104px 132px; gap: 8px; }
 .ai-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 10.5px; color: var(--text-2); }
 .ai-grid input {
   height: 28px; border: 1px solid var(--border); border-radius: 7px;
@@ -237,8 +258,8 @@ function thumbOf(file) {
   padding: 0 8px; outline: none; min-width: 0;
 }
 .ai-grid input:focus { border-color: var(--accent); }
-.ai-num { flex-direction: row !important; align-items: center; }
-.ai-num input { width: 56px; margin-left: 4px; }
+.ai-num input { width: 100%; }
+.ai-estimate { margin-top: 7px; font-size: 10.5px; color: var(--text-2); font-variant-numeric: tabular-nums; }
 .ai-allow { display: flex; align-items: flex-start; gap: 6px; margin-top: 8px; font-size: 11px; color: var(--text-2); line-height: 1.5; cursor: pointer; }
 .ai-modelbar { margin-top: 6px; font-size: 10.5px; line-height: 1.5; color: var(--text-2); }
 .ai-modelbar.err { color: #b4463b; }

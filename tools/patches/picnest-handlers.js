@@ -563,13 +563,19 @@ electron.ipcMain.handle("picnest-import-dir-copy", async (_event, srcDir, target
   }
 });
 
-/* 文件夹放入前的库内查重：按文件大小筛候选 → MD5 确认；跳过自身与“目标同名位置”的噪声重复 */
-electron.ipcMain.handle("picnest-dir-dup-check", (_event, srcDir, targetDir, folderId) => {
+/* 文件夹放入前的库内查重：按文件大小筛候选 → 流式 MD5 确认；跳过自身与“目标同名位置”的噪声重复
+   整包 MD5 走异步流：大文件夹不卡主进程；同路径只算一次（cache）；进度走 picnest-dir-dup-progress */
+let picnestDirDupCancel = false;
+electron.ipcMain.handle("picnest-dir-dup-cancel", () => { picnestDirDupCancel = true; return { ok: true }; });
+electron.ipcMain.handle("picnest-dir-dup-check", async (event, srcDir, targetDir, folderId) => {
   const out = { ok: false, count: 0, scanned: 0, items: [] };
+  const send = (p) => { try { if (!event.sender.isDestroyed()) event.sender.send("picnest-dir-dup-progress", p); } catch (e) {} };
   try {
+    picnestDirDupCancel = false;
     if (!srcDir || !fs.existsSync(srcDir) || !fs.statSync(srcDir).isDirectory()) return { ...out, error: "源文件夹不存在" };
     const norm = (p) => path.resolve(p).toLowerCase();
     const destRoot = path.join(targetDir, path.basename(srcDir).replace(/[\\/:*?"<>|]/g, "_"));
+    const files = [];
     const walk = (dir) => {
       let entries = [];
       try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
@@ -580,41 +586,59 @@ electron.ipcMain.handle("picnest-dir-dup-check", (_event, srcDir, targetDir, fol
         const ext = path.extname(ent.name).toLowerCase();
         if (!PICNEST_DROP_EXTS.has(ext) || PICNEST_DROP_JUNK.has(ent.name.toLowerCase())) continue;
         out.scanned++;
+        files.push({ path: p, name: ent.name });
+      }
+    };
+    walk(srcDir);
+    const total = files.length;
+    send({ phase: "hash", done: 0, total });
+    const candStmt = getDb().prepare(
+      "SELECT file_path, file_name, width, height FROM images WHERE file_size = ? AND folder_id = ? AND deleted_at IS NULL LIMIT 8"
+    );
+    const cache = new Map();
+    let done = 0;
+    await picnestMapLimit(files, 4, async (ent) => {
+      if (picnestDirDupCancel) return;
+      try {
         let st;
-        try { st = fs.statSync(p); } catch (e) { continue; }
-        const cands = getDb().prepare(
-          "SELECT file_path, file_name, width, height FROM images WHERE file_size = ? AND folder_id = ? AND deleted_at IS NULL LIMIT 8"
-        ).all(st.size, folderId);
-        if (!cands.length) continue;
-        const md5 = picnestMd5(p);
-        if (!md5) continue;
-        const destPath = path.join(destRoot, path.relative(srcDir, p));
+        try { st = await fs.promises.stat(ent.path); } catch (e) { return; }
+        if (!st.isFile()) return;
+        const cands = candStmt.all(st.size, folderId);
+        if (!cands.length) return;
+        const md5 = await picnestMd5Of(ent.path, cache);
+        if (!md5) return;
+        const destPath = path.join(destRoot, path.relative(srcDir, ent.path));
         /* 目标同名位置已有同内容文件 → 合并时天然跳过，不算待处理重复；
            否则报告库内其他位置的同内容文件 */
         let atDest = false;
         let hit = null;
         for (const c of cands) {
-          const same = norm(c.file_path) === norm(p);
+          const same = norm(c.file_path) === norm(ent.path);
           const isDest = norm(c.file_path) === norm(destPath);
           if (same && !isDest) continue; // 自己（且不是目标同位）
           if (!fs.existsSync(c.file_path)) continue;
-          if (picnestMd5(c.file_path) !== md5) continue;
+          if ((await picnestMd5Of(c.file_path, cache)) !== md5) continue;
           if (isDest) { atDest = true; break; }
           if (!hit) hit = c;
         }
-        if (atDest || !hit) continue;
+        if (atDest || !hit) return;
         out.count++;
         out.items.push({
-          src: p, name: ent.name, size: st.size,
+          src: ent.path, name: ent.name, size: st.size,
           existing: {
             file_path: hit.file_path, file_name: hit.file_name,
             width: hit.width, height: hit.height,
             folderName: path.basename(path.dirname(hit.file_path)),
           },
         });
+      } catch (e) { /* 单个文件失败不阻塞 */ }
+      finally {
+        done++;
+        if (done % 3 === 0 || done === total) send({ phase: "hash", done, total });
       }
-    };
-    walk(srcDir);
+    });
+    if (picnestDirDupCancel) return { ...out, ok: false, canceled: true, error: "已取消" };
+    out.items.sort((a, b) => String(a.src).localeCompare(String(b.src), "zh"));
     out.ok = true;
     return out;
   } catch (e) {
@@ -704,6 +728,7 @@ electron.ipcMain.handle("picnest-import-check", async (_event, paths, folderId) 
   const conflicts = [];
   const dirs = [];
   const missing = [];
+  const cache = new Map();
   for (const p of paths || []) {
     try {
       if (!p || !fs.existsSync(p)) { missing.push(p); continue; }
@@ -714,10 +739,10 @@ electron.ipcMain.handle("picnest-import-check", async (_event, paths, folderId) 
         "SELECT i.file_path, i.file_name, i.width, i.height, f.path AS folder_path, f.display_name FROM images i JOIN folders f ON f.id = i.folder_id WHERE i.file_size = ? AND i.folder_id = ? AND i.deleted_at IS NULL LIMIT 6"
       ).all(size, folderId);
       let existing = null;
-      const md5New = picnestMd5(p);
+      const md5New = await picnestMd5Of(p, cache);
       for (const c of cands) {
         if (!fs.existsSync(c.file_path)) continue;
-        if (picnestMd5(c.file_path) === md5New) { existing = c; break; }
+        if ((await picnestMd5Of(c.file_path, cache)) === md5New) { existing = c; break; }
       }
       if (existing) {
         conflicts.push({
@@ -1770,7 +1795,19 @@ async function picnestMapLimit(items, limit, fn) {
     while (i < items.length) { const cur = items[i++]; await fn(cur); }
   }));
 }
+/* 同一路径只流式算一次 MD5（并发调用共享同一个 Promise） */
+function picnestMd5Of(fp, cache) {
+  const key = String(fp || "").toLowerCase();
+  if (!key) return Promise.resolve(null);
+  if (cache && cache.has(key)) return cache.get(key);
+  const task = picnestMd5Stream(fp);
+  if (cache) cache.set(key, task);
+  return task;
+}
+let picnestDupCancel = false;
+electron.ipcMain.handle("picnest-dup-cancel", () => { picnestDupCancel = true; return { ok: true }; });
 electron.ipcMain.handle("picnest-find-duplicates", async (event, folderId, rel) => {
+  picnestDupCancel = false;
   try {
     picnestMigrate();
     const t0 = Date.now();
@@ -1809,6 +1846,7 @@ electron.ipcMain.handle("picnest-find-duplicates", async (event, folderId, rel) 
     const total = candidates.length;
     let done = 0, last = 0;
     await picnestMapLimit(candidates, 4, async (f) => {
+      if (picnestDupCancel) return;
       f.md5 = await picnestMd5Stream(f.file_path);
       done++;
       if (done - last >= 3 || done === total) {
@@ -1816,6 +1854,7 @@ electron.ipcMain.handle("picnest-find-duplicates", async (event, folderId, rel) 
         try { event.sender.send("picnest-dup-progress", { done, total }); } catch (e) {}
       }
     });
+    if (picnestDupCancel) return { ok: false, canceled: true, error: "已取消" };
     const byHash = new Map();
     for (const f of candidates) {
       if (!f.md5) continue;
@@ -2629,7 +2668,7 @@ async function picnestCollectFetchImage(src, referer) {
   } finally { clearTimeout(timer); }
 }
 /* 采集查重：同根内同尺寸候选 → MD5；返回已存在项（用于扩展面板的重复提醒） */
-function picnestCollectDupes(root, buf) {
+async function picnestCollectDupes(root, buf) {
   try {
     const rows = getDb().prepare(
       "SELECT file_path, file_name, width, height FROM images WHERE folder_id = ? AND file_size = ? AND deleted_at IS NULL LIMIT 6"
@@ -2638,10 +2677,11 @@ function picnestCollectDupes(root, buf) {
     const md5 = crypto.createHash("md5").update(buf).digest("hex");
     const rootAbs = path.resolve(root.path);
     const out = [];
+    const cache = new Map();
     for (const r of rows) {
       try {
         if (!fs.existsSync(r.file_path)) continue;
-        if (picnestMd5(r.file_path) !== md5) continue;
+        if ((await picnestMd5Of(r.file_path, cache)) !== md5) continue;
         let folder = root.display_name || path.basename(rootAbs);
         try {
           const p = path.resolve(r.file_path);
@@ -2702,7 +2742,7 @@ async function picnestCollectSaveOne(item) {
   }
   if (!/^image\//i.test(contentType) && !/\.(jpe?g|png|gif|webp|avif|bmp|svg)$/i.test(ext)) throw new Error("不是图片内容");
   /* 覆盖模式：先照常写新图，成功后再把旧匹配项软删（进图巢回收站）；普通模式命中即拦截 */
-  const matches = (item.overwrite || !item.force) ? picnestCollectDupes(t.root, buf) : [];
+  const matches = (item.overwrite || !item.force) ? await picnestCollectDupes(t.root, buf) : [];
   if (matches.length && !item.overwrite && !item.force) {
     return { ok: false, duplicate: true, matches, rootId: t.root.id, rel: t.rel, error: "已存在相同图片，未保存" };
   }

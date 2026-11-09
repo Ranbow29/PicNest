@@ -14,6 +14,7 @@ import DupFinder from './components/DupFinder.vue'
 import BriefMode from './components/BriefMode.vue'
 import TrashMenu from './components/TrashMenu.vue'
 import ImportResultCard from './components/ImportResultCard.vue'
+import TaskProgress from './components/TaskProgress.vue'
 import ResizeHandle from './components/ResizeHandle.vue'
 import InspResize from './components/InspResize.vue'
 
@@ -167,6 +168,7 @@ const chipStyle = computed(() => {
   <BriefMode />
   <TrashMenu />
   <ImportResultCard />
+  <TaskProgress />
 </template>
 
 <style scoped>

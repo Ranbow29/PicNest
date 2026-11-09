@@ -29,11 +29,16 @@ export function extractDropUrls(dt) {
   return [...urls]
 }
 
+function aiPriceDefault() {
+  const v = Number(localStorage.getItem('picnest.aiPricePerM') || 0)
+  return Number.isFinite(v) && v > 0 ? v : 0
+}
+
 function defaultAiDupState() {
   return {
     configLoaded: false, baseUrl: '', model: '', hasKey: false, encrypted: true,
     models: [], modelsLoading: false, modelsError: '',
-    allowed: false, maxPairs: 40,
+    allowed: false, maxPairs: 40, pricePerM: aiPriceDefault(),
     loading: false, testing: false, canceling: false,
     note: '', noteErr: false,
     progress: { phase: '', done: 0, total: 0, candidates: 0 },
@@ -112,7 +117,8 @@ export const useLibrary = defineStore('library', {
     contextMenu: { open: false, x: 0, y: 0, image: null },
     renaming: false,
     dupDialog: { open: false, items: [], targetRel: undefined, mode: 'files', count: 0, resolve: null },
-    dupFinder: { open: false, rootId: null, rel: '', mode: 'exact', loading: false, progress: { done: 0, total: 0 }, groups: [], stats: null, error: '', selected: [], preserveExt: true, ai: defaultAiDupState() },
+    dupFinder: { open: false, rootId: null, rel: '', mode: 'exact', loading: false, canceling: false, canceled: false, progress: { done: 0, total: 0 }, groups: [], stats: null, error: '', selected: [], preserveExt: true, ai: defaultAiDupState() },
+    taskProgress: { visible: false, label: '', done: 0, total: 0, cancelable: false, canceling: false }, // 文件夹查重/长任务浮条
     confirmDialog: { open: false, title: '', message: '', details: [], confirmText: '确定', danger: false, resolve: null },
     importResult: { open: false, nonce: 0, summary: '', details: [], tone: 'ok' }, // 录入汇总结果卡
     clipboard: { kind: '', paths: [], count: 0, root: false }, // 应用内复制剪贴板（kind: dirs | files）
@@ -226,6 +232,12 @@ export const useLibrary = defineStore('library', {
         // 查重扫描进度（主进程逐文件 MD5）
         window.picrand?.onPicnestDupProgress?.((d) => {
           if (this.dupFinder.open) this.dupFinder.progress = { done: d?.done || 0, total: d?.total || 0 }
+        })
+        window.picrand?.onPicnestDirDupProgress?.((d) => {
+          const t = this.taskProgress
+          if (!t.visible) return
+          t.done = d?.done || 0
+          t.total = d?.total || 0
         })
         window.picrand?.onPicnestAiDupProgress?.((d) => {
           if (!this.dupFinder.open || !this.dupFinder.ai.loading) return
@@ -510,6 +522,7 @@ export const useLibrary = defineStore('library', {
         if (clip.kind === 'dirs') {
           for (const src of clip.paths) {
             const r = await this.mergeDirWithDupes(src, targetDir, t)
+            if (r?.canceled) { agg.ok = false; agg.canceled = true; break }
             if (r?.ok) {
               agg.dirs.push(r)
               agg.copied += r.copied || 0
@@ -546,6 +559,7 @@ export const useLibrary = defineStore('library', {
         if (agg.skipped) parts.push(`跳过 ${agg.skipped}`)
         if (agg.replaced) parts.push(`替换旧图 ${agg.replaced}`)
         if (agg.failed) parts.push(`失败 ${agg.failed}`)
+        if (agg.canceled) parts.push('已取消')
         let cross = ''
         if (t.rootId !== this.activeRootId) {
           const rec = this.roots.find((x) => x.id === t.rootId)
@@ -554,7 +568,7 @@ export const useLibrary = defineStore('library', {
         }
         const details = (agg.dirs || []).map((d) => ({ label: d.name, text: `粘贴 ${d.copied}${d.replaced ? ` · 替换 ${d.replaced}` : ''}${d.failed ? ` · 失败 ${d.failed}` : ''}` }))
         if (agg.errors.length) details.push({ label: '错误', text: agg.errors.join('；') })
-        this.showNote((parts.length ? parts.join(' · ') : (agg.ok ? '没有可粘贴的内容' : '粘贴失败')) + cross, details, agg.ok ? 'ok' : 'error')
+        this.showNote((parts.length ? parts.join(' · ') : (agg.ok ? '没有可粘贴的内容' : '粘贴失败')) + cross, details, agg.canceled ? 'muted' : (agg.ok ? 'ok' : 'error'))
         return agg
       } catch (e) {
         const r = { ok: false, error: String(e?.message || e) }
@@ -1083,7 +1097,7 @@ export const useLibrary = defineStore('library', {
       const rid = rootId ?? this.activeRootId
       this.closeDirMenu()
       this.dupFinder = {
-        open: true, rootId: rid, rel: rel || '', mode: 'exact', loading: true,
+        open: true, rootId: rid, rel: rel || '', mode: 'exact', loading: true, canceling: false, canceled: false,
         progress: { done: 0, total: 0 }, groups: [], stats: null, error: '', selected: [],
         preserveExt: dupPreserveDefault(),
         ai: defaultAiDupState(),
@@ -1094,16 +1108,33 @@ export const useLibrary = defineStore('library', {
     async runDupScan() {
       const f = this.dupFinder
       const rid = f.rootId, rel = f.rel
+      f.canceled = false
       try {
         const r = await window.picrand.picnestFindDuplicates(rid, rel)
         if (!this.dupFinder.open || this.dupFinder.rootId !== rid || this.dupFinder.rel !== rel) return
-        if (!r?.ok) { this.dupFinder.loading = false; this.dupFinder.error = r?.error || '扫描失败'; return }
+        if (r?.canceled) {
+          this.dupFinder.canceled = true
+          this.dupFinder.groups = []
+          this.dupFinder.stats = null
+          return
+        }
+        if (!r?.ok) { this.dupFinder.error = r?.error || '扫描失败'; return }
         this.dupFinder.groups = r.groups || []
         this.dupFinder.stats = r.stats || null
-        this.dupFinder.loading = false
       } catch (e) {
-        if (this.dupFinder.open) { this.dupFinder.loading = false; this.dupFinder.error = String(e?.message || e) }
+        if (this.dupFinder.open) this.dupFinder.error = String(e?.message || e)
+      } finally {
+        if (this.dupFinder.open && this.dupFinder.rootId === rid && this.dupFinder.rel === rel) {
+          this.dupFinder.loading = false
+          this.dupFinder.canceling = false
+        }
       }
+    },
+    async dupCancel() {
+      const f = this.dupFinder
+      if (!f.loading || f.canceling) return
+      f.canceling = true
+      try { await window.picrand.picnestDupCancel() } catch { /* 静默 */ }
     },
     async loadAiConfig() {
       try {
@@ -1151,6 +1182,8 @@ export const useLibrary = defineStore('library', {
     setDupMode(mode) {
       const m = mode === 'ai' ? 'ai' : 'exact'
       if (this.dupFinder.mode === m) return
+      /* 切页签时停掉正在跑的精确扫描，避免结果回来又覆盖面板 */
+      if (this.dupFinder.loading) this.dupCancel()
       this.dupFinder.mode = m
       this.dupFinder.selected = []
       if (m !== 'ai') return
@@ -1234,8 +1267,9 @@ export const useLibrary = defineStore('library', {
     },
     closeDupFinder() {
       if (this.dupFinder.ai?.loading) this.aiCancel()
+      if (this.dupFinder.loading) this.dupCancel()
       this.dupFinder = {
-        open: false, rootId: null, rel: '', mode: 'exact', loading: false,
+        open: false, rootId: null, rel: '', mode: 'exact', loading: false, canceling: false, canceled: false,
         progress: { done: 0, total: 0 }, groups: [], stats: null, error: '', selected: [],
         preserveExt: dupPreserveDefault(),
         ai: defaultAiDupState(),
@@ -1250,6 +1284,12 @@ export const useLibrary = defineStore('library', {
     setDupPreserveExt(v) {
       this.dupFinder.preserveExt = !!v
       try { localStorage.setItem('picnest.dupPreserveExt', v ? '1' : '0') } catch { /* 静默 */ }
+    },
+    /* AI 查重费用估算的单价（元/百万 tokens）；0=不估算，只显示上传量 */
+    setAiPricePerM(v) {
+      const n = Math.max(0, Number(v) || 0)
+      this.dupFinder.ai.pricePerM = n
+      try { localStorage.setItem('picnest.aiPricePerM', String(n)) } catch { /* 静默 */ }
     },
     dupKeep(gi, mode) {
       const groups = this.dupFinder.mode === 'ai' ? this.dupFinder.ai.groups : this.dupFinder.groups
@@ -1782,6 +1822,7 @@ export const useLibrary = defineStore('library', {
       if (r.replaced) parts.push(`替换旧图 ${r.replaced}`)
       if (r.unsupported) parts.push(`不支持 ${r.unsupported}`)
       if (r.failed) parts.push(`失败 ${r.failed}`)
+      if (r.canceled) parts.push('已取消')
       const details = []
       for (const d of r.dirs || []) {
         const bits = []
@@ -1865,8 +1906,12 @@ export const useLibrary = defineStore('library', {
        同名目标文件夹合并，不再新开 (n)；返回主进程明细（含 created/replaced）。 */
     async mergeDirWithDupes(srcAbs, targetDir, t) {
       let opts = {}
+      /* 整包查重改为流式异步：大文件夹扫描期间给一个可取消的进度浮条 */
+      this.taskProgress = { visible: true, label: '正在检查文件夹重复', done: 0, total: 0, cancelable: true, canceling: false }
       try {
         const scan = await window.picrand.picnestDirDupCheck(srcAbs, targetDir, t.rootId)
+        this.taskProgress.visible = false
+        if (scan?.canceled) return { ok: false, canceled: true, error: '已取消' }
         if (scan?.ok && scan.count > 0) {
           const choice = await new Promise((resolve) => {
             this.dupDialog = {
@@ -1885,7 +1930,14 @@ export const useLibrary = defineStore('library', {
           }
         }
       } catch (e) { /* 查重失败：按普通合并处理 */ }
+      finally { this.taskProgress.visible = false }
       return window.picrand.picnestImportDirCopy(srcAbs, targetDir, opts)
+    },
+    async cancelTask() {
+      const t = this.taskProgress
+      if (!t.visible || !t.cancelable || t.canceling) return
+      t.canceling = true
+      try { await window.picrand.picnestDirDupCancel() } catch { /* 静默 */ }
     },
 
     // 外部拖入：先全库查重（Eagle 式冲突弹窗），再复制进目标目录
@@ -1933,6 +1985,7 @@ export const useLibrary = defineStore('library', {
         let idx = t.index
         for (const d of dirs) {
           const r = await this.mergeDirWithDupes(d, targetDir, t)
+          if (r?.canceled) { agg.canceled = true; break }
           if (r?.ok) {
             agg.dirs.push(r)
             agg.copied += r.copied || 0
