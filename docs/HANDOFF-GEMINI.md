@@ -26,13 +26,13 @@
 | 项目 | 状态 |
 |---|---|
 | 分支 | `master`，**没有 remote** |
-| 提交 | 功能收尾提交见 `git log -1`；最终检查点标签 `checkpoint-2026-11-09-final` |
+| 提交 | 功能 `7001b8e`，文档 `d233d40`；当前检查点标签 `checkpoint-2026-11-09-r4` |
 | 跟踪文件 | 约 120 个，约 3.3 MiB |
 | `app/` | **被 .gitignore 排除**，约 1.4 GB（Electron 运行时 + node_modules + 主进程/preload + dist + exe） |
 | 根 README | **不存在** |
 | 根 LICENSE | **不存在**（`app/LICENSE` 是 PicRand 的 GPL-3.0 原文 + Electron/Chromium 许可证） |
 | 版本号 | `app/resources/app/package.json` = `2.77.0`（继承自 PicRand）；`ui/package.json` = `0.1.0` |
-| 现有标签 | `checkpoint-2026-11-09`、`checkpoint-2026-11-09-r2`、最终检查点 |
+| 现有标签 | `checkpoint-2026-11-09`、`-r2`、`-final`、`-r3`、`-r4`（r4 为当前统一拖拽版本） |
 
 > `app/` 不进 git 是开发期为了避开 1.4 GB 运行时；**公开发布时必须单独解决源码与构建问题**（见 §4）。
 
