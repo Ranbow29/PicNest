@@ -2,7 +2,6 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { useLibrary, extractDropUrls } from '../stores/library'
 import { isExternalDT as isDnDExternal } from '../lib/dnd'
-import { startWindowDrag, onBarDblclick } from '../lib/winDrag'
 import DirTreeItem from './DirTreeItem.vue'
 import FolderIcon from './FolderIcon.vue'
 import NamePromptDialog from './NamePromptDialog.vue'
@@ -206,7 +205,7 @@ async function dropOnLib(e, l) {
     :style="{ width: (lib.sidebarCollapsed ? 0 : lib.sidebarWidth) + 'px' }"
     @dragover="onSidebarDragOver" @dragleave="onSidebarDragLeave" @drop.prevent="dropToRoot"
   >
-    <div class="brand" @mousedown="startWindowDrag" @dblclick="onBarDblclick">
+    <div class="brand">
       <h1>图巢</h1>
       <span class="sub">PicNest</span>
     </div>
@@ -279,7 +278,7 @@ async function dropOnLib(e, l) {
   background: linear-gradient(180deg, var(--sidebar-glow) 0, rgba(255, 255, 255, 0) 150px);
 }
 .sidebar.collapsed { padding-left: 0; padding-right: 0; opacity: 0; pointer-events: none; }
-.brand { display: flex; align-items: baseline; gap: 8px; padding: 1px 10px 9px; border-bottom: 1px solid var(--border); user-select: none; }
+.brand { display: flex; align-items: baseline; gap: 8px; padding: 1px 10px 9px; border-bottom: 1px solid var(--border); user-select: none; -webkit-app-region: drag; }
 .brand h1 { font-family: var(--font-serif); font-size: 19px; margin: 0; letter-spacing: 4px; }
 .brand .sub { font-size: 10px; color: var(--text-2); letter-spacing: 1.5px; }
 
