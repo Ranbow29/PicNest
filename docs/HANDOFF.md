@@ -98,6 +98,13 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 - 实测 MiMo `mimo-v2.6-flash`（`https://api.xiaomimimo.com/v1`，7 个模型）：`/v1/models` 正常；视觉测试（两张异色 64×64）返回 `same:false`。此前 `max_tokens:80` 被思考阶段吃光，`content` 为空。
 - 实测本地预筛（Fate Grand Order material 1~9，3,372 张；本地 mock 视觉 API）：dHash 候选 4,145 对 → 色块+pHash 筛掉 4,041 对 → 104 对进入 AI 队列（减少 97.5%）；整轮 7.8s（hash+色块+pHash+40 次本地 AI 调用）。只上色块时是 286 对（减少 93.1%），pHash 再砍掉 63.6%。
 
+### 标签（2026-11-09）
+- 表：`tags(id, name COLLATE NOCASE UNIQUE, created_at)` + `image_tags(image_id, tag_id, created_at, PK)`；迁移在 `picnestMigrate()`；图片永久删除由 trigger 清关联，软删保留（还原后标签还在）。
+- IPC：`picnest-tags-list(folderId)` 返回当前根 `tags(count)` + `imageTags`（imageId → [tagId]）；`picnest-tag-assign({imageIds,name|tagId,action})`、`picnest-tag-rename({tagId,name})`、`picnest-tag-delete(tagId)`。标签名全局、ASCII 大小写不敏感；自动去 `#` 前缀、空白压缩、最长 60 字。
+- UI：Inspector 单图标签 chips + 输入（回车/＋）；多选显示共同标签，添加应用到全部、× 从全部移除。FilterBar「TAGS」按当前根计数，多选为**任一标签**；搜索同时匹配文件名和标签名。
+- 管理：FilterBar「管理」→ 点标签改名（NamePromptDialog）、× 删除（确认）；空标签只在管理模式可见，便于清理。
+- 计数按当前根；关联按 `image_id`，移动/改名/软删不丢。实测：两图同标签 count=2、大小写合并、筛选/搜索/多选移除/改名/删除均通过，测试标签已清空。
+
 ### 简报 / 黑白 / 无标题栏大图
 - **简报模式**：全屏黑底（页面级 `requestFullscreen`），单击下一张、←/A 上一张、→/D 下一张、Esc 退出；视频静音循环、文本占位；计数/提示/右上关闭。
 - 简报**滚轮以光标为锚点缩放**（0.2–8×）+ 拖拽平移（4px 阈值，未拖动才算单击切图）；右键呼出上述图片菜单（简报 z-index 890 < 菜单 900）。
@@ -123,7 +130,7 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 - **目标根跟随活动根**：store `syncCollectRoot()` 在 init / addRootByPath / switchRoot / removeRoot 调 `picnest-collect-set-root`；扩展可另选根（服务端 `picnestCollectRootId`，默认第一个）。
 - **Eagle 兼容层暂缓**：只读调研确认 Eagle for Edge 3.1.29 用 `41595`（library/folder/tag/item addFromURL）+ `41593`（form：image / save-url / screen capture / import-images）。但 Eagle 运行时会占这两个端口（不能共存），且闭源扩展 EULA 需在开源前核实；协议事实记录在此，代码不抄、不捆绑。未来作为「Eagle 关闭时可选开启」的桥。
 - **采集查重**：服务端写入前按「同根 + 同 file_size」筛候选（≤6）→ MD5 确认；命中则不落盘，返回 `duplicate` + matches（文件名/所在夹）。按住面板显示「图库里已有相同图片」+ **跳过 / 覆盖旧图 / 仍然保存**：覆盖=先写新图，成功后把旧匹配项软删（`deleted_at`，进图巢回收站）并发 unlink，物理文件保留可彻底删除；仍然保存=`force:true` 保留旧图再存一份。右键存图与页面截图只提示跳过（通知/文案）。只查目标根内、未软删；历史已有重复需用应用内查重清理。
-- 扩展 v0.1 边界：图片 + 可见区域截图；不支持整页滚动/视频/PDF；不发送标签（标签系统未做）；服务端下载不带 Cookie，防盗链图片可能失败；按住采集只支持主 frame 的 `<img>`（跨域 iframe、CSS 背景图暂不做）。
+- 扩展 v0.1 边界：图片 + 可见区域截图；不支持整页滚动/视频/PDF；扩展暂不带标签（标签系统已有，采集链路未接线）；服务端下载不带 Cookie，防盗链图片可能失败；按住采集只支持主 frame 的 `<img>`（跨域 iframe、CSS 背景图暂不做）。
 
 ### 详情 / 视觉分层
 - 单选图片：预览/名称/注释/色板/评分/文件夹/操作（**URL 输入栏已删，DB url 字段保留**）。**图片的「文件夹」chip 必须由 `file_path` 反推**（`relOfImage`），不能用 `currentDirRel`——根文件夹开「显示子文件夹内容」或合并视图时，视图位置≠图片所在夹（否则子夹图片被标成库根）。
@@ -166,8 +173,8 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 ## 四、未做 / 技术债
 
 ### 下一批（建议顺序）
-- **标签系统**：Inspector 编辑/批量打标、筛选栏标签、搜索、采集带标签；需新增 tags/image_tags（或 JSON 列）。M7 的 Eagle 标签迁移依赖它。
-- **M7 Eagle 库迁移**：先只读预演 11,363 条，映射 folders/annotations/url/rating；标签等标签系统完成后再迁。
+- **标签系统 v1 已完成**：Inspector 编辑/批量、FilterBar 任一筛选、搜索命中、改名/删除；后续是采集带标签、标签颜色、层级/合并。
+- **M7 Eagle 库迁移**：先只读预演 11,363 条，映射 folders/annotations/url/rating/tags（标签系统已就绪）。
 - **查重收尾**：精确查重可取消；候选默认 40/上限 200，超过上限只查最接近的；按 API 价格预估费用/分批；文件夹整包 MD5 改异步/进度化（当前主进程同步，超大文件夹首扫会卡）。
 
 ### 采集 / 扩展

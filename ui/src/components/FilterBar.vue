@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import { useLibrary } from '../stores/library'
 import ColorPicker from './ColorPicker.vue'
+import NamePromptDialog from './NamePromptDialog.vue'
 
 // Eagle 式筛选面板：全部能力内联平铺（挂在漏斗按钮下，与 ▦ 分布面板互斥）
 const lib = useLibrary()
@@ -59,10 +60,38 @@ function toggleIn(list, v) {
 }
 function toggleShape(k) { toggleIn(f.value.shapes, k); lib.layoutTick++ }
 function toggleRating(v) { toggleIn(f.value.ratings, v); lib.layoutTick++ }
+function toggleTag(id) { toggleIn(f.value.tags, id); lib.layoutTick++ }
 function toggleFormat(e, ex) {
   if (ex) toggleIn(f.value.formatEx, e)
   else toggleIn(f.value.formats, e)
   lib.layoutTick++
+}
+const tagManage = ref(false)
+const tagsShown = computed(() => (tagManage.value ? lib.tags : lib.tags.filter((t) => t.count > 0)))
+const tagRename = ref({ open: false, id: 0, name: '' })
+const tagNote = ref('')
+function startTagRename(t) {
+  tagNote.value = ''
+  tagRename.value = { open: true, id: t.id, name: t.name }
+}
+async function confirmTagRename(name) {
+  const r = await lib.renameTag(tagRename.value.id, name)
+  if (r?.ok) {
+    tagRename.value.open = false
+    tagNote.value = ''
+  } else tagNote.value = r?.error || '重命名失败'
+}
+async function deleteTag(t) {
+  const ok = await lib.askConfirm({
+    title: `删除标签「${t.name}」？`,
+    message: '会从所有图片移除此标签，图片文件不会动。',
+    confirmText: '删除标签',
+    danger: true,
+  })
+  if (!ok) return
+  const r = await lib.deleteTag(t.id)
+  tagNote.value = r?.ok ? '' : (r?.error || '删除失败')
+  if (r?.ok) f.value.tags = f.value.tags.filter((id) => id !== t.id)
 }
 
 /* 颜色：色板真值取自 Eagle app.asar filter-item-color.html（12 预设 + none/gray + 自定义） */
@@ -106,6 +135,7 @@ function onHexEnter() {
 function clearSection(kind) {
   if (kind === 'shape') f.value.shapes = []
   if (kind === 'rating') f.value.ratings = []
+  if (kind === 'tag') f.value.tags = []
   if (kind === 'format') { f.value.formats = []; f.value.formatEx = [] }
   lib.layoutTick++
 }
@@ -167,6 +197,29 @@ function clearSection(kind) {
       </div>
     </div>
 
+    <!-- 标签 -->
+    <div class="fsec wi" style="--d: 200ms">
+      <div class="fsec-head"><i class="eyebrow">TAGS</i><span>标签</span>
+        <button v-if="f.tags.length" class="clear" @click="clearSection('tag')">清除</button>
+        <button v-if="lib.tags.length" class="clear" @click="tagManage = !tagManage">{{ tagManage ? '完成' : '管理' }}</button>
+      </div>
+      <div class="chips">
+        <template v-for="t in tagsShown" :key="t.id">
+          <button v-if="!tagManage" class="chip" :class="{ on: f.tags.includes(t.id) }" @click="toggleTag(t.id)">
+            {{ t.name }}<em>{{ t.count }}</em>
+          </button>
+          <span v-else class="tag-admin">
+            <button class="tag-admin-name" title="重命名标签" @click="startTagRename(t)">{{ t.name }}</button>
+            <button class="tag-admin-del" title="删除标签" @click="deleteTag(t)">×</button>
+          </span>
+        </template>
+        <span v-if="!tagsShown.length" class="tag-empty">暂无标签</span>
+      </div>
+      <div v-if="tagManage && tagsShown.length" class="hint-row">点标签改名 · × 删除标签</div>
+      <div v-else-if="tagsShown.length" class="hint-row">多选为「任一标签」</div>
+      <div v-if="tagNote" class="tag-note">{{ tagNote }}</div>
+    </div>
+
     <!-- 格式 -->
     <div class="fsec wi" style="--d: 240ms">
       <div class="fsec-head"><i class="eyebrow">FORMAT</i><span>格式</span>
@@ -182,6 +235,9 @@ function clearSection(kind) {
       </div>
     </div>
 
+    <NamePromptDialog
+      :visible="tagRename.open" title="重命名标签" :initial="tagRename.name"
+      @confirm="confirmTagRename" @cancel="tagRename.open = false" />
   </div>
 </template>
 
@@ -252,4 +308,20 @@ function clearSection(kind) {
 .ex-mark { font-style: normal; font-size: 10px; color: #d24b4b; border: 1px solid #d24b4b; border-radius: 4px; padding: 0 3px; }
 .hint-row { padding: 6px 8px 0; font-size: 11px; color: var(--text-2); }
 .hint-row b { color: var(--text); }
+.tag-empty { font-size: 11.5px; color: var(--text-2); padding: 3px 0; }
+.tag-admin {
+  display: inline-flex; align-items: center; overflow: hidden;
+  border: 1px solid var(--border); border-radius: 999px; background: var(--bg-2);
+}
+.tag-admin-name {
+  border: none; background: transparent; color: var(--text); cursor: pointer;
+  font-size: 11px; padding: 4px 3px 4px 9px;
+}
+.tag-admin-name:hover { color: var(--accent); }
+.tag-admin-del {
+  border: none; background: transparent; color: var(--text-2); cursor: pointer;
+  font-size: 12px; line-height: 1; padding: 4px 8px 4px 2px;
+}
+.tag-admin-del:hover { color: #b4463b; }
+.tag-note { padding-top: 4px; font-size: 10.5px; color: #b4463b; }
 </style>

@@ -130,8 +130,11 @@ export const useLibrary = defineStore('library', {
       formats: [],           // 包含的扩展名（小写）
       formatEx: [],          // 排除的扩展名
       folders: [],           // 包含的子目录 rel
+      tags: [],              // 标签 id（任一命中）
       color: { on: false, gray: false, value: null, accuracy: 20 },
     },
+    tags: [],                // [{id,name,count}] 当前根
+    imageTags: {},           // imageId -> [tagId]（当前根，不含回收站）
     palettes: {},            // file_path -> [{r,g,b,percent}]
     paletteBuild: { running: false, done: 0, total: 0 },
     colorDist: {},           // file_path -> d76（颜色命中排序用）
@@ -195,6 +198,7 @@ export const useLibrary = defineStore('library', {
             api.syncFolderSnapshot(r.path).then(() => { this.refreshTree(); this.loadImages() }).catch(() => {})
           }
         }
+        this.refreshTags().catch(() => {})
         // 主进程推送种子导入（验收钩子）：走正常导入链路
         window.picrand?.onPicnestSeed?.((d) => {
           if (d?.path) this.addRootByPath(d.path).then(() => window.picrand.picnestRmSeed?.())
@@ -216,7 +220,7 @@ export const useLibrary = defineStore('library', {
           if (data?.type === 'add' || data?.type === 'unlink') {
             if (Date.now() < (this.suppressSyncUntil || 0)) return // 内部移动已本地增量处理
             clearTimeout(this._deb)
-            this._deb = setTimeout(() => { this.refreshTree(); this.loadImages() }, 600)
+            this._deb = setTimeout(() => { this.refreshTree(); this.loadImages(); this.refreshTags() }, 600)
           }
         })
         // 查重扫描进度（主进程逐文件 MD5）
@@ -277,6 +281,7 @@ export const useLibrary = defineStore('library', {
           this.counts = { all: 0 }
         }
       }
+      this.refreshTags().catch(() => {})
       return r
     },
 
@@ -303,6 +308,7 @@ export const useLibrary = defineStore('library', {
         this.syncCollectRoot()
         await this.refreshTree()
         await this.openDir(null)
+        this.refreshTags().catch(() => {})
       } catch (e) {
         this.error = String(e?.message || e)
       } finally {
@@ -342,6 +348,7 @@ export const useLibrary = defineStore('library', {
       localStorage.setItem('picnest.activeRootId', String(id))
       await this.refreshTree()
       await this.loadImages()
+      this.refreshTags().catch(() => {})
       if (opts.record !== false) this.recordNav(this.currentLocation())
     },
 
@@ -777,6 +784,47 @@ export const useLibrary = defineStore('library', {
       } finally {
         if (gen === this._loadGen) this.loading = false
       }
+    },
+
+    /* 标签：当前根的全量标签 + 图片关联；筛选面板与详情共用 */
+    async refreshTags() {
+      if (this.activeRootId == null) {
+        this.tags = []
+        this.imageTags = {}
+        return
+      }
+      try {
+        const r = await window.picrand.picnestTagsList(this.activeRootId)
+        if (!r?.ok) return
+        this.tags = Array.isArray(r.tags) ? r.tags : []
+        this.imageTags = r.imageTags || {}
+        const usable = new Set(this.tags.filter((t) => t.count > 0).map((t) => t.id))
+        this.filters.tags = (this.filters.tags || []).filter((id) => usable.has(id))
+      } catch { /* 静默：标签不是主流程阻断项 */ }
+    },
+    async addTagToImages(imageIds, name) {
+      const ids = (imageIds || []).filter((x) => Number.isInteger(Number(x)) && Number(x) > 0)
+      if (!ids.length) return { ok: false, error: '没有目标图片' }
+      const r = await window.picrand.picnestTagAssign({ imageIds: ids, name, action: 'add' })
+      if (r?.ok) await this.refreshTags()
+      return r
+    },
+    async removeTagFromImages(imageIds, tagId) {
+      const ids = (imageIds || []).filter((x) => Number.isInteger(Number(x)) && Number(x) > 0)
+      if (!ids.length || !tagId) return { ok: false, error: '没有目标标签' }
+      const r = await window.picrand.picnestTagAssign({ imageIds: ids, tagId, action: 'remove' })
+      if (r?.ok) await this.refreshTags()
+      return r
+    },
+    async renameTag(tagId, name) {
+      const r = await window.picrand.picnestTagRename({ tagId, name })
+      if (r?.ok) await this.refreshTags()
+      return r
+    },
+    async deleteTag(tagId) {
+      const r = await window.picrand.picnestTagDelete(tagId)
+      if (r?.ok) await this.refreshTags()
+      return r
     },
 
     /* 多选文件夹的合并内容：逐目录取递归图片 → 按 file_path 去重 → 全局排序 */
@@ -1245,11 +1293,12 @@ export const useLibrary = defineStore('library', {
       n += f.ratings.length ? 1 : 0
       n += (f.formats.length || f.formatEx.length) ? 1 : 0
       n += f.folders.length ? 1 : 0
+      n += f.tags.length ? 1 : 0
       n += (f.color.on || f.color.gray) ? 1 : 0
       return n
     },
     clearFilters() {
-      this.filters = { shapes: [], customW: 4, customH: 3, ratings: [], formats: [], formatEx: [], folders: [], color: { on: false, gray: false, value: null, accuracy: 20 } }
+      this.filters = { shapes: [], customW: 4, customH: 3, ratings: [], formats: [], formatEx: [], folders: [], tags: [], color: { on: false, gray: false, value: null, accuracy: 20 } }
       this.colorDist = {}
     },
     shapeMatch(img) {
@@ -1309,6 +1358,10 @@ export const useLibrary = defineStore('library', {
       if (f.folders.length) {
         const root = this.tree?.rootPath || ''
         arr = arr.filter((i) => f.folders.some((rel) => i.file_path.startsWith(root + '\\' + rel.split('/').join('\\'))))
+      }
+      if (f.tags.length) {
+        const picked = new Set(f.tags)
+        arr = arr.filter((i) => (this.imageTags[i.id] || []).some((id) => picked.has(id)))
       }
       if ((f.color.on || f.color.gray)) {
         this.colorDist = {}

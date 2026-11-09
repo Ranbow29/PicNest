@@ -36,6 +36,24 @@ function picnestMigrate() {
       deleted_at INTEGER NOT NULL
     )`);
   } catch (e) {}
+  try {
+    const db = getDb();
+    db.exec(`CREATE TABLE IF NOT EXISTS tags (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+      created_at INTEGER NOT NULL DEFAULT 0
+    )`);
+    db.exec(`CREATE TABLE IF NOT EXISTS image_tags (
+      image_id INTEGER NOT NULL,
+      tag_id INTEGER NOT NULL,
+      created_at INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (image_id, tag_id)
+    )`);
+    db.exec("CREATE INDEX IF NOT EXISTS idx_image_tags_tag ON image_tags(tag_id)");
+    // 图片行被永久删除时顺手清关联；软删（deleted_at）保留标签，方便还原
+    db.exec(`CREATE TRIGGER IF NOT EXISTS picnest_image_tags_cleanup
+      AFTER DELETE ON images BEGIN DELETE FROM image_tags WHERE image_id = OLD.id; END`);
+  } catch (e) {}
   try { picnestMigrateTextThumbs() } catch (e) {}
   try { picnestMigrateDirOrderKeys() } catch (e) {}
   _picnestMigrated = true;
@@ -1359,14 +1377,122 @@ electron.ipcMain.handle("picnest-get-palettes", (_event, paths) => {
   }
   return out;
 });
+
+/* ==== 标签系统（全局标签名 + 图片关联；按 folder_id 统计/加载当前根） ==== */
+function picnestTagName(raw) {
+  const name = String(raw || "").trim().replace(/^#+/, "").trim().replace(/\s+/g, " ");
+  if (!name) throw new Error("标签名不能为空");
+  if (name.length > 60) throw new Error("标签名最多 60 字");
+  return name;
+}
+function picnestTagImageIds(raw) {
+  return [...new Set((Array.isArray(raw) ? raw : [])
+    .map((x) => Number(x))
+    .filter((n) => Number.isInteger(n) && n > 0))].slice(0, 10000);
+}
+function picnestTagEnsure(name) {
+  const db = getDb();
+  const hit = db.prepare("SELECT id, name FROM tags WHERE name = ? COLLATE NOCASE").get(name);
+  if (hit) return hit;
+  const info = db.prepare("INSERT INTO tags(name, created_at) VALUES (?, ?)").run(name, Date.now());
+  return { id: Number(info.lastInsertRowid), name };
+}
+electron.ipcMain.handle("picnest-tags-list", (_event, folderId) => {
+  try {
+    picnestMigrate();
+    const db = getDb();
+    const tags = db.prepare(`SELECT t.id, t.name, COUNT(DISTINCT i.id) AS count
+      FROM tags t
+      LEFT JOIN image_tags it ON it.tag_id = t.id
+      LEFT JOIN images i ON i.id = it.image_id AND i.folder_id = ? AND i.deleted_at IS NULL
+      GROUP BY t.id ORDER BY t.name COLLATE NOCASE`).all(folderId);
+    const rows = db.prepare(`SELECT it.image_id, it.tag_id FROM image_tags it
+      JOIN images i ON i.id = it.image_id
+      WHERE i.folder_id = ? AND i.deleted_at IS NULL`).all(folderId);
+    const imageTags = {};
+    for (const r of rows) {
+      if (!imageTags[r.image_id]) imageTags[r.image_id] = [];
+      imageTags[r.image_id].push(r.tag_id);
+    }
+    return { ok: true, tags, imageTags };
+  } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+});
+electron.ipcMain.handle("picnest-tag-assign", (_event, opts) => {
+  try {
+    picnestMigrate();
+    const ids = picnestTagImageIds(opts?.imageIds);
+    if (!ids.length) return { ok: false, error: "没有目标图片" };
+    const action = opts?.action === "remove" ? "remove" : "add";
+    const db = getDb();
+    let tag = null;
+    if (action === "add") {
+      tag = picnestTagEnsure(picnestTagName(opts?.name));
+    } else {
+      const byId = Number(opts?.tagId) || 0;
+      tag = byId
+        ? db.prepare("SELECT id, name FROM tags WHERE id = ?").get(byId)
+        : db.prepare("SELECT id, name FROM tags WHERE name = ? COLLATE NOCASE").get(picnestTagName(opts?.name));
+      if (!tag) return { ok: false, error: "标签不存在" };
+    }
+    let changed = 0;
+    const tx = db.transaction(() => {
+      if (action === "add") {
+        const stmt = db.prepare(`INSERT OR IGNORE INTO image_tags(image_id, tag_id, created_at)
+          SELECT id, ?, ? FROM images WHERE id = ? AND deleted_at IS NULL`);
+        for (const id of ids) changed += stmt.run(tag.id, Date.now(), id).changes;
+      } else {
+        const stmt = db.prepare("DELETE FROM image_tags WHERE image_id = ? AND tag_id = ?");
+        for (const id of ids) changed += stmt.run(id, tag.id).changes;
+      }
+    });
+    tx();
+    return { ok: true, tag: { id: tag.id, name: tag.name }, changed };
+  } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+});
+electron.ipcMain.handle("picnest-tag-rename", (_event, opts) => {
+  try {
+    picnestMigrate();
+    const id = Number(opts?.tagId) || 0;
+    if (!id) return { ok: false, error: "标签不存在" };
+    const name = picnestTagName(opts?.name);
+    const db = getDb();
+    const hit = db.prepare("SELECT id FROM tags WHERE name = ? COLLATE NOCASE AND id <> ?").get(name, id);
+    if (hit) return { ok: false, error: "已有同名标签" };
+    const info = db.prepare("UPDATE tags SET name = ? WHERE id = ?").run(name, id);
+    if (!info.changes) return { ok: false, error: "标签不存在" };
+    return { ok: true, tag: { id, name } };
+  } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+});
+electron.ipcMain.handle("picnest-tag-delete", (_event, tagId) => {
+  try {
+    picnestMigrate();
+    const id = Number(tagId) || 0;
+    if (!id) return { ok: false, error: "标签不存在" };
+    const db = getDb();
+    let removed = 0;
+    const tx = db.transaction(() => {
+      removed = db.prepare("DELETE FROM image_tags WHERE tag_id = ?").run(id).changes;
+      db.prepare("DELETE FROM tags WHERE id = ?").run(id);
+    });
+    tx();
+    return { ok: true, removed };
+  } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+});
+
 electron.ipcMain.handle("picnest-search", (_event, folderId, query, limit) => {
+  picnestMigrate();
   const q = String(query || "").trim();
   if (!q) return [];
   const pattern = "%" + picnestLikeEscape(q) + "%";
   return getDb().prepare(
     `SELECT id, file_path, file_name, file_size, modify_time, width, height, thumbnail_path, is_favorite
-     FROM images WHERE folder_id = ? AND deleted_at IS NULL AND file_name LIKE ? ESCAPE '\\' ORDER BY file_name COLLATE NOCASE LIMIT ?`
-  ).all(folderId, pattern, limit);
+     FROM images WHERE folder_id = ? AND deleted_at IS NULL
+       AND (file_name LIKE ? ESCAPE '\\' OR EXISTS (
+         SELECT 1 FROM image_tags it JOIN tags t ON t.id = it.tag_id
+         WHERE it.image_id = images.id AND t.name LIKE ? ESCAPE '\\'
+       ))
+     ORDER BY file_name COLLATE NOCASE LIMIT ?`
+  ).all(folderId, pattern, pattern, limit);
 });
 
 /* 移动目录（拖拽调整文件夹位置）：同盘 rename；禁止移进自身/自身子目录 */

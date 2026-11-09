@@ -113,7 +113,7 @@ watch(() => lib.selectedPath, async (p) => {
   } catch { palette.value = [] } finally { paletteLoading.value = false }
 })
 
-const sections = ref({ info: true, palette: true, rating: true, folder: true, locate: true })
+const sections = ref({ info: true, palette: true, rating: true, tags: true, folder: true, locate: true })
 const toggle = (k) => { sections.value[k] = !sections.value[k] }
 
 /* 点色板 = 以此色筛选 */
@@ -197,6 +197,40 @@ const multiFolders = computed(() => {
   }
   return [...map.entries()].map(([rel, name]) => ({ rel, name }))
 })
+
+/* ---------- 标签 ---------- */
+const tagById = computed(() => new Map(lib.tags.map((t) => [t.id, t])))
+const imageTagList = computed(() => (lib.imageTags[img.value?.id] || [])
+  .map((id) => tagById.value.get(id)).filter(Boolean))
+const multiCommonTags = computed(() => {
+  const ids = multiImages.value.map((i) => i.id)
+  if (!ids.length) return []
+  const common = new Set(lib.imageTags[ids[0]] || [])
+  for (const id of ids.slice(1)) {
+    const cur = new Set(lib.imageTags[id] || [])
+    for (const t of [...common]) if (!cur.has(t)) common.delete(t)
+  }
+  return [...common].map((id) => tagById.value.get(id)).filter(Boolean)
+})
+const tagDraft = ref('')
+function tagTargetIds() {
+  if (mode.value === 'multi') return multiImages.value.map((i) => i.id)
+  if (mode.value === 'img' && img.value) return [img.value.id]
+  return []
+}
+async function addCurrentTag() {
+  const name = tagDraft.value.trim()
+  const ids = tagTargetIds()
+  if (!name || !ids.length) return
+  const r = await lib.addTagToImages(ids, name)
+  if (r?.ok) tagDraft.value = ''
+}
+async function removeCurrentTag(tag) {
+  const ids = tagTargetIds()
+  if (!ids.length || !tag?.id) return
+  await lib.removeTagFromImages(ids, tag.id)
+}
+watch(() => lib.selectedPath, () => { tagDraft.value = '' })
 const multiMeta = ref({ annotation: '', url: '' })
 const multiNote = ref('')
 watch(() => lib.selectedPaths.join('|'), () => {
@@ -356,6 +390,25 @@ async function exportFolder() {
       </div>
 
       <div class="sec">
+        <div class="sec-head" @click="toggle('tags')"><span>标签</span><i>{{ sections.tags ? '▾' : '▸' }}</i></div>
+        <div v-show="sections.tags" class="sec-body">
+          <div class="tag-list">
+            <span v-for="t in imageTagList" :key="t.id" class="tag-chip">
+              <span class="tag-name">{{ t.name }}</span><button class="tag-x" title="移除标签" @click.stop="removeCurrentTag(t)">×</button>
+            </span>
+            <span v-if="!imageTagList.length" class="muted">暂无标签</span>
+          </div>
+          <div class="tag-add">
+            <input v-model="tagDraft" list="picnest-tag-suggestions" maxlength="60" placeholder="添加标签，回车确认" @keydown.enter.prevent="addCurrentTag" />
+            <button :disabled="!tagDraft.trim()" @click="addCurrentTag">＋</button>
+          </div>
+          <datalist id="picnest-tag-suggestions">
+            <option v-for="t in lib.tags" :key="t.id" :value="t.name" />
+          </datalist>
+        </div>
+      </div>
+
+      <div class="sec">
         <div class="sec-head" @click="toggle('folder')"><span>文件夹</span><i>{{ sections.folder ? '▾' : '▸' }}</i></div>
         <div v-show="sections.folder" class="sec-body">
           <div class="folder-row">
@@ -415,6 +468,25 @@ async function exportFolder() {
             <i v-for="s in 5" :key="s" class="star" :class="{ on: multiRating >= s }" @click="rateMulti(s)">★</i>
           </div>
           <div v-if="multiRating < 0" class="muted">多个评分</div>
+        </div>
+      </div>
+
+      <div class="sec">
+        <div class="sec-head" @click="toggle('tags')"><span>标签</span><i>{{ sections.tags ? '▾' : '▸' }}</i></div>
+        <div v-show="sections.tags" class="sec-body">
+          <div class="tag-list">
+            <span v-for="t in multiCommonTags" :key="t.id" class="tag-chip">
+              <span class="tag-name">{{ t.name }}</span><button class="tag-x" title="从全部移除" @click.stop="removeCurrentTag(t)">×</button>
+            </span>
+            <span v-if="!multiCommonTags.length" class="muted">无共同标签</span>
+          </div>
+          <div class="tag-add">
+            <input v-model="tagDraft" list="picnest-tag-suggestions" maxlength="60" placeholder="给全部添加标签…" @keydown.enter.prevent="addCurrentTag" />
+            <button :disabled="!tagDraft.trim()" @click="addCurrentTag">＋</button>
+          </div>
+          <datalist id="picnest-tag-suggestions">
+            <option v-for="t in lib.tags" :key="t.id" :value="t.name" />
+          </datalist>
         </div>
       </div>
 
@@ -526,6 +598,32 @@ async function exportFolder() {
 }
 .line-input:focus { border-color: var(--accent); }
 .line-input::placeholder { color: var(--text-2); }
+
+.tag-list { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 22px; }
+.tag-chip {
+  display: inline-flex; align-items: center; gap: 2px; max-width: 100%;
+  padding: 3px 4px 3px 9px; border-radius: 999px;
+  background: var(--accent-weak); color: var(--accent); font-size: 11.5px; line-height: 1.4;
+}
+.tag-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tag-x {
+  flex: none; border: none; background: transparent; color: inherit; opacity: 0.65;
+  font-size: 13px; line-height: 1; padding: 0 3px; cursor: pointer;
+}
+.tag-x:hover { opacity: 1; }
+.tag-add { display: flex; gap: 6px; margin-top: 8px; }
+.tag-add input {
+  flex: 1; min-width: 0; height: 28px; padding: 0 8px; outline: none;
+  border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg-2); color: var(--text); font-size: 12px;
+}
+.tag-add input:focus { border-color: var(--accent); }
+.tag-add button {
+  flex: none; width: 28px; height: 28px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg-2); color: var(--text-2); cursor: pointer; font-size: 14px;
+}
+.tag-add button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.tag-add button:disabled { opacity: 0.4; cursor: default; }
 
 .sec { border-top: 1px solid var(--border); }
 .sec-head {
