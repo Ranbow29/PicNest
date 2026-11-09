@@ -160,16 +160,19 @@ const patches = [
     to: `    { type: "separator" }, /* PicNest:P12 参考板未实现，托盘菜单移除 */`,
   },
   {
-    /* 关闭窗口时原逻辑 preventDefault + 等渲染层 confirm-close 回包；一旦回包丢失/异常，
-       窗口关了但主进程和托盘还在。PicNest 的语义就是关闭即退出，这里直接放行。 */
-    id: 'P13a', desc: '关闭窗口直接放行（不再等渲染层二次确认）',
+    /* PicNest 的两段式退出：点主窗口关闭只隐藏到托盘（图2 的隐藏区），
+       托盘菜单「退出」才会 allowClose + app.quit 彻底结束进程。 */
+    id: 'P13a', desc: '关闭主窗口 = 隐藏到托盘（托盘「退出」才彻底退出）',
     from: `  mainWindow.on("close", async (event) => {
     if (allowClose) return;
     event.preventDefault();
     mainWindow?.webContents.send("confirm-close");
   });`,
-    to: `  mainWindow.on("close", () => {
-    allowClose = true; /* PicNest:P13 关闭即退出，不再拦截等待渲染层二次确认 */
+    to: `  mainWindow.on("close", (event) => {
+    if (allowClose) return;
+    /* PicNest:P13a 关闭主窗口只隐藏到托盘；托盘菜单「退出」才彻底退出 */
+    event.preventDefault();
+    mainWindow?.hide();
   });`,
   },
   {
