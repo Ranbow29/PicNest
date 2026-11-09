@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { deltaE76, deltaE2000, isGrayPalettes } from '../lib/eagleColor'
 import { collectiveShake } from '../lib/iconMotion'
+import { emitPluginEvent } from '../lib/plugins'
 import { isTextPath } from '../lib/fileKinds'
 import { api } from '../api'
 
@@ -132,6 +133,7 @@ export const useLibrary = defineStore('library', {
     dropHint: { active: false, zone: '', label: '', x: 0, y: 0, key: null }, // 外部拖入落点提示（分区高亮 + 跟随光标）
     viewer: { scale: 1, tx: 0, ty: 0, rot: 0, flopX: false, showInspector: false, /* 初始收起：让用户先看图，详情随点随开 */ cropMode: false, fitNonce: 0 },
     filterBarOpen: false,
+    pluginsOpen: false,          // 插件库面板
     filters: {
       shapes: [],            // ['landscape','portrait','square','panoramaL','panoramaP','43','34','169','916','custom']
       customW: 4, customH: 3,
@@ -901,6 +903,7 @@ export const useLibrary = defineStore('library', {
       this.navHistory.push(next)
       if (this.navHistory.length > 100) this.navHistory = this.navHistory.slice(-100)
       this.navIndex = this.navHistory.length - 1
+      emitPluginEvent('view-changed', { rootId: next.rootId, view: next.view, rel: next.rel || '' })
     },
     async applyNav(loc) {
       if (!loc) return
@@ -2393,6 +2396,12 @@ export const useLibrary = defineStore('library', {
     },
 
     /* 图片多选：单击=单选；Shift=按当前可见顺序范围选；Alt/Ctrl=加选/减选（可与 Shift 叠加） */
+    emitSelectionEvent() {
+      emitPluginEvent('selection-changed', {
+        paths: [...this.selectedPaths], dirs: [...this.selectedDirs],
+        rootId: this.activeRootId, view: this.view, rel: this.currentDirRel || '',
+      })
+    },
     selectImage(path, opts = {}) {
       const shift = !!opts.shift
       const add = !!opts.add
@@ -2407,6 +2416,7 @@ export const useLibrary = defineStore('library', {
           const range = a <= b ? list.slice(a, b + 1) : list.slice(b, a + 1).reverse()
           this.selectedPaths = add ? [...new Set([...this.selectedPaths, ...range])] : range
           this.selectedPath = path
+          this.emitSelectionEvent()
           return
         }
       }
@@ -2420,16 +2430,19 @@ export const useLibrary = defineStore('library', {
           this.selectedPath = path
         }
         this.selectionAnchor = path
+        this.emitSelectionEvent()
         return
       }
       this.selectedPaths = [path]
       this.selectedPath = path
       this.selectionAnchor = path
+      this.emitSelectionEvent()
     },
     clearImageSelection() {
       this.selectedPath = null
       this.selectedPaths = []
       this.selectionAnchor = null
+      this.emitSelectionEvent()
     },
     /* Ctrl+A：选中当前可见（筛选后）全部图片 */
     selectAllImages() {
@@ -2439,6 +2452,7 @@ export const useLibrary = defineStore('library', {
       this.selectedPath = list[list.length - 1] || null
       this.selectionAnchor = list[0] || null
       if (!this.selectionView) this.clearDirSelection()
+      this.emitSelectionEvent()
       return list.length
     },
     /* 框选：拖拽过程中直接写入选中集；add=保留按下前的底集（Shift 加选） */
@@ -2448,6 +2462,7 @@ export const useLibrary = defineStore('library', {
       this.selectedPaths = opts.add ? [...new Set([...(opts.base || []), ...list])] : list
       this.selectionAnchor = this.selectedPaths[this.selectedPaths.length - 1] || null
       this.selectedPath = this.selectedPaths[this.selectedPaths.length - 1] || null
+      this.emitSelectionEvent()
     },
     /* Esc：清空图片/文件夹选中；合并视图要退回原浏览文件夹 */
     clearSelections() {
@@ -2545,14 +2560,17 @@ export const useLibrary = defineStore('library', {
       if (!this.selectionView) this.clearDirSelection()
       this.lightbox = { open: true, path: path || this.selectedPath }
       if (this.lightbox.path) this.markOpened(this.lightbox.path)
+      emitPluginEvent('image-opened', { path: this.lightbox.path })
       this.viewer.rot = 0; this.viewer.flopX = false
       this.viewer.cropMode = false
       this.viewer.fitNonce++
       collectiveShake() // 进入大图：全体图标同步手势（与退出对称）
     },
     closeLightbox() {
+      const closedPath = this.lightbox.path
       this.lightbox = { open: false, path: null }
       this.viewer.cropMode = false
+      if (closedPath) emitPluginEvent('image-closed', { path: closedPath })
       collectiveShake()
     },
 
@@ -2620,6 +2638,8 @@ export const useLibrary = defineStore('library', {
       this.showNote(parts.join(' · ') || '没有可移动的文件', [], failed ? 'error' : 'ok')
       return { ok: failed === 0, moved, failed, already: already.length }
     },
+    openPlugins() { this.pluginsOpen = true },
+    closePlugins() { this.pluginsOpen = false },
     toggleSidebar() {
       this.sidebarCollapsed = !this.sidebarCollapsed
       localStorage.setItem('picnest.sidebarCollapsed', this.sidebarCollapsed ? '1' : '0')

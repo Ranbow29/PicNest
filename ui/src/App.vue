@@ -15,6 +15,8 @@ import BriefMode from './components/BriefMode.vue'
 import TrashMenu from './components/TrashMenu.vue'
 import ImportResultCard from './components/ImportResultCard.vue'
 import TaskProgress from './components/TaskProgress.vue'
+import PluginManager from './components/PluginManager.vue'
+import { refreshPluginThemes } from './lib/plugins'
 import ResizeHandle from './components/ResizeHandle.vue'
 import InspResize from './components/InspResize.vue'
 
@@ -88,6 +90,7 @@ function clearDropUi() { lib.clearDropHint() }
 function onWindowDragLeave(e) { if (!e.relatedTarget) lib.clearDropHint() }
 onMounted(() => {
   lib.init()
+  refreshPluginThemes().catch(() => {}) // 启动时应用已启用的主题插件
   window.addEventListener('keydown', onKeydown)
   window.addEventListener('drop', clearDropUi, true)
   window.addEventListener('dragend', clearDropUi, true)
@@ -189,6 +192,7 @@ const chipStyle = computed(() => {
   <TrashMenu />
   <ImportResultCard />
   <TaskProgress />
+  <PluginManager />
 </template>
 
 <style scoped>

@@ -254,6 +254,10 @@ async function dropOnLib(e, l) {
 
     <div v-if="lib.error" class="error">{{ lib.error }}</div>
 
+    <button class="plugin-entry" title="插件库（主题 / 界面插件）" @click="lib.openPlugins()">
+      <span class="pe-ico">🧩</span><span>插件库</span>
+    </button>
+
     <NamePromptDialog :visible="askNewFolder" title="在库根新建文件夹"
                       @confirm="(v) => { askNewFolder = false; newFolderInRoot(v) }"
                       @cancel="askNewFolder = false" />
@@ -324,6 +328,16 @@ async function dropOnLib(e, l) {
 
 .scanning, .empty { padding: 12px; font-size: 12px; color: var(--text-2); }
 .error { padding: 8px 12px; font-size: 11px; color: #e5484d; }
+/* 插件库入口：树下方常驻 */
+.plugin-entry {
+  flex: none; display: flex; align-items: center; gap: 7px;
+  margin-top: 8px; height: 32px; padding: 0 10px;
+  border: 1px dashed var(--border); border-radius: 8px;
+  background: transparent; color: var(--text-2); font-size: 12px; cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.plugin-entry:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-weak); }
+.pe-ico { font-size: 14px; line-height: 1; }
 .eagle-check { position: fixed; inset: 0; z-index: 910; display: flex; align-items: center; justify-content: center; pointer-events: none; }
 .eagle-check-card {
   display: flex; align-items: center; gap: 9px; padding: 10px 14px;

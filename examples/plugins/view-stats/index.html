@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>当前视图统计</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 14px 16px; font: 12.5px/1.55 system-ui, "Segoe UI", "Microsoft YaHei", sans-serif;
+    background: #fbfaf7; color: #262320;
+  }
+  @media (prefers-color-scheme: dark) { body { background: #1d1b24; color: #ece7df; } }
+  h1 { margin: 0 0 2px; font-size: 15px; letter-spacing: .5px; }
+  .sub { color: #8a8177; font-size: 11.5px; margin-bottom: 10px; }
+  .stats { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+  .stat { border: 1px solid rgba(120,110,95,.28); border-radius: 9px; padding: 7px 10px; min-width: 86px; }
+  .stat b { display: block; font-size: 16px; }
+  .stat span { font-size: 10.5px; color: #8a8177; }
+  .row { display: flex; align-items: center; gap: 9px; padding: 5px 0; border-bottom: 1px dashed rgba(120,110,95,.18); }
+  .rank { width: 20px; text-align: right; color: #a09484; font-variant-numeric: tabular-nums; }
+  .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .meta { color: #8a8177; font-size: 10.5px; white-space: nowrap; }
+  .star { color: #d9a441; letter-spacing: .5px; }
+  button { border: 1px solid rgba(120,110,95,.35); background: transparent; color: inherit; border-radius: 7px; padding: 4px 10px; font-size: 11.5px; cursor: pointer; }
+  button:hover { border-color: #2f8f6f; color: #2f8f6f; }
+  .empty { color: #8a8177; padding: 14px 0; }
+  .evt { margin-top: 10px; color: #8a8177; font-size: 11px; min-height: 17px; }
+</style>
+</head>
+<body>
+  <h1>当前视图统计</h1>
+  <div class="sub" id="ctx">等待宿主…</div>
+  <div class="stats">
+    <div class="stat"><b id="n">—</b><span>图片数</span></div>
+    <div class="stat"><b id="r">—</b><span>已评分</span></div>
+    <div class="stat"><b id="sel">—</b><span>已选</span></div>
+  </div>
+  <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+    <button id="refresh">刷新</button>
+    <span class="meta">按评分排序 · 只读取当前资料库元数据</span>
+  </div>
+  <div id="list"><div class="empty">读取中…</div></div>
+  <div class="evt" id="evt"></div>
+
+<script>
+/* PicNest renderer plugin（无构建、单文件）：postMessage 桥。
+   宿主 → 插件: {type:'init'|'event'|'response'}
+   插件 → 宿主: {type:'ready'|'query-images'|'storage-get'|'storage-set'|'fetch'|'close'} */
+const PLUGIN_ID = 'com.picnest.example.view-stats'
+let seq = 0
+const pending = new Map()
+let ctx = null
+
+function call(type, payload) {
+  return new Promise((resolve, reject) => {
+    const id = ++seq
+    pending.set(id, { resolve, reject })
+    parent.postMessage(Object.assign({ source: 'picnest-plugin', pluginId: PLUGIN_ID, type, id }, payload || {}), '*')
+  })
+}
+
+function renderList(images) {
+  const el = document.getElementById('list')
+  if (!images || !images.length) { el.innerHTML = '<div class="empty">当前视图没有图片</div>'; return }
+  el.innerHTML = images.map((im, i) => {
+    const stars = im.rating ? '★'.repeat(im.rating) : '未评分'
+    return `<div class="row"><span class="rank">${i + 1}</span><span class="name" title="${escapeHtml(im.file_name)}">${escapeHtml(im.file_name)}</span><span class="meta">${im.width || '?'} × ${im.height || '?'}</span><span class="star">${stars}</span></div>`
+  }).join('')
+}
+
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
+}
+
+async function refresh() {
+  const el = document.getElementById('list')
+  try {
+    const r = await call('query-images', { limit: 20 })
+    const images = r && r.images ? r.images : []
+    document.getElementById('n').textContent = images.length
+    document.getElementById('r').textContent = images.filter((x) => x.rating > 0).length
+    renderList(images)
+    el.title = ''
+  } catch (e) {
+    el.innerHTML = '<div class="empty">读取失败：' + escapeHtml(e && e.message || e) + '</div>'
+  }
+}
+
+function renderContext() {
+  if (!ctx) return
+  document.getElementById('ctx').textContent = `${ctx.rootName || '根文件'} · ${ctx.view === 'all' ? (ctx.rel ? ctx.rel.replace(/\//g, ' / ') : '全部') : ctx.view}`
+  document.getElementById('sel').textContent = (ctx.selection || []).length
+}
+
+document.getElementById('refresh').addEventListener('click', refresh)
+
+window.addEventListener('message', (e) => {
+  const m = e.data
+  if (!m || m.source !== 'picnest-host') return
+  if (m.type === 'init') {
+    ctx = m.context || {}
+    renderContext()
+    refresh()
+    return
+  }
+  if (m.type === 'event') {
+    if (m.name === 'selection-changed') {
+      ctx = Object.assign({}, ctx || {}, { selection: m.payload.paths || [] })
+      renderContext()
+      document.getElementById('evt').textContent = `选择变化：${(m.payload.paths || []).length} 张`
+    } else if (m.name === 'view-changed') {
+      ctx = Object.assign({}, ctx || {}, { view: m.payload.view, rel: m.payload.rel })
+      renderContext()
+      refresh()
+    } else if (m.name === 'image-opened') {
+      document.getElementById('evt').textContent = '打开：' + String(m.payload.path || '').split(/[\\/]/).pop()
+    }
+    return
+  }
+  if (m.type === 'response') {
+    const p = pending.get(m.id)
+    if (!p) return
+    pending.delete(m.id)
+    if (m.ok) p.resolve(m.data)
+    else p.reject(new Error(m.error || '请求失败'))
+  }
+})
+
+parent.postMessage({ source: 'picnest-plugin', pluginId: PLUGIN_ID, type: 'ready' }, '*')
+</script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+{
+  "id": "com.picnest.example.mono-mint",
+  "name": "薄荷纸（示例主题）",
+  "version": "1.0.0",
+  "api": "1.0.0",
+  "type": "theme",
+  "entry": "theme.css",
+  "author": "PicNest examples",
+  "license": "MIT",
+  "description": "示例 theme 插件：低饱和薄荷绿纸面 + 青绿强调色。只叠 CSS token，不改布局。",
+  "permissions": []
+}

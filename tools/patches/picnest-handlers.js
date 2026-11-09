@@ -2436,6 +2436,308 @@ electron.ipcMain.handle("picnest-strip-order-prefixes", async (event, folderId) 
   }
 });
 
+/* ==== 插件系统（P1/P2：theme + renderer；main 仅登记，P3 再跑） ==== */
+const PICNEST_PLUGIN_API = "1.0.0";
+const PICNEST_PLUGIN_ID_RE = /^[a-z0-9][a-z0-9._-]{1,63}$/;
+const PICNEST_PLUGIN_TYPES = new Set(["theme", "renderer", "main"]);
+function picnestPluginsDir() {
+  const d = path.join(dataDir, "plugins");
+  try { if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true }); } catch (e) {}
+  return d;
+}
+function picnestPluginDir(id) { return path.join(picnestPluginsDir(), String(id || "")); }
+function picnestPluginConfigRead() {
+  try { return JSON.parse(fs.readFileSync(configPath, "utf-8")); } catch (e) { return {}; }
+}
+function picnestPluginConfigWrite(c) { try { fs.writeFileSync(configPath, JSON.stringify(c, null, 2)); } catch (e) {} }
+function picnestPluginEnabledList() {
+  const c = picnestPluginConfigRead();
+  return Array.isArray(c.picnestPluginsEnabled) ? c.picnestPluginsEnabled.map(String) : [];
+}
+function picnestPluginSetEnabledList(list) {
+  const c = picnestPluginConfigRead();
+  c.picnestPluginsEnabled = [...new Set((list || []).map(String))];
+  picnestPluginConfigWrite(c);
+}
+function picnestPluginNormalizeManifest(raw, dirId) {
+  if (!raw || typeof raw !== "object") throw new Error("plugin.json 无效");
+  const id = String(raw.id || "").trim();
+  if (!PICNEST_PLUGIN_ID_RE.test(id)) throw new Error("插件 id 不合法（小写字母/数字/点/横线，1-64 位）");
+  if (dirId && id !== dirId) throw new Error("plugin.json 的 id 与目录名不一致");
+  const type = String(raw.type || "");
+  if (!PICNEST_PLUGIN_TYPES.has(type)) throw new Error("type 必须是 theme / renderer / main");
+  const fallback = type === "theme" ? "theme.css" : type === "renderer" ? "index.html" : "index.cjs";
+  const entry = String(raw.entry || fallback).trim();
+  if (!entry || entry.includes("..") || path.isAbsolute(entry)) throw new Error("entry 路径不合法");
+  const permissions = Array.isArray(raw.permissions) ? raw.permissions.map(String).filter(Boolean).slice(0, 30) : [];
+  return {
+    id, name: String(raw.name || id), version: String(raw.version || "0.0.0"), api: String(raw.api || PICNEST_PLUGIN_API),
+    type, entry, author: String(raw.author || ""), license: String(raw.license || ""),
+    description: String(raw.description || ""), permissions,
+    ui: raw.ui && typeof raw.ui === "object" ? raw.ui : null,
+  };
+}
+function picnestPluginReadManifest(dir, dirId) {
+  const raw = JSON.parse(fs.readFileSync(path.join(dir, "plugin.json"), "utf-8"));
+  return picnestPluginNormalizeManifest(raw, dirId);
+}
+function picnestPluginEntryPath(man) {
+  const p = path.resolve(picnestPluginDir(man.id), man.entry);
+  const base = path.resolve(picnestPluginDir(man.id)) + path.sep;
+  return p.startsWith(base) ? p : "";
+}
+electron.ipcMain.handle("picnest-plugins-list", () => {
+  const root = picnestPluginsDir();
+  const enabled = new Set(picnestPluginEnabledList());
+  const out = [];
+  let ents = [];
+  try { ents = fs.readdirSync(root, { withFileTypes: true }); } catch (e) {}
+  for (const ent of ents) {
+    if (!ent.isDirectory() || ent.name.startsWith(".")) continue;
+    const dir = path.join(root, ent.name);
+    try {
+      const man = picnestPluginReadManifest(dir, ent.name);
+      out.push({ ...man, enabled: enabled.has(man.id), error: "" });
+    } catch (e) {
+      out.push({ id: ent.name, name: ent.name, version: "", type: "", api: "", entry: "", permissions: [], enabled: enabled.has(ent.name), error: String(e?.message || e) });
+    }
+  }
+  out.sort((a, b) => String(a.name).localeCompare(String(b.name), "zh"));
+  return { ok: true, apiVersion: PICNEST_PLUGIN_API, plugins: out };
+});
+electron.ipcMain.handle("picnest-plugin-set-enabled", (_e, id, on) => {
+  try {
+    const man = picnestPluginReadManifest(picnestPluginDir(id), id);
+    const list = picnestPluginEnabledList();
+    const next = on ? [...list, man.id] : list.filter((x) => x !== man.id);
+    picnestPluginSetEnabledList(next);
+    return { ok: true, enabled: !!on };
+  } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+});
+electron.ipcMain.handle("picnest-plugin-uninstall", (_e, id) => {
+  try {
+    if (!PICNEST_PLUGIN_ID_RE.test(String(id || ""))) return { ok: false, error: "插件 id 不合法" };
+    const dir = picnestPluginDir(id);
+    if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+    picnestPluginSetEnabledList(picnestPluginEnabledList().filter((x) => x !== id));
+    return { ok: true };
+  } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+});
+electron.ipcMain.handle("picnest-plugin-pick-folder", async () => {
+  try {
+    const res = await electron.dialog.showOpenDialog(mainWindow, {
+      title: "选择插件文件夹（含 plugin.json）", properties: ["openDirectory"],
+    });
+    return { ok: !res.canceled, path: res.filePaths?.[0] || "" };
+  } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+});
+electron.ipcMain.handle("picnest-plugin-install-folder", async (_e, srcDir) => {
+  try {
+    const src = path.resolve(String(srcDir || ""));
+    if (!fs.existsSync(path.join(src, "plugin.json"))) return { ok: false, error: "所选文件夹缺少 plugin.json" };
+    const man = picnestPluginReadManifest(src, null);
+    const dest = picnestPluginDir(man.id);
+    const tmp = dest + ".tmp-" + Date.now();
+    fs.cpSync(src, tmp, { recursive: true, filter: (p) => !p.split(path.sep).includes(".git") });
+    if (fs.existsSync(dest)) fs.rmSync(dest, { recursive: true, force: true });
+    fs.renameSync(tmp, dest);
+    const wasEnabled = picnestPluginEnabledList().includes(man.id);
+    return { ok: true, plugin: { ...man, enabled: wasEnabled, error: "" } };
+  } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+});
+electron.ipcMain.handle("picnest-plugin-entry-html", (_e, id) => {
+  try {
+    const man = picnestPluginReadManifest(picnestPluginDir(id), id);
+    if (man.type !== "renderer") return { ok: false, error: "不是 renderer 插件" };
+    const fp = picnestPluginEntryPath(man);
+    if (!fp || !fs.existsSync(fp)) return { ok: false, error: "缺少入口文件 " + man.entry };
+    const st = fs.statSync(fp);
+    if (st.size > 2 * 1024 * 1024) return { ok: false, error: "入口 HTML 超过 2MB" };
+    return { ok: true, html: fs.readFileSync(fp, "utf-8"), plugin: man };
+  } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+});
+electron.ipcMain.handle("picnest-plugin-theme-css", (_e, id) => {
+  try {
+    const man = picnestPluginReadManifest(picnestPluginDir(id), id);
+    if (man.type !== "theme") return { ok: false, error: "不是 theme 插件" };
+    const fp = picnestPluginEntryPath(man);
+    if (!fp || !fs.existsSync(fp)) return { ok: false, error: "缺少入口文件 " + man.entry };
+    const st = fs.statSync(fp);
+    if (st.size > 512 * 1024) return { ok: false, error: "主题 CSS 超过 512KB" };
+    return { ok: true, css: fs.readFileSync(fp, "utf-8") };
+  } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+});
+function picnestPluginStoragePath(id) { return path.join(picnestPluginDir(id), "storage.json"); }
+electron.ipcMain.handle("picnest-plugin-storage-get", (_e, id) => {
+  try {
+    const p = picnestPluginStoragePath(id);
+    if (!fs.existsSync(p)) return { ok: true, value: {} };
+    return { ok: true, value: JSON.parse(fs.readFileSync(p, "utf-8")) };
+  } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+});
+electron.ipcMain.handle("picnest-plugin-storage-set", (_e, id, value) => {
+  try {
+    const p = picnestPluginStoragePath(id);
+    const text = JSON.stringify(value && typeof value === "object" ? value : {});
+    if (Buffer.byteLength(text) > 5 * 1024 * 1024) return { ok: false, error: "插件存储超过 5MB" };
+    fs.writeFileSync(p + ".tmp", text);
+    fs.renameSync(p + ".tmp", p);
+    return { ok: true };
+  } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+});
+electron.ipcMain.handle("picnest-plugin-query-images", (_e, opts) => {
+  try {
+    const folderId = Number(opts?.folderId);
+    if (!folderId) return { ok: false, error: "缺少资料库 id" };
+    const root = getDb().prepare("SELECT id, path FROM folders WHERE id = ?").get(folderId);
+    if (!root) return { ok: false, error: "资料库不存在" };
+    const rel = String(opts?.rel || "").replace(/^\/+|\/+$/g, "");
+    const limit = Math.max(1, Math.min(500, Number(opts?.limit) || 100));
+    const sep = root.path.includes("\\") ? "\\" : "/";
+    let rows;
+    if (rel) {
+      const pat = picnestLikeEscape(root.path + sep + rel.split("/").join(sep) + sep) + "%";
+      rows = getDb().prepare(
+        `SELECT id, file_path, file_name, file_size, modify_time, width, height, rating, annotation, is_favorite
+         FROM images WHERE folder_id = ? AND deleted_at IS NULL AND file_path LIKE ? ESCAPE '\\'
+         ORDER BY rating DESC, id DESC LIMIT ?`
+      ).all(folderId, pat, limit);
+    } else {
+      rows = getDb().prepare(
+        `SELECT id, file_path, file_name, file_size, modify_time, width, height, rating, annotation, is_favorite
+         FROM images WHERE folder_id = ? AND deleted_at IS NULL
+         ORDER BY rating DESC, id DESC LIMIT ?`
+      ).all(folderId, limit);
+    }
+    const images = rows.map((r) => ({
+      id: r.id,
+      file_name: r.file_name,
+      file_size: r.file_size,
+      modify_time: r.modify_time,
+      width: r.width,
+      height: r.height,
+      rating: r.rating || 0,
+      annotation: r.annotation || "",
+      is_favorite: r.is_favorite || 0,
+      rel: path.relative(root.path, path.dirname(r.file_path)).replace(/[\\/]+/g, "/"),
+    }));
+    return { ok: true, images, rootId: folderId, rel };
+  } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+});
+electron.ipcMain.handle("picnest-plugin-fetch", async (_e, url, init) => {
+  try {
+    const u = String(url || "");
+    if (!/^https?:\/\//i.test(u)) return { ok: false, error: "只允许 http(s) 地址" };
+    const res = await fetch(u, { ...(init && typeof init === "object" ? init : {}), signal: AbortSignal.timeout(15000) });
+    const text = await res.text();
+    if (Buffer.byteLength(text) > 2 * 1024 * 1024) return { ok: false, error: "响应超过 2MB" };
+    return { ok: true, status: res.status, contentType: res.headers.get("content-type") || "", body: text };
+  } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+});
+function picnestRegistryResolve(dl, base) {
+  const s = String(dl || "");
+  if (!s) return "";
+  if (/^https?:\/\//i.test(s) || path.isAbsolute(s)) return s;
+  if (/^https?:\/\//i.test(base)) { try { return new URL(s, base).href; } catch (e) { return s; } }
+  return path.join(base, s);
+}
+electron.ipcMain.handle("picnest-plugin-registry-fetch", async (_e, url) => {
+  try {
+    const src = String(url || "").trim();
+    if (!src) return { ok: false, error: "请填写 registry.json 地址或本地路径" };
+    let data, base;
+    if (/^https?:\/\//i.test(src)) {
+      const res = await fetch(src, { signal: AbortSignal.timeout(15000) });
+      if (!res.ok) return { ok: false, error: `拉取失败 HTTP ${res.status}` };
+      data = JSON.parse(await res.text());
+      base = src;
+    } else {
+      const p = path.resolve(src);
+      if (!fs.existsSync(p)) return { ok: false, error: "registry.json 不存在" };
+      data = JSON.parse(fs.readFileSync(p, "utf-8"));
+      base = path.dirname(p);
+    }
+    const arr = Array.isArray(data) ? data : Array.isArray(data?.plugins) ? data.plugins : [];
+    const plugins = [];
+    for (const raw of arr) {
+      if (!raw || typeof raw !== "object") continue;
+      const id = String(raw.id || "");
+      if (!PICNEST_PLUGIN_ID_RE.test(id)) continue;
+      plugins.push({
+        id,
+        name: String(raw.name || id),
+        version: String(raw.version || raw.latest || "0.0.0"),
+        type: String(raw.type || ""),
+        api: String(raw.api || ""),
+        description: String(raw.description || ""),
+        author: String(raw.author || ""),
+        license: String(raw.license || ""),
+        homepage: String(raw.homepage || ""),
+        download: picnestRegistryResolve(raw.download, base),
+        sha256: String(raw.sha256 || ""),
+      });
+    }
+    return { ok: true, plugins };
+  } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+});
+electron.ipcMain.handle("picnest-plugin-install-registry", async (_e, entry) => {
+  try {
+    const dl = String(entry?.download || "");
+    if (!dl) return { ok: false, error: "仓库条目缺少 download" };
+    let buf;
+    if (/^https?:\/\//i.test(dl)) {
+      const res = await fetch(dl, { signal: AbortSignal.timeout(60000) });
+      if (!res.ok) return { ok: false, error: `下载失败 HTTP ${res.status}` };
+      const ab = await res.arrayBuffer();
+      if (ab.byteLength > 50 * 1024 * 1024) return { ok: false, error: "插件包超过 50MB" };
+      buf = Buffer.from(ab);
+    } else {
+      if (!fs.existsSync(dl)) return { ok: false, error: "插件包不存在" };
+      const st = fs.statSync(dl);
+      if (st.size > 50 * 1024 * 1024) return { ok: false, error: "插件包超过 50MB" };
+      buf = fs.readFileSync(dl);
+    }
+    if (entry?.sha256) {
+      const h = crypto.createHash("sha256").update(buf).digest("hex");
+      if (h.toLowerCase() !== String(entry.sha256).toLowerCase()) return { ok: false, error: "sha256 校验失败" };
+    }
+    const AdmZip = require("adm-zip");
+    const zip = new AdmZip(buf);
+    const entries = zip.getEntries();
+    let manifestEntry = null, basePrefix = "";
+    for (const e of entries) {
+      const name = e.entryName.replace(/\\/g, "/");
+      if (name === "plugin.json") { manifestEntry = e; basePrefix = ""; break; }
+      if (/^[^/]+\/plugin\.json$/.test(name)) { manifestEntry = e; basePrefix = name.slice(0, -"plugin.json".length); break; }
+    }
+    if (!manifestEntry) return { ok: false, error: "zip 根目录缺少 plugin.json" };
+    const raw = JSON.parse(manifestEntry.getData().toString("utf-8"));
+    const man = picnestPluginNormalizeManifest(raw, null);
+    const tmp = path.join(picnestPluginsDir(), `.tmp-${man.id}-${Date.now()}`);
+    fs.mkdirSync(tmp, { recursive: true });
+    let total = 0;
+    for (const e of entries) {
+      const name = e.entryName.replace(/\\/g, "/");
+      if (!name.startsWith(basePrefix)) continue;
+      const rel = name.slice(basePrefix.length);
+      if (!rel || rel.endsWith("/") || rel.includes("..")) continue;
+      const dest = path.resolve(tmp, rel);
+      if (!dest.startsWith(path.resolve(tmp) + path.sep)) continue;
+      const data = e.getData();
+      total += data.length;
+      if (total > 200 * 1024 * 1024) { fs.rmSync(tmp, { recursive: true, force: true }); return { ok: false, error: "解压后超过 200MB" }; }
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.writeFileSync(dest, data);
+    }
+    /* 解压后再校验一次清单（防 zip 内清单与目录不一致） */
+    const man2 = picnestPluginReadManifest(tmp, null);
+    const dest = picnestPluginDir(man2.id);
+    if (fs.existsSync(dest)) fs.rmSync(dest, { recursive: true, force: true });
+    fs.renameSync(tmp, dest);
+    return { ok: true, plugin: { ...man2, enabled: picnestPluginEnabledList().includes(man2.id), error: "" } };
+  } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+});
+
 /* 退出前兜底：把所有根的标签/颜色/排序刷到各自 .picnest/meta.json */
 electron.app.on("before-quit", () => {
   try {

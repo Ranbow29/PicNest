@@ -1,0 +1,13 @@
+{
+  "id": "com.picnest.example.view-stats",
+  "name": "当前视图统计（示例插件）",
+  "version": "1.0.0",
+  "api": "1.0.0",
+  "type": "renderer",
+  "entry": "index.html",
+  "author": "PicNest examples",
+  "license": "MIT",
+  "description": "示例 renderer 插件：通过沙箱桥读取当前资料库的图片元数据，显示前 20 张评分与选择事件。演示 ui.panel / data.images.read / events.read 权限。",
+  "permissions": ["ui.panel", "data.images.read", "events.read"],
+  "ui": { "panels": [{ "slot": "plugin-panel", "title": "当前视图统计" }] }
+}
