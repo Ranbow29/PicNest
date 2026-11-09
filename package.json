@@ -9,6 +9,7 @@
     "dev:ui": "npm --prefix ui run dev",
     "patch": "node tools/patches/apply.mjs",
     "patch:exe": "node tools/patches/patch-exe-resources.mjs",
+    "test:extension": "node tools/test-collect-script.mjs && node tools/test-collect-background.mjs",
     "build": "npm run build:ui && npm run patch"
   },
   "author": "Ranbow29",

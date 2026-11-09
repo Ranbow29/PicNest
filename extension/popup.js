@@ -8,6 +8,45 @@ const elFolder = $('#folder')
 const elSave = $('#save')
 const elHold = $('#hold')
 const elMsg = $('#msg')
+const elPage = $('#page-state')
+const elRepair = $('#repair')
+
+const PAGE_TEXT = {
+  current: ['已就绪', 'ok'],
+  missing: ['未注入', 'warn'],
+  stale: ['旧版脚本', 'warn'],
+  orphan: ['需刷新页面', 'warn'],
+  unhealthy: ['监听失效', 'warn'],
+  unavailable: ['页面未加载完成', 'idle'],
+  unsupported: ['此页面不支持', 'idle'],
+}
+const REPAIRABLE = ['missing', 'stale', 'orphan', 'unhealthy']
+let repairTabId = null
+
+function renderPageState(res) {
+  if (!res?.ok) {
+    elPage.className = 'pstate idle'
+    elPage.textContent = res?.error || '检测失败'
+    elRepair.hidden = true
+    return
+  }
+  repairTabId = res.tabId
+  const [text, cls] = PAGE_TEXT[res.state] || ['未知状态', 'idle']
+  let label = text
+  if (res.state === 'current') label = `已就绪 v${res.contentVersion}`
+  else if (res.state === 'stale' && res.version) label = `${text} v${res.version}`
+  else if (res.state === 'missing') label = `未注入 v${res.contentVersion}`
+  elPage.className = 'pstate ' + cls
+  elPage.textContent = label
+  elPage.title = res.url || ''
+  elRepair.hidden = !REPAIRABLE.includes(res.state)
+}
+function refreshPageState() {
+  elPage.className = 'pstate idle'
+  elPage.textContent = '检测中…'
+  elRepair.hidden = true
+  chrome.runtime.sendMessage({ type: 'collect-status' }, renderPageState)
+}
 
 function setStatus(state, text) {
   elStatus.className = 'status ' + state
@@ -49,6 +88,7 @@ async function loadFolders(rootId, selectedRel) {
   }
 }
 async function init() {
+  refreshPageState()
   try {
     await api('/api/v1/ping')
     setStatus('on', '已连接')
@@ -102,6 +142,26 @@ chrome.storage.local.get({ holdCollect: true }, (s) => {
 })
 elHold.addEventListener('change', () => {
   chrome.storage.local.set({ holdCollect: elHold.checked })
+})
+
+elRepair.addEventListener('click', () => {
+  if (repairTabId == null) return
+  elRepair.disabled = true
+  msg('正在修复本页…')
+  chrome.runtime.sendMessage({ type: 'collect-repair', tabId: repairTabId }, (res) => {
+    elRepair.disabled = false
+    if (!res?.ok) { msg('修复失败：' + (res?.error || '未知错误'), true); return }
+    if (res.action === 'reloaded') {
+      msg('页面已刷新，采集脚本将重新注入')
+      setTimeout(refreshPageState, 1500)
+    } else if (res.action === 'injected') {
+      msg('已重新注入采集脚本')
+      setTimeout(refreshPageState, 400)
+    } else {
+      msg('采集脚本已是最新')
+      setTimeout(refreshPageState, 150)
+    }
+  })
 })
 
 init()
