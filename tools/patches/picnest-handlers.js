@@ -1380,8 +1380,8 @@ electron.ipcMain.handle("picnest-get-palettes", (_event, paths) => {
 
 /* ==== 标签系统（全局标签名 + 图片关联；按 folder_id 统计/加载当前根） ==== */
 function picnestTagName(raw) {
-  const name = String(raw || "").trim().replace(/^#+/, "").trim().replace(/\s+/g, " ");
-  if (!name) throw new Error("标签名不能为空");
+  const name = String(raw || "").trim().replace(/\s+/g, " ");
+  if (!name || !name.replace(/#/g, "").trim()) throw new Error("标签名不能为空");
   if (name.length > 60) throw new Error("标签名最多 60 字");
   return name;
 }
