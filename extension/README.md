@@ -19,6 +19,9 @@
 >
 > **更新扩展后**：在 `edge://extensions` / `chrome://extensions` 点重载，并**刷新所有已打开的网页**。
 > 旧页面里的 content script 会失效，按住面板会提示「扩展已更新，请刷新此页面」。
+>
+> **切回旧标签 / Pinterest 失效？** v0.1.2 起，后台在标签激活或 URL 更新时会自动补注入 content script
+> （覆盖 Edge 睡眠标签、bfcache、扩展重载后遗留的旧页面）；如果仍失效，刷新一次页面兜底。
 
 ## 用法
 

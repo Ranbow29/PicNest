@@ -12,6 +12,33 @@ chrome.runtime.onInstalled.addListener(() => {
   })
 })
 
+/* 标签页恢复（Edge 睡眠标签 / 扩展重载 / bfcache）时浏览器不会再自动注入 content script，
+   表现为切回 Pinterest 后按住采集失效、刷新页面才恢复。这里在标签激活/更新时主动补注入；
+   content.js 自带 __picnestHoldCollectLoaded 守卫，重复注入安全。 */
+async function ensureCollectScript(tab) {
+  const url = tab?.url || ''
+  if (!tab?.id || !/^https?:\/\//i.test(url)) return
+  try {
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] })
+  } catch { /* 受限页面（edge://、商店页等）忽略 */ }
+}
+
+chrome.tabs.onActivated.addListener(async ({ tabId }) => {
+  try { await ensureCollectScript(await chrome.tabs.get(tabId)) } catch { /* 标签已关闭 */ }
+})
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status === 'complete' || changeInfo.url) void ensureCollectScript(tab)
+})
+
+async function ensurePinterestTabs() {
+  try {
+    const tabs = await chrome.tabs.query({ url: ['https://*.pinterest.com/*', 'https://pinterest.com/*'] })
+    for (const tab of tabs) await ensureCollectScript(tab)
+  } catch { /* 权限/页面限制 */ }
+}
+chrome.runtime.onStartup.addListener(() => { void ensurePinterestTabs() })
+chrome.runtime.onInstalled.addListener(() => { void ensurePinterestTabs() })
+
 async function apiRaw(path, body, method) {
   const init = { method: method || (body ? 'POST' : 'GET') }
   if (body) {
