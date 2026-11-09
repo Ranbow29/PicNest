@@ -252,6 +252,12 @@ export const useLibrary = defineStore('library', {
           t.done = d?.done || 0
           t.total = d?.total || 0
         })
+        window.picrand?.onPicnestStripPrefixProgress?.((d) => {
+          const t = this.taskProgress
+          if (!t.visible || t.kind !== 'stripPrefix') return
+          t.done = d?.done || 0
+          t.total = d?.total || 0
+        })
         window.picrand?.onPicnestAiDupProgress?.((d) => {
           if (!this.dupFinder.open || !this.dupFinder.ai.loading) return
           this.dupFinder.ai.progress = { ...this.dupFinder.ai.progress, ...(d || {}) }
@@ -771,6 +777,40 @@ export const useLibrary = defineStore('library', {
         if (r.failed) parts.push(`失败 ${r.failed}`)
         if (r.canceled) parts.push('已停止')
         this.showNote(parts.join(' · '), (r.failedNames || []).length ? [{ label: '失败样本', text: r.failedNames.join('、') }] : [], r.failed ? 'error' : 'ok')
+        return r
+      } catch (e) {
+        this.showNote(String(e?.message || e), [], 'error')
+        return { ok: false, error: String(e?.message || e) }
+      } finally {
+        this.taskProgress.visible = false
+      }
+    },
+    /* 一键清除整个根文件里我们加的 01_ 排序前缀（文件+文件夹；不改 sort_order） */
+    async stripOrderPrefixes(rootId = this.activeRootId) {
+      const rid = rootId
+      const root = this.roots.find((r) => r.id === rid)
+      if (!root) return { ok: false, error: '根文件不存在' }
+      const ok = await this.askConfirm({
+        title: '清除整个根文件的排序编号？',
+        message: '会扫描根文件下所有文件和文件夹，把名称里我们加的 01_ 前缀去掉；重名会自动加 (2)。手动排序值保留，但磁盘文件名会真实改变。',
+        details: [
+          root.path || '',
+          '物理排序开关仍开启时，下次手动拖拽会重新加编号',
+        ],
+        confirmText: '清除编号',
+        danger: true,
+      })
+      if (!ok) return { ok: false, canceled: true }
+      this.taskProgress = { visible: true, kind: 'stripPrefix', label: '正在清除排序编号', done: 0, total: 0, cancelable: false, canceling: false }
+      try {
+        const r = await window.picrand.picnestStripOrderPrefixes(rid)
+        if (!r?.ok) { this.showNote(r?.error || '清除失败', [], 'error'); return r }
+        if (rid === this.activeRootId) { await this.refreshTree(); await this.loadImages() }
+        this.scheduleRootMetaSave()
+        const parts = [`清除 ${r.renamed || 0} 个名称前缀（文件 ${r.files || 0} · 文件夹 ${r.dirs || 0}）`]
+        if (r.failed) parts.push(`失败 ${r.failed}`)
+        const details = Array.isArray(r.errors) && r.errors.length ? [{ label: '失败样本', text: r.errors.join('；') }] : []
+        this.showNote(parts.join(' · '), details, r.failed ? 'error' : 'ok')
         return r
       } catch (e) {
         this.showNote(String(e?.message || e), [], 'error')

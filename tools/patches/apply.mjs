@@ -225,6 +225,8 @@ const bridge = [
   '  picnestRootMetaEnsure: (rootId) => electron.ipcRenderer.invoke("picnest-root-meta-ensure", rootId),',
   '  picnestPhysicalOrderImages: (folderId, orderedPaths) => electron.ipcRenderer.invoke("picnest-physical-order-images", folderId, orderedPaths),',
   '  picnestPhysicalOrderDirs: (folderId, parentRel, names) => electron.ipcRenderer.invoke("picnest-physical-order-dirs", folderId, parentRel, names),',
+  '  picnestStripOrderPrefixes: (rootId) => electron.ipcRenderer.invoke("picnest-strip-order-prefixes", rootId),',
+  '  onPicnestStripPrefixProgress: (cb) => electron.ipcRenderer.on("picnest-strip-prefix-progress", (_e, d) => cb(d)),',
   '  picnestCopyImages: (paths, targetDir) => electron.ipcRenderer.invoke("picnest-copy-images", paths, targetDir),',
   '  picnestCrop: (filePath, opts) => electron.ipcRenderer.invoke("picnest-crop", filePath, opts),',
   '  picnestCropAs: (filePath, opts) => electron.ipcRenderer.invoke("picnest-crop-as", filePath, opts),',

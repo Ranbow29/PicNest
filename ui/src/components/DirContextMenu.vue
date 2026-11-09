@@ -161,6 +161,11 @@ function repairThumbs() {
   const rootId = isLib.value ? menuNode.value?.id : lib.activeRootId
   run(() => lib.repairThumbs(rootId))
 }
+/* 一键清除整个根目录的 01_ 排序前缀（文件+文件夹，确认后改磁盘名） */
+function stripPrefixes() {
+  const rootId = isLib.value ? menuNode.value?.id : lib.activeRootId
+  run(() => lib.stripOrderPrefixes(rootId))
+}
 /* 全局开关：手动排序时把顺序同步成文件名数字前缀（默认真改磁盘，谨慎开启） */
 function togglePhysOrder() {
   run(() => lib.togglePhysicalOrder())
@@ -284,6 +289,7 @@ const sortItems = [
         <button class="mi" @click="exportDir">导出（含子文件夹）</button>
         <button class="mi" @click="findDupes">查找重复…</button>
         <button v-if="isLib" class="mi" @click="repairThumbs">修复缩略图…</button>
+        <button v-if="isLib" class="mi" @click="stripPrefixes">清除排序编号…</button>
         <button class="mi" title="手动排序时把顺序写成文件名数字前缀（会真实改名）" @click="togglePhysOrder">{{ lib.physicalOrder ? '✓ ' : '' }}排序同步文件名</button>
 
         <div class="mi group" @click.stop="toggle('color')">

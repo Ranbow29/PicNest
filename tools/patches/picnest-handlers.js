@@ -2331,6 +2331,111 @@ electron.ipcMain.handle("picnest-physical-order-dirs", async (_event, folderId, 
   }
 });
 
+/* 一键清除全根目录里我们加的排序编号（01_ 前缀）：文件+文件夹，重名自动加 (2)；
+   不改 sort_order/手动顺序，只把磁盘名还原。深度优先处理（先子后父），watcher 暂停。 */
+let picnestStripBusy = false;
+function picnestUniquePath(dir, name, isDir) {
+  let target = path.join(dir, name);
+  if (!fs.existsSync(target)) return target;
+  if (isDir) {
+    for (let n = 2; fs.existsSync(target); n++) target = path.join(dir, `${name} (${n})`);
+    return target;
+  }
+  const ext = path.extname(name);
+  const stem = name.slice(0, name.length - ext.length);
+  for (let n = 2; fs.existsSync(target); n++) target = path.join(dir, `${stem} (${n})${ext}`);
+  return target;
+}
+function picnestOrderArrayRename(rootId, parentRel, oldName, newName) {
+  try {
+    const order = picnestDirOrderRead();
+    const key = picnestOrderKey(rootId, parentRel || "");
+    if (!Array.isArray(order[key])) return;
+    const i = order[key].indexOf(oldName);
+    if (i < 0) return;
+    order[key][i] = newName;
+    let cfg = {};
+    try { cfg = JSON.parse(fs.readFileSync(configPath, "utf-8")); } catch (e) {}
+    cfg.picnestDirOrder = order;
+    fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2));
+  } catch (e) {}
+}
+electron.ipcMain.handle("picnest-strip-order-prefixes", async (event, folderId) => {
+  if (picnestStripBusy) return { ok: false, error: "已有清除任务在运行" };
+  picnestStripBusy = true;
+  picnestMigrate();
+  const send = (p) => { try { if (!event.sender.isDestroyed()) event.sender.send("picnest-strip-prefix-progress", p); } catch (e) {} };
+  const db = getDb();
+  const root = db.prepare("SELECT id, path FROM folders WHERE id = ?").get(folderId);
+  if (!root) { picnestStripBusy = false; return { ok: false, error: "根文件不存在" }; }
+  const resume = picnestPhysWatcherActive(root.path);
+  if (resume) { try { stopWatching(); } catch (e) {} }
+  let files = 0, dirs = 0, failed = 0;
+  const errors = [];
+  try {
+    const entries = [];
+    const walk = (dir, rel, depth) => {
+      let ents = [];
+      try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
+      for (const ent of ents) {
+        if (ent.name.startsWith(".")) continue; // .picnest 等隐藏目录不动
+        const abs = path.join(dir, ent.name);
+        const childRel = rel ? rel + "/" + ent.name : ent.name;
+        const stripped = picnestStripOrderPrefix(ent.name);
+        if (stripped && stripped !== ent.name) {
+          entries.push({ abs, name: ent.name, stripped, isDir: ent.isDirectory(), parentAbs: dir, rel: childRel, parentRel: rel, depth });
+        }
+        if (ent.isDirectory()) walk(abs, childRel, depth + 1);
+      }
+    };
+    walk(root.path, "", 0);
+    const total = entries.length;
+    send({ done: 0, total, files: 0, dirs: 0, failed: 0 });
+    entries.sort((a, b) => b.depth - a.depth); // 先子后父，父改名不会让子路径失效
+    let done = 0;
+    for (const e of entries) {
+      const target = picnestUniquePath(e.parentAbs, e.stripped, e.isDir);
+      const finalName = path.basename(target);
+      try { fs.renameSync(e.abs, target); }
+      catch (err) {
+        failed++;
+        if (errors.length < 12) errors.push(`${e.name}: ${err.message}`);
+        done++;
+        continue;
+      }
+      if (e.isDir) {
+        const prefix = e.abs + path.sep;
+        const rows = db.prepare("SELECT file_path FROM images WHERE folder_id = ? AND file_path LIKE ? ESCAPE '\\'")
+          .all(folderId, picnestLikeEscape(prefix) + "%");
+        for (const r of rows) {
+          const np = target + r.file_path.slice(e.abs.length);
+          try { picnestPhysThumbMove(db, r.file_path, np); } catch (err2) {}
+        }
+        const newRel = e.parentRel ? e.parentRel + "/" + finalName : finalName;
+        try { picnestDirMemoryRenameKeys(folderId, e.rel, newRel); } catch (err2) {}
+        try { picnestDirOrderRenameKeys(folderId, e.rel, newRel); } catch (err2) {}
+        try { picnestOrderArrayRename(folderId, e.parentRel, e.name, finalName); } catch (err2) {}
+        try {
+          db.prepare("UPDATE picnest_trash_folders SET abs_path = ? || substr(abs_path, ?) WHERE folder_id = ? AND abs_path LIKE ? ESCAPE '\\'")
+            .run(target, e.abs.length + 1, folderId, picnestLikeEscape(prefix) + "%");
+        } catch (err2) {}
+        dirs++;
+      } else {
+        try { picnestPhysThumbMove(db, e.abs, target); } catch (err2) {}
+        files++;
+      }
+      done++;
+      if (done % 10 === 0 || done === total) send({ done, total, files, dirs, failed });
+    }
+    return { ok: true, renamed: files + dirs, files, dirs, failed, errors: errors.slice(0, 12) };
+  } catch (e) {
+    return { ok: false, error: String(e?.message || e), files, dirs, failed, errors };
+  } finally {
+    picnestStripBusy = false;
+    if (resume) { try { startWatching(root.path, mainWindow, _onAddCb, _onDeleteCb); } catch (e) {} }
+  }
+});
+
 /* 退出前兜底：把所有根的标签/颜色/排序刷到各自 .picnest/meta.json */
 electron.app.on("before-quit", () => {
   try {
