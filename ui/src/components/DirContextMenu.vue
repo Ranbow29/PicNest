@@ -17,6 +17,8 @@ const sortOpen = ref(false)
 const colorOpen = ref(false)
 const ask = ref(null) // { title, initial, selectBase, run(name) }
 const isLib = computed(() => !!menu.value.node?.isLibrary) // 资料库根：不提供重命名/移动（保 DB 登记一致性）
+// openDirMenu 传入的是 { rel, node, isLibrary?, absPath? } 包装层；实际节点在 .node
+const menuNode = computed(() => menu.value.node?.node || menu.value.node || null)
 
 const FOLDER_COLORS = [
   { key: '', css: 'var(--folder-default, #c9a86c)', label: '默认' },
@@ -47,7 +49,7 @@ function toggle(which) {
 function newSub() {
   const rel = relOf(menu.value.rel)
   const isLibrary = isLib.value
-  const rootId = menu.value.node?.id
+  const rootId = menuNode.value?.id
   run(() => {
     ask.value = { title: '新建子文件夹', initial: '', run: async (name) => {
       const r = isLibrary ? await lib.mkdirInLibrary(rootId, name) : await lib.mkdirIn(rel, name)
@@ -68,7 +70,7 @@ function rename() {
   })
 }
 function renameLib() {
-  const node = menu.value.node || {}
+  const node = menuNode.value || {}
   if (!node.id) return
   const current = node.display_name || node.name || ''
   run(() => {
@@ -77,7 +79,7 @@ function renameLib() {
 }
 /* 根文件 → 在文件管理器中打开（shell.openPath 打开目录本身，不是“显示所在位置”） */
 function revealLib() {
-  const p = menu.value.node?.path || menu.value.node?.absPath || ''
+  const p = menuNode.value?.path || menu.value.node?.absPath || ''
   if (!p) return
   run(async () => {
     const err = await window.picrand.openWithDefault(p).catch((e) => String(e?.message || e))
@@ -86,7 +88,7 @@ function revealLib() {
 }
 /* 移出根文件：只解除登记，磁盘文件夹与文件保留；回收站非空先拦住 */
 async function removeLib() {
-  const node = menu.value.node || {}
+  const node = menuNode.value || {}
   if (!node.id) return
   const name = node.display_name || node.name || ''
   run(async () => {
@@ -130,7 +132,7 @@ async function moveTo() {
 function exportDir() {
   const rel = relOf(menu.value.rel)
   const isLibrary = isLib.value
-  const rootId = menu.value.node?.id
+  const rootId = menuNode.value?.id
   run(async () => {
     lib.scanning = true
     lib.scanNote = '导出中…'
@@ -149,19 +151,19 @@ function exportDir() {
 function findDupes() {
   const isLibrary = isLib.value
   const rel = isLibrary ? '' : relOf(menu.value.rel)
-  const rootId = isLibrary ? menu.value.node?.id : lib.activeRootId
+  const rootId = isLibrary ? menuNode.value?.id : lib.activeRootId
   run(() => lib.openDupFinder(rootId, rel))
 }
 function sortLevel(mode) {
   const rel = relOf(menu.value.rel)
   const isLibrary = isLib.value
-  const rootId = menu.value.node?.id
+  const rootId = menuNode.value?.id
   run(() => (isLibrary ? lib.sortLibrary(rootId, mode) : lib.sortDir(rel, mode)))
 }
 function sortRecursive(mode) {
   const rel = relOf(menu.value.rel)
   const isLibrary = isLib.value
-  const rootId = menu.value.node?.id
+  const rootId = menuNode.value?.id
   run(() => (isLibrary ? lib.sortLibraryRecursive(rootId, mode) : lib.sortDirRecursive(rel, mode)))
 }
 function setColor(key) {
@@ -203,7 +205,7 @@ const hasClip = computed(() => !!lib.clipboard?.kind)
 function copyItem() {
   const rel = relOf(menu.value.rel)
   const isLibrary = isLib.value
-  const rootId = menu.value.node?.id
+  const rootId = menuNode.value?.id
   const useSelection = !isLibrary && lib.selectedDirs.length > 1 && lib.selectedDirs.includes(rel)
   const sel = [...lib.selectedDirs]
   run(() => {
@@ -214,7 +216,7 @@ function copyItem() {
 function pasteItem() {
   const rel = relOf(menu.value.rel)
   const isLibrary = isLib.value
-  const rootId = menu.value.node?.id
+  const rootId = menuNode.value?.id
   run(() => {
     if (isLibrary) lib.paste({ rootId, rel: '' })
     else lib.paste({ rootId: lib.activeRootId, rel })

@@ -171,6 +171,7 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 - 文本缩略图/读取/保存、查重 IPC、rotate/flop IPC 见 PLAN 对应条目；**新增 IPC 必须 main / preload(apply.mjs P4b) / api.js 三处同步**。
 - Pinia 响应式数组过 IPC 先 `[...arr]`（否则 structured clone 报错）。
 - `ImageGrid` 是 fragment 根（canvas+viewport）：App 传 class 会丢；布局让位用 CSS 变量；`loadImages` 会清选中，本地增量别调它。
+- **DirContextMenu 节点包装层**：`lib.openDirMenu(e, { rel, node, isLibrary?, absPath? })` 的 `menu.node` 是包装对象，实际节点在 `.node`。根文件操作（移出/重命名/导出/排序/复制/粘贴/查重）必须用 `menuNode = menu.node?.node || menu.node`；直接读 `menu.node.id` 会得到 undefined（曾导致「移出根文件」点击无反应）。
 - 图片/视频/网格/详情 URL 带 `?v=modify_time`；文本缩略图同；`file://` 带 query 可正常加载。
 - 内部移动/排序设 `suppressSyncUntil` / `suppressWaveUntil`；`_loadGen` 防过期加载。
 - `window.picrand` 是 contextBridge 只读对象：不能替换方法做 spy（会静默失败）。
