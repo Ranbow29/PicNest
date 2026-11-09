@@ -1856,6 +1856,21 @@ export const useLibrary = defineStore('library', {
       if (!paths.length) return { ok: false, error: '当前视图没有图片' }
       if (this.view === 'trash') return { ok: false, error: '回收站不支持手动排序' }
       const rid = this.activeRootId
+      const filtered = this.activeFilterCount() > 0 || !!this.searchQuery
+      const total = paths.length
+      /* 这个动作会真实改文件名（加 01_ 前缀），必须先确认 */
+      const ok = await this.askConfirm({
+        title: '应用为手动排序并重命名原文件？',
+        message: '会按当前显示顺序写入手动排序，并把文件真实重命名为 01_原名、02_原名…（按所在文件夹分组）。这会修改磁盘上的原始文件名。',
+        details: [
+          `共 ${total} 张${filtered ? '（当前筛选/搜索只处理这些）' : ''}`,
+          this.physicalOrder ? '物理排序开关：开' : '物理排序开关：关（本次仍会改名）',
+          '原有 01_ 前缀会被替换；改名不会自动写入 Windows 撤销记录，需要时可手动改回',
+        ],
+        confirmText: '应用并改名',
+        danger: true,
+      })
+      if (!ok) return { ok: false, canceled: true }
       const rootPath = String(this.tree?.rootPath || this.activeRoot?.path || '')
       const rootParts = rootPath.split(/[\\/]/).filter(Boolean)
       const groups = new Map()
@@ -1872,20 +1887,33 @@ export const useLibrary = defineStore('library', {
         if (!groups.has(rel)) groups.set(rel, [])
         groups.get(rel).push(p)
       }
-      let applied = 0, failed = 0
-      for (const [rel, list] of groups) {
-        try {
-          const r = await api.imagesReorder(rid, rel, list)
-          if (r?.ok) applied += list.length
-          else failed++
-        } catch { failed++ }
+      /* 物理排序 handler 会按目录分组改名，同时写 sort_order；失败再退回只写顺序 */
+      let pr = null
+      try { pr = await window.picrand.picnestPhysicalOrderImages(rid, paths) } catch { /* 静默 */ }
+      let applied = 0, failed = 0, renamed = 0
+      if (pr?.ok || pr?.map?.length) {
+        applied = total
+        renamed = pr.renamed || 0
+        failed = pr.failed || 0
+      } else {
+        for (const [rel, list] of groups) {
+          try {
+            const r = await api.imagesReorder(rid, rel, list)
+            if (r?.ok) applied += list.length
+            else failed++
+          } catch { failed++ }
+        }
       }
-      if (!applied) return { ok: false, error: '写入手动排序失败' }
+      if (!applied) return { ok: false, error: pr?.error || '写入手动排序失败' }
       this.sortMode = 'manual'
       localStorage.setItem('picnest.sortMode', 'manual')
       await this.loadImages()
-      this.showNote(`已将当前显示顺序应用为手动排序（${applied} 张${failed ? ` · 失败 ${failed}` : ''}）`)
-      return { ok: failed === 0, applied, failed }
+      if (renamed || pr?.ok) {
+        this.showNote(`已应用为手动排序并改名 ${renamed} 张${failed ? ` · 失败 ${failed}` : ''}`)
+      } else {
+        this.showNote(`已写入手动排序（改名未完成：${pr?.error || '物理排序不可用'}）`, [], 'error')
+      }
+      return { ok: failed === 0, applied, renamed, failed }
     },
     /* 图片拖动排序：仅文件夹视图；写入 sort_order 并切到手动排序 */
     canReorder() {

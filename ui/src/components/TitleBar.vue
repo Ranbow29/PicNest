@@ -213,7 +213,7 @@ function onKey(e) {
             <button v-for="o in SORTS" :key="o.key" class="vo-cell sm" :class="{ on: lib.sortMode === o.key }" @click="lib.setSort(o.key)">{{ o.label }}</button>
             <button class="vo-cell sm apply-manual"
                     :disabled="lib.sortMode === 'manual' || !lib.gridOrder.length || lib.view === 'trash'"
-                    :title="lib.sortMode === 'manual' ? '当前已经是手动排序' : '把当前显示顺序写成手动排序（只写 sort_order，不改文件名）'"
+                    :title="lib.sortMode === 'manual' ? '当前已经是手动排序' : '按当前显示顺序写入手动排序，并重命名原文件（会先确认）'"
                     @click="lib.applyGridOrderToManual()">{{ lib.sortMode === 'manual' ? '已是手动排序' : '应用为手动排序' }}</button>
           </div>
         </div>
