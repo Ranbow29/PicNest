@@ -276,7 +276,7 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 | `ui/src/components/DupFinder.vue` | 查重结果分组面板（精确/AI 页签、精确停止、AI 设置/预估、快捷保留、勾选、软删） |
 | `ui/src/components/HelpDialog.vue` | 顶栏 `?` 使用说明（排序前缀/清除方式重点、各功能与快捷键） |
 | `docs/PLUGIN.md` | 插件系统设计定稿 + 实现状态（theme/renderer 已实现；main/签名未做） |
-| `branding/` | Logo 概念底稿（A 巢照片 / B 巢鸮 / C N 标）、2048 PSD 模板、深色变体与尺寸预览；终稿**黑底 N 标**在 `final/`（PSD 母版 + 2048…16 PNG + ICO）；已接入窗口/任务栏图标（`app/_internal_data/icon.png`/`icon.ico`，旧件备份 `icon-old.*`）；exe 内嵌图标待 rcedit |
+| `branding/` | Logo 概念底稿（A 巢照片 / B 巢鸮 / C N 标）、2048 PSD 模板、深色变体与尺寸预览；终稿**黑底 N 标**在 `final/`（PSD 母版 + 2048…16 PNG + ICO；最终版 N 缩至 84%、黑边加大）；已接入窗口/任务栏图标（`app/_internal_data/icon.png`/`icon.ico`，旧件备份 `icon-old.*`）；exe 内嵌图标待 rcedit |
 | `ui/src/components/PluginManager.vue` · `ui/src/lib/plugins.js` | 插件库面板（已安装/仓库/文件夹安装/启停/卸载）· 主题注入 + 插件事件总线 |
 | `examples/plugins/` | 示例插件（mono-mint 主题、view-stats 沙箱面板）、registry.json、zip、开发指南 |
 | `ui/src/components/ConfirmDialog.vue` · `NamePromptDialog.vue` · `DuplicateDialog.vue` · `ImportResultCard.vue` · `TrashMenu.vue` · `TaskProgress.vue` | 确认/命名/录入三选一/结果卡/回收站菜单/长任务进度浮条 |
