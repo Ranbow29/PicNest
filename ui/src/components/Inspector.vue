@@ -78,7 +78,7 @@ watch(() => lib.selectedPath, async (p) => {
   loadedFor.value = p || ''
   if (!p) return
   try { meta.value = await window.picrand.picnestGetImageMeta(p) } catch { /* 静默 */ }
-})
+}, { immediate: true })
 let saveTimer = null
 function queueSave() {
   clearTimeout(saveTimer)
@@ -89,15 +89,17 @@ function queueSave() {
   }, 600)
 }
 
-/* 色板 */
+/* 色板：灯箱里的详情是另一个 Inspector 实例（新挂载）→ 必须 immediate 才能拿到当前选中项；
+   缓存里的空数组（ensurePalettes 对 SKIP/失败项标的）不能当作“已有色板”，否则永远显示 — */
 const palette = ref([])
 const paletteLoading = ref(false)
 watch(() => lib.selectedPath, async (p) => {
   palette.value = []
   if (!p) return
   if (isTextPath(p)) { paletteLoading.value = false; return } // 文本无色板，不白跑 IPC
-  if (lib.palettes[p]) {
-    palette.value = lib.palettes[p].slice(0, 9).map((c) => c.color
+  const cached = lib.palettes[p]
+  if (Array.isArray(cached) && cached.length) {
+    palette.value = cached.slice(0, 9).map((c) => c.color
       ? { color: c.color, ratio: c.ratio }
       : { color: [c.r, c.g, c.b], ratio: c.percent })
     paletteLoading.value = false
@@ -111,7 +113,7 @@ watch(() => lib.selectedPath, async (p) => {
     if (dom.length) lib.palettes[p] = dom.map((c) => ({ r: c.r, g: c.g, b: c.b, percent: c.percent }))
     palette.value = dom.slice(0, 9).map((c) => ({ color: [c.r, c.g, c.b], ratio: c.percent }))
   } catch { palette.value = [] } finally { paletteLoading.value = false }
-})
+}, { immediate: true })
 
 const sections = ref({ info: true, palette: true, rating: true, tags: true, folder: true, locate: true })
 const toggle = (k) => { sections.value[k] = !sections.value[k] }

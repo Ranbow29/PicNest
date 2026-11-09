@@ -78,19 +78,20 @@ onMounted(() => { nextTick(fitToWindow); window.addEventListener('keydown', onKe
 onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 
 function onWheel(e) {
-  if (lib.viewer.cropMode) return // 裁切中禁缩放：图片矩形一变，裁剪框坐标体系就失配
   if (kind.value === 'text') return // 文本编辑器里滚轮 = 滚动正文
   e.preventDefault()
-    const k = e.deltaY < 0 ? 1.12 : 1 / 1.12
+  const k = e.deltaY < 0 ? 1.12 : 1 / 1.12
   lib.viewer.scale = Math.min(8, Math.max(0.05, lib.viewer.scale * k))
 }
 function onDown(e) {
-  if (lib.viewer.cropMode || kind.value !== 'image') return // 文本/视频不拖拽平移
+  if (kind.value !== 'image') return // 文本/视频不拖拽平移
   if (e.button !== 0) return // 右键交给菜单
+  /* 裁剪中：落在选区/手柄上交给裁剪层；**选区外保留平移**（用户规格） */
+  if (lib.viewer.cropMode && (cropAction.value || insideRect(e) || handleAt(e))) return
   dragging.value = true; lastX = e.clientX; lastY = e.clientY
 }
 function onMove(e) {
-  if (lib.viewer.cropMode) return // 裁切跟踪由 window 级监听独占（防双重处理）
+  if (lib.viewer.cropMode && cropAction.value) return // 裁剪框拖拽由 window 级监听独占
   if (!dragging.value) return
   lib.viewer.tx += e.clientX - lastX
   lib.viewer.ty += e.clientY - lastY
@@ -814,8 +815,9 @@ function onKey(e) {
 .text-loading { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--text-2); font-size: 13px; }
 .text-note { color: #c25a4d; font-size: 12px; }
 
-/* 专业裁切层 */
-.crop-layer { position: fixed; z-index: 30; cursor: default; }
+/* 专业裁切层：选区外保留平移（grab），选区内 move，手柄 resize */
+.crop-layer { position: fixed; z-index: 30; cursor: grab; }
+.crop-layer:active { cursor: grabbing; }
 .crop-shade { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.55); }
 .crop-box { position: absolute; border: 1.5px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.4); cursor: move; }
 .grid-line { position: absolute; background: rgba(255, 255, 255, 0.35); pointer-events: none; }
