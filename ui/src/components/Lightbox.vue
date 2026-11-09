@@ -3,6 +3,7 @@ import { computed, ref, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useLibrary } from '../stores/library'
 import { fileUrl, api } from '../api'
 import { isTextPath, isVideoPath, extOf } from '../lib/fileKinds'
+import CanvasStage from './CanvasStage.vue'
 
 // 大图工作区：正文内的编辑舞台（顶栏由 TitleBar 按模式变形；底部悬浮工具条 ZCode 输入口风格）
 const lib = useLibrary()
@@ -18,6 +19,10 @@ function stageTransform(tx, ty) {
     + (lib.viewer.flopX ? ' scaleX(-1)' : '')
 }
 function applyPan(tx, ty) {
+  if (canvasMode.value && canvasStage.value?.drawAt) {
+    canvasStage.value.drawAt(tx, ty, lib.viewer.scale)
+    return
+  }
   const el = imgEl.value
   if (el) el.style.transform = stageTransform(tx, ty)
 }
@@ -154,6 +159,31 @@ watch(() => lib.lightbox.path, async (p) => {
   } catch (e) { /* 预览失败不阻塞原图 */ }
 }, { immediate: true })
 
+/* 图片舞台：正常查看走 canvas（只画可视区域）；裁剪/旋转/翻转继续用 <img> 以复用既有坐标逻辑 */
+const canvasStage = ref(null)
+const canvasMode = computed(() => kind.value === 'image' && !lib.viewer.cropMode
+  && lib.viewer.rot % 360 === 0 && !lib.viewer.flopX && !stageDead.value
+  && extOf(lib.lightbox.path) !== '.gif' && extOf(lib.lightbox.path) !== '.svg')
+const canvasFullSrc = computed(() => {
+  const img = meta.value
+  if (!img) return ''
+  if (isPsd.value) return psdFull.value ? fileUrl(psdFull.value) + '?v=' + (img.modify_time || 0) : ''
+  return url.value
+})
+const canvasFallbackSrc = computed(() => {
+  const img = meta.value
+  return img?.thumbnail_path && img.thumbnail_path !== 'SKIP'
+    ? fileUrl(img.thumbnail_path) + '?v=' + (img.modify_time || 0) : ''
+})
+const canvasPreviewSrc = computed(() => {
+  const img = meta.value
+  if (previewPath.value && !previewError.value) {
+    return fileUrl(previewPath.value) + '?v=' + (img?.modify_time || 0)
+  }
+  return canvasFallbackSrc.value || canvasFullSrc.value
+})
+function onCanvasError() { stageDead.value = true }
+
 function fitToWindow() {
   if (!stageEl.value || kind.value === 'text') return
   let iw = 0, ih = 0
@@ -183,6 +213,7 @@ function dblClick() {
   if (Math.abs(lib.viewer.scale - 1) < 0.02) fitToWindow()
   else oneToOne()
 }
+function onViewerDblclick() { if (canvasMode.value) dblClick() }
 
 watch(() => lib.viewer.fitNonce, () => nextTick(fitToWindow))
 /* 缩放/平移/详情开合时：裁剪层跟随重映射（保持选区在图片上的相对位置） */
@@ -726,6 +757,8 @@ function onKey(e) {
     ref="stageEl" class="viewer"
     @wheel="onWheel" @contextmenu="onContext"
     @mousedown="onDown" @mousemove="onMove" @mouseup="onUp" @mouseleave="onUp"
+    @dblclick="onViewerDblclick"
+    :style="canvasMode ? { cursor: dragging ? 'grabbing' : 'grab' } : undefined"
   >
     <!-- 视频：自绘控制条（无原生 UI） -->
     <video
@@ -763,6 +796,12 @@ function onKey(e) {
       />
       <div v-if="textState.note" class="text-note">{{ textState.note }}</div>
     </div>
+    <CanvasStage v-if="canvasMode"
+      ref="canvasStage" :class="{ gray: lib.grayscaleMode }"
+      :preview-src="canvasPreviewSrc" :full-src="canvasFullSrc" :fallback-src="canvasFallbackSrc"
+      :width="meta?.width || 0" :height="meta?.height || 0"
+      :scale="lib.viewer.scale" :tx="lib.viewer.tx" :ty="lib.viewer.ty"
+      :use-full="useFull" @error="onCanvasError" />
     <img
       v-else-if="!stageDead"
       ref="imgEl" :src="stageUrl" class="stage" :class="{ gray: lib.grayscaleMode }" draggable="false"
@@ -913,6 +952,7 @@ function onKey(e) {
 /* ---- 视频：自绘控制条 ---- */
 .stage.video { max-width: none; background: #000; cursor: pointer; }
 .stage.gray { filter: grayscale(1); }
+.viewer :deep(.canvas-stage.gray) { filter: grayscale(1); }
 .video-dock { gap: 6px; }
 .video-dock .dock-btn.play { color: var(--accent); font-size: 12px; }
 .vtime { font-family: Consolas, monospace; font-size: 11px; color: var(--text); min-width: 34px; text-align: center; }
