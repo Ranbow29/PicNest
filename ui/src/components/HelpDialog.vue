@@ -3,6 +3,23 @@
 import { useLibrary } from '../stores/library'
 
 const lib = useLibrary()
+
+import { ref, onMounted } from 'vue'
+import { api } from '../api.js'
+
+const appVer = ref('0.1.0')
+onMounted(async () => {
+  try {
+    const r = await api.appVersion()
+    if (r?.version) appVer.value = r.version
+  } catch (e) {}
+})
+
+function triggerCheckUpdate() {
+  lib.closeHelp()
+  window.dispatchEvent(new CustomEvent('picnest-check-update-trigger'))
+}
+
 </script>
 
 <template>
@@ -206,6 +223,10 @@ const lib = useLibrary()
           </section>
 
           <div class="hp-foot">
+            <div class="hp-version-row">
+              <span class="hp-ver-text">PicNest 图巢 v{{ appVer }} · 基于 GPL-3.0 纯净开源</span>
+              <button class="hp-update-btn" @click="triggerCheckUpdate">🚀 检查新版本</button>
+            </div>
             提示：所有「删除」默认进图巢回收站；「应用为手动排序」和「排序同步文件名」是真实的磁盘改名操作，确认前请看清提示。
           </div>
         </div>
@@ -235,4 +256,33 @@ ol li { margin: 3px 0; }
 code { padding: 0 4px; border-radius: 4px; background: var(--bg-2); font-family: Consolas, monospace; font-size: 11px; color: var(--text); }
 .hp-keys { columns: 2; column-gap: 24px; }
 .hp-foot { margin-top: 18px; padding-top: 10px; border-top: 1px dashed var(--border); font-size: 11px; color: var(--text-2); line-height: 1.7; }
+
+.hp-version-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px dashed var(--border);
+}
+.hp-ver-text {
+  font-weight: 600;
+  color: var(--accent);
+}
+.hp-update-btn {
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  border-radius: 6px;
+  border: 1px solid var(--accent);
+  background: var(--accent-weak, rgba(212, 154, 55, 0.1));
+  color: var(--accent);
+  cursor: pointer;
+  transition: all 0.16s ease;
+}
+.hp-update-btn:hover {
+  background: var(--accent);
+  color: #fff;
+}
+
 </style>

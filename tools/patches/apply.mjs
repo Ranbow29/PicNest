@@ -1,4 +1,4 @@
-﻿// PicNest 主进程/preload 补丁脚本（幂等，改前自动备份 .bak，重放安全）
+// PicNest 主进程/preload 补丁脚本（幂等，改前自动备份 .bak，重放安全）
 // 用法: node tools/patches/apply.mjs
 import fs from 'node:fs'
 import path from 'node:path'
@@ -40,14 +40,14 @@ const patches = [
     to: 'const isDev = process.env.PICNEST_DEV === "1" || !electron.app.isPackaged; /* PicNest:P1a */',
   },
   {
-    id: 'P1b', desc: '正式模式数据目录 → AppData/Roaming/PicNest（隔离 Steam 版数据）',
+    id: 'P1b', desc: '正式模式数据目录 → AppData/Roaming/PicNest（支持 PICNEST_USER_DATA 覆盖）',
     from: 'const dataDir = isDev ? path.join(process.cwd(), "_internal_data") : path.join(electron.app.getPath("userData"));',
-    to: 'const dataDir = isDev ? path.join(process.cwd(), "_internal_data") : path.join(electron.app.getPath("appData"), "PicNest"); /* PicNest:P1b */',
+    to: 'const dataDir = process.env.PICNEST_USER_DATA || (isDev ? path.join(process.cwd(), "_internal_data") : path.join(electron.app.getPath("appData"), "PicNest")); /* PicNest:P1b */',
   },
   {
-    id: 'P1c', desc: 'userData 在单实例锁之前指向 PicNest（避免与运行中的 PicRand 抢锁）',
+    id: 'P1c', desc: 'userData 在单实例锁之前指向 PicNest（支持 PICNEST_USER_DATA 隔离测试）',
     from: 'const gotLock = electron.app.requestSingleInstanceLock();',
-    to: 'electron.app.setPath("userData", path.join(electron.app.getPath("appData"), "PicNest")); /* PicNest:P1c */\nconst gotLock = electron.app.requestSingleInstanceLock();',
+    to: 'electron.app.setPath("userData", process.env.PICNEST_USER_DATA || path.join(electron.app.getPath("appData"), "PicNest")); /* PicNest:P1c */\nconst gotLock = electron.app.requestSingleInstanceLock();',
   },
   {
     id: 'P2', desc: '摘除 Steam 状态上报（无 DRM 门禁）',
@@ -240,18 +240,21 @@ for (const p of patches) {
   ok++; console.log(`[ok]   ${p.id} ${p.desc}`)
 }
 
-/* ---- P11f: 应用 package.json 名称 → PicNest（任务栏/系统显示名） ---- */
+/* ---- P11f: 应用 package.json 名称与版本 → PicNest（任务栏/系统显示名/自动更新版本真源） ---- */
 try {
+  const ROOTPKG = path.join(ROOT, 'package.json')
+  const rootVer = fs.existsSync(ROOTPKG) ? (JSON.parse(fs.readFileSync(ROOTPKG, 'utf8')).version || '0.1.0') : '0.1.0'
   const APPPKG = path.join(ROOT, 'app', 'resources', 'app', 'package.json')
   const pkg = JSON.parse(fs.readFileSync(APPPKG, 'utf8'))
-  const changed = pkg.name !== 'picnest' || pkg.productName !== 'PicNest' || pkg.description !== 'PicNest 图巢' || pkg.author !== 'PicNest'
+  const changed = pkg.name !== 'picnest' || pkg.productName !== 'PicNest' || pkg.description !== 'PicNest 图巢' || pkg.author !== 'PicNest' || pkg.version !== rootVer
   pkg.name = 'picnest'
   pkg.productName = 'PicNest'
   pkg.description = 'PicNest 图巢'
   pkg.author = 'PicNest'
+  pkg.version = rootVer
   if (changed) {
     fs.writeFileSync(APPPKG, JSON.stringify(pkg, null, 2))
-    console.log('[ok]   P11f package.json 应用名 → PicNest')
+    console.log(`[ok]   P11f package.json 应用名 → PicNest (v${rootVer})`)
   }
 } catch (e) { console.warn('[skip] P11f package.json:', e.message) }
 
@@ -392,6 +395,14 @@ const bridge = [
   '  picnestRemoveRoot: (id) => electron.ipcRenderer.invoke("picnest-remove-root", id),',
   '  picnestCollectSetRoot: (id) => electron.ipcRenderer.invoke("picnest-collect-set-root", id),',
   '  picnestCollectInfo: () => electron.ipcRenderer.invoke("picnest-collect-info"),',
+  '  picnestAppVersion: () => electron.ipcRenderer.invoke("picnest-app-version"),',
+  '  picnestOpenExternal: (url) => electron.ipcRenderer.invoke("picnest-open-external", url),',
+  '  picnestCheckUpdate: (opts) => electron.ipcRenderer.invoke("picnest-check-update", opts),',
+  '  picnestDownloadUpdate: (opts) => electron.ipcRenderer.invoke("picnest-download-update", opts),',
+  '  picnestCancelDownloadUpdate: () => electron.ipcRenderer.invoke("picnest-cancel-download-update"),',
+  '  picnestQuitAndInstall: (opts) => electron.ipcRenderer.invoke("picnest-quit-and-install", opts),',
+  '  onPicnestUpdateProgress: (cb) => { const fn = (_e, d) => cb(d); electron.ipcRenderer.on("picnest-update-download-progress", fn); return () => electron.ipcRenderer.removeListener("picnest-update-download-progress", fn); },',
+  '  onPicnestUpdateStatus: (cb) => { const fn = (_e, d) => cb(d); electron.ipcRenderer.on("picnest-update-status", fn); return () => electron.ipcRenderer.removeListener("picnest-update-status", fn); },',
   '  picnestRenameDir: (oldPath, newName, oldRel, parentRel) => electron.ipcRenderer.invoke("picnest-rename-dir", oldPath, newName, oldRel, parentRel),',
   '  picnestDirSort: (parentRel, parentAbsPath, mode) => electron.ipcRenderer.invoke("picnest-dir-sort", parentRel, parentAbsPath, mode),',
   '  picnestDirSortRecursive: (rootAbsPath, rootRel, mode) => electron.ipcRenderer.invoke("picnest-dir-sort-recursive", rootAbsPath, rootRel, mode),',

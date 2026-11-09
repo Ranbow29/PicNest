@@ -4133,4 +4133,518 @@ if (electron.app.isReady()) {
 }
 /* ==== /M6 采集 ==== */
 
+/* ==== M8 自动更新模块 (GitHub Releases 检测 / SHA-256 校验 / 异步解压 / 独立跳板热替换) ==== */
+let _picnestCurrentDownloadAbort = null;
+
+// 动态读取当前应用版本号（优先 app/resources/app/package.json，拒绝硬编码）
+function picnestGetCurrentVersion() {
+  try {
+    const pkgPath = path.join(__dirname, "../../package.json");
+    if (fs.existsSync(pkgPath)) {
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+      if (pkg.version && pkg.version !== "2.77.0") return String(pkg.version).trim();
+    }
+  } catch (e) {}
+  try {
+    const v = electron.app.getVersion();
+    if (v && v !== "2.77.0") return String(v).trim();
+  } catch (e) {}
+  return "0.1.0";
+}
+
+// 语义化版本比对: v1 > v2 返回 1, v1 < v2 返回 -1, 相等返回 0（支持 -alpha/-beta 预发布比较）
+function picnestCompareSemver(v1, v2) {
+  const clean1 = String(v1 || "").trim().replace(/^v/i, "");
+  const clean2 = String(v2 || "").trim().replace(/^v/i, "");
+  const [core1, pre1] = clean1.split("-", 2);
+  const [core2, pre2] = clean2.split("-", 2);
+  const p1 = core1.split(".").map(x => parseInt(x, 10) || 0);
+  const p2 = core2.split(".").map(x => parseInt(x, 10) || 0);
+  for (let i = 0; i < Math.max(p1.length, p2.length); i++) {
+    const n1 = p1[i] || 0;
+    const n2 = p2[i] || 0;
+    if (n1 > n2) return 1;
+    if (n1 < n2) return -1;
+  }
+  if (!pre1 && pre2) return 1;  // 正式版 > 同号预发布版
+  if (pre1 && !pre2) return -1;
+  if (pre1 && pre2 && pre1 !== pre2) return pre1 > pre2 ? 1 : -1;
+  return 0;
+}
+
+// 从 Release 正文或资产 digest 中提取 SHA-256
+function picnestExtractSha256(release, asset) {
+  if (asset && typeof asset.digest === "string" && asset.digest.toLowerCase().startsWith("sha256:")) {
+    const d = asset.digest.slice(7).trim();
+    if (/^[a-fA-F0-9]{64}$/.test(d)) return d.toUpperCase();
+  }
+  const body = String(release?.body || "");
+  const m = body.match(/\b([a-fA-F0-9]{64})\b/);
+  return m ? m[1].toUpperCase() : null;
+}
+
+// 安全打开外部链接（供浏览器手动下载 Release）
+electron.ipcMain.handle("picnest-open-external", async (_event, url) => {
+  try {
+    const u = String(url || "").trim();
+    if (!/^https?:\/\//i.test(u)) return { ok: false, error: "仅允许打开 HTTP/HTTPS 链接" };
+    await electron.shell.openExternal(u);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: String(err?.message || err) };
+  }
+});
+
+// 获取当前版本号
+electron.ipcMain.handle("picnest-app-version", () => ({
+  ok: true,
+  version: picnestGetCurrentVersion(),
+}));
+
+// 1. 检查更新 IPC
+electron.ipcMain.handle("picnest-check-update", async (_event, opts = {}) => {
+  const currentVer = opts?.currentVersionOverride || picnestGetCurrentVersion();
+  const repo = "Ranbow29/PicNest";
+  const apiUrl = opts?.apiUrl || process.env.PICNEST_UPDATE_API || ("https://api.github.com/repos/" + repo + "/releases/latest");
+  const fallbackHtmlUrl = "https://github.com/" + repo + "/releases";
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), Number(opts?.timeoutMs) || 10000);
+
+    let res;
+    try {
+      res = await fetch(apiUrl, {
+        headers: {
+          "User-Agent": "PicNest-Desktop-App/" + currentVer,
+          "Accept": "application/vnd.github.v3+json"
+        },
+        signal: controller.signal
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    if (!res.ok) {
+      if (res.status === 404) {
+        return {
+          ok: true,
+          hasUpdate: false,
+          currentVersion: currentVer,
+          latestVersion: currentVer,
+          htmlUrl: fallbackHtmlUrl,
+          message: "暂未发布正式版本"
+        };
+      }
+      return {
+        ok: false,
+        currentVersion: currentVer,
+        htmlUrl: fallbackHtmlUrl,
+        error: "GitHub API 响应异常 (HTTP " + res.status + ")"
+      };
+    }
+
+    const release = await res.json();
+    const remoteTag = String(release.tag_name || "").trim();
+    const cleanRemoteVer = remoteTag.replace(/^v/i, "").trim() || currentVer;
+    const hasUpdate = picnestCompareSemver(cleanRemoteVer, currentVer) > 0;
+
+    let asset = null;
+    if (Array.isArray(release.assets)) {
+      asset = release.assets.find(a => /PicNest-.*\.zip$/i.test(a.name) && !/extension/i.test(a.name))
+           || release.assets.find(a => /\.zip$/i.test(a.name) && !/extension/i.test(a.name))
+           || release.assets[0];
+    }
+
+    const expectedSha256 = picnestExtractSha256(release, asset);
+
+    return {
+      ok: true,
+      hasUpdate,
+      currentVersion: currentVer,
+      latestVersion: cleanRemoteVer,
+      tag: remoteTag,
+      releaseName: release.name || remoteTag,
+      releaseNotes: release.body || "",
+      publishedAt: release.published_at || "",
+      htmlUrl: release.html_url || fallbackHtmlUrl,
+      assetUrl: asset ? asset.browser_download_url : null,
+      assetName: asset ? asset.name : null,
+      assetSize: asset ? asset.size : 0,
+      expectedSha256,
+    };
+  } catch (err) {
+    const isAbort = err?.name === "AbortError";
+    return {
+      ok: false,
+      currentVersion: currentVer,
+      htmlUrl: fallbackHtmlUrl,
+      error: isAbort ? "连接更新服务器超时，请检查网络或代理设置" : String(err?.message || err)
+    };
+  }
+});
+
+// 2. 带进度流式下载更新包（写入 .part + 流式 SHA-256 校验 + 完整刷盘保证）
+electron.ipcMain.handle("picnest-download-update", async (event, { url, fileName, expectedSha256 } = {}) => {
+  if (!url) return { ok: false, error: "下载地址为空" };
+  const targetDir = path.join(electron.app.getPath("temp"), "picnest-update");
+  if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
+
+  const safeName = path.basename(String(fileName || "PicNest-update.zip")).replace(/[<>:"/\\|?*]/g, "_");
+  const targetFile = path.join(targetDir, safeName);
+  const partFile = targetFile + ".part";
+
+  if (_picnestCurrentDownloadAbort) {
+    try { _picnestCurrentDownloadAbort.abort(); } catch (e) {}
+    _picnestCurrentDownloadAbort = null;
+  }
+
+  let fileStream = null;
+  try {
+    const controller = new AbortController();
+    _picnestCurrentDownloadAbort = controller;
+
+    const res = await fetch(url, {
+      headers: { "User-Agent": "PicNest-Desktop-App/" + picnestGetCurrentVersion() },
+      signal: controller.signal
+    });
+
+    if (!res.ok) {
+      _picnestCurrentDownloadAbort = null;
+      return { ok: false, error: "下载服务器响应失败 (HTTP " + res.status + ")" };
+    }
+
+    const totalBytes = parseInt(res.headers.get("content-length") || "0", 10);
+    fileStream = fs.createWriteStream(partFile, { flags: "w" });
+    const hash = crypto.createHash("sha256");
+
+    let streamErr = null;
+    fileStream.on("error", (e) => { streamErr = e; });
+
+    let receivedBytes = 0;
+    let lastTime = Date.now();
+    let lastBytes = 0;
+    let currentSpeed = 0;
+
+    const reader = res.body.getReader();
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (streamErr) throw streamErr;
+
+      const buf = Buffer.from(value);
+      hash.update(buf);
+      if (!fileStream.write(buf)) {
+        await new Promise(resolve => fileStream.once("drain", resolve));
+      }
+      receivedBytes += buf.length;
+
+      const now = Date.now();
+      const elapsed = (now - lastTime) / 1000;
+      if (elapsed >= 0.18) {
+        currentSpeed = Math.round((receivedBytes - lastBytes) / elapsed);
+        lastTime = now;
+        lastBytes = receivedBytes;
+
+        const percent = totalBytes > 0 ? Math.min(99, Math.round((receivedBytes / totalBytes) * 100)) : 0;
+        try {
+          if (!event.sender.isDestroyed()) {
+            event.sender.send("picnest-update-download-progress", {
+              received: receivedBytes,
+              total: totalBytes,
+              percent,
+              speed: currentSpeed,
+            });
+          }
+        } catch (e) {}
+      }
+    }
+
+    // 严格等待文件流刷盘并关闭文件句柄
+    await new Promise((resolve, reject) => {
+      fileStream.once("error", reject);
+      fileStream.end(() => resolve());
+    });
+    fileStream = null;
+    _picnestCurrentDownloadAbort = null;
+
+    if (totalBytes > 0 && receivedBytes !== totalBytes) {
+      return { ok: false, error: `下载流不完整（已接收 ${receivedBytes} / 应接收 ${totalBytes} 字节）` };
+    }
+
+    const actualSha256 = hash.digest("hex").toUpperCase();
+    if (expectedSha256 && /^[A-F0-9]{64}$/i.test(expectedSha256)) {
+      if (actualSha256 !== expectedSha256.toUpperCase()) {
+        return {
+          ok: false,
+          error: `SHA-256 完整性校验失败（期望 ${expectedSha256.slice(0, 8)}...，实际 ${actualSha256.slice(0, 8)}...）`
+        };
+      }
+    }
+
+    fs.renameSync(partFile, targetFile);
+
+    try {
+      if (!event.sender.isDestroyed()) {
+        event.sender.send("picnest-update-download-progress", {
+          received: receivedBytes,
+          total: totalBytes || receivedBytes,
+          percent: 100,
+          speed: 0,
+        });
+      }
+    } catch (e) {}
+
+    return { ok: true, filePath: targetFile, sha256: actualSha256, size: receivedBytes };
+  } catch (err) {
+    _picnestCurrentDownloadAbort = null;
+    if (fileStream) {
+      try { fileStream.destroy(); } catch (e) {}
+    }
+    const isAbort = err?.name === "AbortError";
+    return {
+      ok: false,
+      cancelled: isAbort,
+      error: isAbort ? "已取消下载" : String(err?.message || err)
+    };
+  }
+});
+
+// 取消下载
+electron.ipcMain.handle("picnest-cancel-download-update", () => {
+  if (_picnestCurrentDownloadAbort) {
+    try { _picnestCurrentDownloadAbort.abort(); } catch (e) {}
+    _picnestCurrentDownloadAbort = null;
+    return { ok: true };
+  }
+  return { ok: false };
+});
+
+// 3. 异步解压校验 + 原地覆盖并重启 (独立跳板脚本)
+electron.ipcMain.handle("picnest-quit-and-install", async (event, { zipPath, targetDirOverride, exeNameOverride, noQuitForTest, noRestart } = {}) => {
+  const sendStage = (stage, text) => {
+    try {
+      if (event?.sender && !event.sender.isDestroyed()) {
+        event.sender.send("picnest-update-status", { stage, text });
+      }
+    } catch (e) {}
+  };
+
+  try {
+    if (!zipPath || !fs.existsSync(zipPath)) {
+      return { ok: false, error: "未找到下载的更新压缩包，请重新下载" };
+    }
+
+    sendStage("extracting", "正在异步解压并校验更新包...");
+
+    const tempDir = path.join(electron.app.getPath("temp"), "picnest-update");
+    const extractedDir = path.join(tempDir, "extracted-" + Date.now());
+    fs.mkdirSync(extractedDir, { recursive: true });
+
+    // 1. 使用 .NET ZipFile::ExtractToDirectory 异步极速解压（通过环境变量传路径，零转义/编码风险）
+    const psExtractScript = [
+      "$ErrorActionPreference = 'Stop'",
+      "$ProgressPreference = 'SilentlyContinue'",
+      "Add-Type -AssemblyName System.IO.Compression.FileSystem",
+      "[System.IO.Compression.ZipFile]::ExtractToDirectory($env:PICNEST_ZIP_SRC, $env:PICNEST_ZIP_DEST)"
+    ].join("; ");
+
+    await new Promise((resolve, reject) => {
+      child_process.execFile(
+        "powershell.exe",
+        ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", psExtractScript],
+        {
+          windowsHide: true,
+          timeout: 180000,
+          env: { ...process.env, PICNEST_ZIP_SRC: zipPath, PICNEST_ZIP_DEST: extractedDir }
+        },
+        (err, _stdout, stderr) => {
+          if (err) reject(new Error(stderr ? String(stderr).trim() : err.message));
+          else resolve();
+        }
+      );
+    });
+
+    // 2. 检查解压内容：若存在顶层 PicNest 文件夹，则以该子文件夹为源
+    let actualSource = extractedDir;
+    const subPicNest = path.join(extractedDir, "PicNest");
+    if (fs.existsSync(subPicNest) && fs.statSync(subPicNest).isDirectory()) {
+      actualSource = subPicNest;
+    } else {
+      // 如果只有一个顶层子目录且包含 PicNest.exe 或 resources，也自动解包一层
+      const topItems = fs.readdirSync(extractedDir);
+      if (topItems.length === 1) {
+        const singleSub = path.join(extractedDir, topItems[0]);
+        if (fs.statSync(singleSub).isDirectory()) {
+          actualSource = singleSub;
+        }
+      }
+    }
+
+    // 3. 结构完整性预检：确保包含可执行文件或 resources/app，防止坏包覆盖导致应用损坏
+    const hasExe = fs.existsSync(path.join(actualSource, "PicNest.exe"));
+    const hasResources = fs.existsSync(path.join(actualSource, "resources", "app"));
+    if (!hasExe && !hasResources) {
+      return { ok: false, error: "更新包结构校验未通过（缺少 PicNest.exe 或 resources/app），已中止替换" };
+    }
+
+    // 目标便携程序目录
+    const appExe = electron.app.getPath("exe");
+    const appDir = targetDirOverride || path.dirname(appExe);
+    const exeName = exeNameOverride || path.basename(appExe);
+
+    sendStage("restarting", "正在启动热替换跳板并重启图巢...");
+
+    // 4. 生成带 UTF-8 BOM 的 PowerShell 独立跳板脚本（兼容中文路径与 PowerShell 5.1）
+    const scriptPath = path.join(tempDir, "swap-and-restart.ps1");
+    const logPath = path.join(tempDir, "update-swap.log");
+    const scriptContent = "\uFEFF" + [
+      'param(',
+      '    [int]$ParentPid,',
+      '    [string]$SourceDir,',
+      '    [string]$TargetDir,',
+      '    [string]$ExeName,',
+      '    [string]$LogFile,',
+      '    [int]$ShouldRestart = 1',
+      ')',
+      '',
+      'function Write-UpdateLog([string]$msg) {',
+      '    $ts = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss.fff")',
+      '    Add-Content -LiteralPath $LogFile -Value "[$ts] $msg" -Encoding UTF8 -ErrorAction SilentlyContinue',
+      '}',
+      '',
+      'Write-UpdateLog "Jump script started. ParentPid=$ParentPid SourceDir=$SourceDir TargetDir=$TargetDir ExeName=$ExeName"',
+      '',
+      '# 1. 轮询等待原主进程退出',
+      '$waited = 0',
+      'while ($ParentPid -gt 0 -and $waited -lt 15) {',
+      '    $proc = Get-Process -Id $ParentPid -ErrorAction SilentlyContinue',
+      '    if (-not $proc -or $proc.HasExited) { break }',
+      '    Start-Sleep -Milliseconds 250',
+      '    $waited += 0.25',
+      '}',
+      'Write-UpdateLog "Parent process exited after ${waited}s"',
+      '',
+      '# 2. 确保目标目录下所有残余子进程 (GPU / Renderer / Utility) 释放句柄',
+      '$targetNorm = [System.IO.Path]::GetFullPath($TargetDir).TrimEnd("\\").ToLowerInvariant()',
+      '$subWaited = 0',
+      'while ($subWaited -lt 6) {',
+      '    $lockedProcs = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {',
+      '        try {',
+      '            $pPath = $_.MainModule.FileName',
+      '            $pPath -and $pPath.ToLowerInvariant().StartsWith($targetNorm + "\\")',
+      '        } catch { $false }',
+      '    })',
+      '    if ($lockedProcs.Count -eq 0) { break }',
+      '    if ($subWaited -ge 3) {',
+      '        foreach ($lp in $lockedProcs) {',
+      '            Write-UpdateLog "Force stopping lingering process pid=$($lp.Id)"',
+      '            Stop-Process -Id $lp.Id -Force -ErrorAction SilentlyContinue',
+      '        }',
+      '    }',
+      '    Start-Sleep -Milliseconds 300',
+      '    $subWaited += 0.3',
+      '}',
+      '',
+      'Start-Sleep -Milliseconds 250',
+      '',
+      '# 3. 带重试循环地覆盖复制新版本文件 (严格保护 _internal_data)',
+      '$items = Get-ChildItem -LiteralPath $SourceDir -Force',
+      'foreach ($item in $items) {',
+      '    if ($item.Name -eq "_internal_data") { continue }',
+      '    $ok = $false',
+      '    for ($retry = 1; $retry -le 6; $retry++) {',
+      '        try {',
+      '            Copy-Item -LiteralPath $item.FullName -Destination $TargetDir -Recurse -Force -ErrorAction Stop',
+      '            $ok = $true',
+      '            break',
+      '        } catch {',
+      '            Write-UpdateLog "Retry $retry copying $($item.Name): $($_.Exception.Message)"',
+      '            Start-Sleep -Milliseconds 400',
+      '        }',
+      '    }',
+      '    if (-not $ok) {',
+      '        Write-UpdateLog "Fallback copy for $($item.Name)"',
+      '        Copy-Item -LiteralPath $item.FullName -Destination $TargetDir -Recurse -Force -ErrorAction SilentlyContinue',
+      '    }',
+      '}',
+      'Write-UpdateLog "All files copied successfully."',
+      '',
+      '# 4. 重新拉起 PicNest 新版本',
+      'if ($ShouldRestart -eq 1) {',
+      '    $newExe = Join-Path $TargetDir $ExeName',
+      '    if (Test-Path -LiteralPath $newExe) {',
+      '        Write-UpdateLog "Launching new executable: $newExe"',
+      '        Start-Process -FilePath $newExe -WorkingDirectory $TargetDir',
+      '    } else {',
+      '        Write-UpdateLog "Executable not found: $newExe"',
+      '    }',
+      '}',
+      '',
+      '# 5. 延迟清理临时解压目录（优先移入回收站）',
+      'Start-Sleep -Seconds 2',
+      'try {',
+      '    Add-Type -AssemblyName Microsoft.VisualBasic',
+      '    if (Test-Path -LiteralPath $SourceDir) {',
+      '        [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory($SourceDir, "OnlyErrorDialogs", "SendToRecycleBin")',
+      '    }',
+      '} catch {}',
+      'Write-UpdateLog "Update completed."',
+      ''
+    ].join('\r\n');
+
+    fs.writeFileSync(scriptPath, scriptContent, "utf8");
+
+    if (noQuitForTest) {
+      return {
+        ok: true,
+        scriptPath,
+        actualSource,
+        targetDir: appDir,
+        exeName,
+        logPath,
+      };
+    }
+
+    // 5. 以 detached 模式启动跳板进程
+    const child = child_process.spawn("powershell.exe", [
+      "-NoProfile",
+      "-NonInteractive",
+      "-WindowStyle", "Hidden",
+      "-ExecutionPolicy", "Bypass",
+      "-File", scriptPath,
+      "-ParentPid", String(process.pid),
+      "-SourceDir", actualSource,
+      "-TargetDir", appDir,
+      "-ExeName", exeName,
+      "-LogFile", logPath,
+      "-ShouldRestart", noRestart ? "0" : "1"
+    ], {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true
+    });
+    child.unref();
+
+    // 6. 穿透 P13a allowClose 托盘拦截，释放所有句柄并彻底退出主进程
+    setTimeout(() => {
+      try { allowClose = true; } catch (e) {}
+      try { if (typeof picnestCollectHttp !== "undefined" && picnestCollectHttp) picnestCollectHttp.close(); } catch (e) {}
+      try { if (typeof tray !== "undefined" && tray) { tray.destroy(); tray = null; } } catch (e) {}
+      try { if (typeof closeDatabase === "function") closeDatabase(); } catch (e) {}
+      try { electron.app.quit(); } catch (e) {}
+      setTimeout(() => {
+        try { electron.app.exit(0); } catch (e) { process.exit(0); }
+      }, 400);
+    }, 250);
+
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: String(err?.message || err) };
+  }
+});
+/* ==== /M8 自动更新模块 ==== */
+
+
 /* ==== /PicNest:P4 ==== */
