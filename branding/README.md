@@ -55,13 +55,18 @@
 
 ## 终稿方向：黑底 N 标（`final/`）
 
-最终以你最新保存的 `PicNest-logo-template.psd` 可见层合成结果为准：**纯白 N + 更大的浅金色蛋点 + 黑底圆角 tile**（N 底部保留了你在 PSD 里画的分隔缺口）。按你后来的要求，N 组再缩到 **76%**（黑边进一步加大）；PSD 母版保持原样。仓库保存了这份 PSD 原件：
+最终以你最新保存的 `PicNest-logo-template.psd` 可见层合成结果为准：**纯白 N + 更大的浅金色蛋点 + 纯黑圆角 tile**（N 底部保留了你在 PSD 里画的分隔缺口），底色为最黑的 `#000000`。PSD 母版保持原样。仓库保存了这份 PSD 原件：
 
 - `final/PicNest-logo.psd`（最终母版，2048 × 2048，参考层均已隐藏）
-- `final/picnest-icon-2048.png` / 1024 / 512 / 256 / 128 / 64 / 48 / 32 / 16
-- `final/picnest.ico`（16/24/32/48/64/128/256 多尺寸，Windows 用）
+- `final/picnest-icon-1212.png`（从 PSD 裁出的原生 tile，后续尺寸的母本）
+- `final/picnest-icon-2048.png` / 1024 / 512 / 256 / 128 / 96 / 64 / 48 / 40 / 32 / 24 / 20 / 16
+- `final/picnest.ico`（16/20/24/32/40/48/64/96/128/256 共 10 档 PNG 帧，Windows 用）
 - `final/preview-icon.png`（浅底/深底 + 缩小可读性检查）
 
-终稿已接入 PicNest 的窗口/任务栏图标（`app/_internal_data/icon.png` 与 `icon.ico`，原件备份为 `icon-old.*`），并写入 `PicNest.exe` 的图标与版本信息（FileDescription `PicNest` / ProductName `PicNest 图巢`；exe 原件备份为 `app/PicNest.exe.picrand.bak`）。窗口标题、托盘、任务栏 AppDetails、package.json 应用名均已改为 PicNest。
+**分级 N 比例**：16–48px 小尺寸把 N 放大到 tile 的 **88%**，64px 及以上用 **76%**——小图标不会因为黑边太厚而糊成一团，大图标仍保留宽黑边。ICO 每一帧都按目标尺寸单独从 1212 母本缩放（而不是从 256px 帧再缩），任务栏/开始菜单取帧更锐。
+
+终稿已接入 PicNest 的窗口/任务栏图标（`app/_internal_data/icon.png` 与 `icon.ico`，原件备份为 `icon-old.*`），并用 resedit 把同一份 ICO 写入 `PicNest.exe` 的 PE 图标资源；VersionInfo 保持 FileDescription `PicNest` / ProductName `PicNest 图巢` / OriginalFilename `PicNest.exe`（exe 原件备份为 `app/PicNest.exe.picrand.bak`）。窗口标题、托盘、任务栏 AppDetails、package.json 应用名均已改为 PicNest。
+
+> Windows 任务栏会缓存按钮图标：换 exe 内嵌图标后若任务栏仍是旧图，结束 explorer、删除 `%LOCALAPPDATA%\IconCache.db` 与 `%LOCALAPPDATA%\Microsoft\Windows\Explorer\iconcache*.db`，再启动 explorer 并重启 PicNest。实测清理后任务栏按钮名为 `PicNest - 1 个运行窗口`，图标为黑底白 N + 金点。
 
 几何版 N（无笔刷细节）保留为备选矢量：`concepts/monogram-geometric-draft.svg`，只在需要重新矢量化时参考。侧栏品牌字标仍保持「图巢 / PicNest」文字，不混入图标。
