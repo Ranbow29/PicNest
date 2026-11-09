@@ -249,7 +249,8 @@ PicNest/
     **同内容文件必然同 size，所以快捷钮没有「保留最大」，用「保留第一/最新/最旧」**；默认一个都不勾，删前 confirm。
     删除只走 `trashImages`（图巢回收站软删）；删完在本地重算 groups（<2 丢弃）与 stats，不重新扫盘。
     面板 `DupFinder.vue`：z-index 940（confirm 950 在其上），Esc 在 App 里优先关闭；每个文件卡必须显示 `rel || '库根'`。
-    已知：没有取消扫描的 IPC（关窗后主进程扫完丢弃结果）；超大库首次扫描可能慢。
+    **取消（2026-11-09 补）**：`picnest-dup-cancel` IPC + store `dupCancel()`；loading 期间恒显「停止」，关面板/切页签自动取消，
+    取消后 UI 显示「已停止扫描」而不是「没有发现重复文件」。流式 MD5 不阻塞主进程事件循环。
 43. **点库回根 / 根文件 / 菜单瘦身 / 简报 / 黑白 / 未分类（2026-11-09，Feb 指定）**：
     ①`switchRoot(id)` 原先同 id 直接 `return`，导致“点当前库没反应”；改为同 id 时 `openDir(null, opts)` 回库根（全部视图 + dir=null）。
     ②侧栏区块名改「根文件」（仅 SideBar 标题/添加钮/空态；`DirContextMenu` 等仍用“资料库”，避免“复制根文件文件夹”这类怪词）。
@@ -344,3 +345,22 @@ PicNest/
     **AI**：候选对缩略图 384px 白底 JPEG → `/chat/completions`（system 要求只回 JSON `{same,confidence}`）→ 解析；
     429/5xx 重试一次；并查集成组；只上传候选缩略图，必须勾选允许上传；进度事件 `picnest-ai-dup-progress`（hash/ai），支持取消。
     **结果**：AI 徽标；wasted = sum − max（保留最大有意义），快捷保留最大/最新/最旧；删除仍走图巢回收站，选中/批量软删共用精确分支。
+
+52. **查重收尾（2026-11-09，Feb 指定）**：
+    ① **精确查重可取消**：主进程 `picnestDupCancel` 每轮扫描重置；`picnest-dup-cancel` IPC；store `dupCancel()` 置 `canceling`；
+    DupFinder 的 loading 区不分页签都给「停止」，关面板/切页签都调用取消；取消结果 `{ok:false,canceled:true,error:"已取消"}`，
+    UI 空态显示「已停止扫描」。注意取消检查必须在 `picnestMapLimit` 的回调里（每文件读盘前），否则 4 路并发会继续读完。
+    ② **文件夹整包查重异步化**：`picnest-dir-dup-check` 从「同步 walk + readFileSync」改为「同步收目录（仅元数据）→
+    `fs.promises.stat` + `picnestMd5Stream` 流式 MD5（并发 4）」，进度事件 `picnest-dir-dup-progress`；
+    同路径 MD5 进 per-scan Map 缓存（新图与库内候选都缓存，重复候选只算一次）；`picnest-dir-dup-cancel` 可中途停止；
+    items 结束后按 src 排序（并发完成顺序不稳定）。store `taskProgress` 浮条（`TaskProgress.vue`，底部居中、z870）在
+    `mergeDirWithDupes` 期间显示「正在检查文件夹重复 done/total + 停止」；查重弹窗前收起浮条。取消返回 `{canceled:true}`，
+    `paste()`/`importDrop()` 遇到 canceled 立即 break，汇总卡标「已取消」且 tone=muted。
+    ③ **拖入查重/采集查重同样流式**：`picnest-import-check` 与 `picnestCollectDupes` 改 `picnestMd5Of`（流式 + 缓存），
+    不再 `readFileSync` 整文件。`import-dir-copy` 内部的同名同大小 MD5（walk 里）仍是同步——copy 本身同步，后续单独异步化。
+    ④ **AI 查重费用/上传量预估**：AI 参数区新增可选「单价 ¥/1M tok」（localStorage `picnest.aiPricePerM`），
+    估算 = maxPairs×2 张 384px 缩略图（≈45KB/张）+ 每对 ≈340 tokens（2×85 视觉 + 提示/输出），显示「最多 N 对 · ≈ X 张 / Y MB
+    · ≈ Z 元」；不填单价只显示上传量。AI stats 的 `capped` 在结果头部提示「候选超出上限，只查最接近的 N 对」。
+    实测：120 个 2.9MB 副本目录查重 900ms、进度 12→102、取消返回 canceled；30 副本走真实 mergeDirWithDupes：
+    浮条 3/30 → 30/30、弹窗 count=30、复制 30 张；cancelTask 中途停止不复制；全库 10,764 行 317ms、38 个同尺寸候选
+    （内容均不同 → 0 组，Eagle 入库时已按内容去重）；import-check 3 冲突 + 1 干净 + 1 缺失正确。
