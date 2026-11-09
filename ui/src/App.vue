@@ -133,9 +133,9 @@ const chipStyle = computed(() => {
     <section class="main-panel">
       <TitleBar />
       <div class="main-inner">
-        <!-- 浏览模式：网格 + 详情浮岛（v-show 保滚动位置） -->
-        <div v-show="!lib.lightbox.open" class="browse"
-             :class="{ 'insp-h-fixed': lib.inspectorHeight > 0, 'insp-open': lib.viewer.showInspector }"
+        <!-- 浏览模式：网格 + 详情浮岛（灯箱时保留布局只隐身，滚动位置不丢，与简报退出一致） -->
+        <div class="browse"
+             :class="{ 'lb-behind': lib.lightbox.open, 'insp-h-fixed': lib.inspectorHeight > 0, 'insp-open': lib.viewer.showInspector }"
              :style="{ '--insp-w': lib.inspectorWidth + 'px', '--insp-h': lib.inspectorHeight + 'px' }">
           <ImageGrid />
           <Transition name="insp">
@@ -194,6 +194,7 @@ const chipStyle = computed(() => {
 }
 .main-inner { flex: 1; display: flex; min-height: 0; position: relative; } /* 头块自己让位玻璃顶栏 */
 .browse { flex: 1; display: flex; min-height: 0; position: relative; --insp-reserve: 0px; }
+.browse.lb-behind { position: absolute; inset: 0; visibility: hidden; pointer-events: none; }
 .browse.insp-open { --insp-reserve: calc(var(--insp-w, 296px) + 16px); }
 /* 详情统一 overlay：悬浮于内容之上（滚动条自然到最右），两模式同位同尺寸
    top 40 = 顶缘压进玻璃顶栏 2px（高于顶栏），但停在右上角窗控按钮下缘 39 之下 1px；
