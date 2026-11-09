@@ -374,3 +374,7 @@ PicNest/
     ⑥ **`verify_counts.py` 跳过点目录/文件**，否则 `.picnest/meta.json`（.json 属文本白名单）会让对账多 1。
 
 54. **左栏开合（2026-11-09，Feb 指定）**：窗控组最左（详情按钮左边）新增 left-sidebar 按钮；`lib.sidebarCollapsed` 存 localStorage，`toggleSidebar()` 切宽并 `collectiveShake()`；SideBar `width: collapsed ? 0 : sidebarWidth` + padding/opacity 过渡，`ResizeHandle` 在收起时 v-if 隐藏；`AnimIcon name="sidebar"`（`collapsed` prop 让分隔线 CSS translateX 左移、列内两条短线淡出），与其它顶栏动效图标共用 `iconShake` 总线/挂载/悬停弹簧手势。
+
+55. **图标动效幅度加码 + 插件仓库设计（2026-11-09，Feb 指定）**：
+    ① `grid` 四格上浮 1.3 → **2.8**（首轮 1.3 被 Feb 判"幅度不够"）；`sidebar` 面板抬升 0.8→1.4、分隔线横移 0.8→2.4、列内短线 0.5→1.2、收起态 CSS 位移 -3.6px→-5.4px（过渡 0.26s）。CDP 连拍两帧确认位移肉眼可见。Feb 口径再验证：动效幅度"宜大不宜小"，第一版宁大勿小。
+    ② **插件仓库**：完整设计落 `docs/PLUGIN.md`——三种插件类型（theme 纯 CSS / renderer 沙箱 iframe / main utilityProcess）、plugin.json 清单（deny-by-default 权限）、宿主 RPC 网关（快照传递、无活引用）、GitHub 仓库即 marketplace（registry.json + zip + sha256，人工 PR 收录）、四阶段路线（P1 theme+管理页 → P2 renderer → P3 main → P4 在线仓库+签名）。红线：不给插件裸 db 句柄/Node，网络只走声明 origin 的代理，主题插件只许叠 token 不许整页覆盖。

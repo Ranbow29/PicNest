@@ -105,16 +105,16 @@ const clampArt = (v) => Math.max(-0.12, Math.min(v, 1))
       <rect :x="12 + 1.5 * clampArt(r)" :y="13.5 - clampArt(r)" :width="8.5 - 1.5 * clampArt(r)" :height="6.5 + clampArt(r)" />
     </g>
 
-    <!-- grid：四格按行错峰上浮（d*1.3），首格 active 填充 -->
+    <!-- grid：四格按行错峰上浮（d*2.8，首轮 1.3 被 Feb 判"幅度不够"），首格 active 填充 -->
     <g v-else-if="name === 'grid'">
       <template v-for="i in 4" :key="i">
         <rect
           :x="4 + (i - 1) % 2 * 10"
-          :y="4 + Math.floor((i - 1) / 2) * 10 - [p, q, r, q][i - 1] * 1.3"
+          :y="4 + Math.floor((i - 1) / 2) * 10 - [p, q, r, q][i - 1] * 2.8"
           width="6" height="6"
         />
         <rect v-if="i === 1"
-              :x="4" :y="4 - p * 1.3" width="6" height="6"
+              :x="4" :y="4 - p * 2.8" width="6" height="6"
               fill="currentColor" stroke="none" :opacity="0.14 + act * 0.12" />
       </template>
     </g>
@@ -125,13 +125,13 @@ const clampArt = (v) => Math.max(-0.12, Math.min(v, 1))
       <line :x1="12 + 2.5 * q" :y1="5 - p * 0.8" :x2="12 + 2.5 * q" :y2="19 - p * 0.8" />
     </g>
 
-    <!-- sidebar：左侧栏面板，收起时分隔线左移、列内短线淡出；p/q/r 走同一套弹簧 -->
+    <!-- sidebar：左侧栏面板；幅度加码（面板 1.4 / 分隔线 2.4 / 短线 1.2），收起时分隔线大幅左移、列内线淡出 -->
     <g v-else-if="name === 'sidebar'">
-      <rect :x="4.5" :y="5 - p * 0.8" width="15" height="14" />
+      <rect :x="4.5" :y="5 - p * 1.4" width="15" height="14" />
       <line class="sb-divider" :class="{ collapsed }"
-            :x1="10 + q * 0.8" :y1="5 - p * 0.8" :x2="10 + q * 0.8" :y2="19 - p * 0.8" />
-      <line :x1="6.1 + q * 0.5" :x2="8.1 + q * 0.5" y1="9" y2="9" :style="{ opacity: collapsed ? 0 : 1 }" />
-      <line :x1="6.1 + r * 0.5" :x2="8.1 + r * 0.5" y1="12.6" y2="12.6" :style="{ opacity: collapsed ? 0 : 1 }" />
+            :x1="10 + q * 2.4" :y1="5 - p * 1.4" :x2="10 + q * 2.4" :y2="19 - p * 1.4" />
+      <line :x1="6.1 + q * 1.2" :x2="8.1 + q * 1.2" y1="9" y2="9" :style="{ opacity: collapsed ? 0 : 1 }" />
+      <line :x1="6.1 + r * 1.2" :x2="8.1 + r * 1.2" y1="12.6" y2="12.6" :style="{ opacity: collapsed ? 0 : 1 }" />
     </g>
 
     <!-- justified：三行宽度随 p/q/r 伸缩（行自适应 reflow 语义） -->
@@ -172,6 +172,6 @@ const clampArt = (v) => Math.max(-0.12, Math.min(v, 1))
 <style scoped>
 .anim-ico { display: block; overflow: visible; }
 .anim-ico rect, .anim-ico line, .anim-ico path { will-change: transform; }
-.sb-divider { transition: transform 0.22s var(--ease-overshoot); }
-.sb-divider.collapsed { transform: translateX(-3.6px); }
+.sb-divider { transition: transform 0.26s var(--ease-overshoot); }
+.sb-divider.collapsed { transform: translateX(-5.4px); }
 </style>
