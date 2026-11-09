@@ -12,23 +12,61 @@ chrome.runtime.onInstalled.addListener(() => {
   })
 })
 
-/* 标签页恢复（Edge 睡眠标签 / 扩展重载 / bfcache）时浏览器不会再自动注入 content script，
-   表现为切回 Pinterest 后按住采集失效、刷新页面才恢复。这里在标签激活/更新时主动补注入；
-   content.js 自带 __picnestHoldCollectLoaded 守卫，重复注入安全。 */
-async function ensureCollectScript(tab) {
-  const url = tab?.url || ''
-  if (!tab?.id || !/^https?:\/\//i.test(url)) return
+/* 标签页恢复（Edge 睡眠标签 / bfcache / 扩展重载）时浏览器不会自动重新注入 content script。
+   这里在标签激活、URL 更新、窗口聚焦、扩展启动时主动探测并补注入；content.js 在监听器全部
+   注册成功后才置 __picnestHoldCollectLoaded，部分初始化失败的页面也能被补一次。 */
+async function contentReady(tabId) {
   try {
-    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] })
-  } catch { /* 受限页面（edge://、商店页等）忽略 */ }
+    const [r] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => !!(window.__picnestHoldCollectLoaded && window.__picnestHoldCollectVersion),
+    })
+    return !!r?.result
+  } catch {
+    return false
+  }
+}
+
+async function ensureCollectScript(tab, attempt = 0) {
+  let t = tab
+  try {
+    if (!t?.id) return
+    if (!/^https?:\/\//i.test(t.url || '')) t = await chrome.tabs.get(t.id)
+  } catch {
+    return
+  }
+  if (!t?.id || !/^https?:\/\//i.test(t.url || '')) return
+  if (await contentReady(t.id)) return
+  try {
+    await chrome.scripting.executeScript({ target: { tabId: t.id }, files: ['content.js'] })
+  } catch {
+    /* 睡眠标签还原/页面正在导航：短暂延迟再试两次 */
+    if (attempt < 2) {
+      setTimeout(() => {
+        chrome.tabs.get(t.id).then((x) => ensureCollectScript(x, attempt + 1)).catch(() => {})
+      }, attempt === 0 ? 350 : 1200)
+    }
+  }
+}
+
+async function ensureActiveTab() {
+  try {
+    const [t] = await chrome.tabs.query({ active: true, lastFocusedWindow: true })
+    if (t) await ensureCollectScript(t)
+  } catch { /* no active tab */ }
 }
 
 chrome.tabs.onActivated.addListener(async ({ tabId }) => {
-  try { await ensureCollectScript(await chrome.tabs.get(tabId)) } catch { /* 标签已关闭 */ }
+  try { await ensureCollectScript(await chrome.tabs.get(tabId)) } catch { /* closed */ }
 })
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status === 'complete' || changeInfo.url) void ensureCollectScript(tab)
 })
+chrome.tabs.onHighlighted.addListener(({ tabIds }) => {
+  const id = tabIds?.[0]
+  if (id != null) chrome.tabs.get(id).then((t) => ensureCollectScript(t)).catch(() => {})
+})
+chrome.windows.onFocusChanged.addListener(() => { void ensureActiveTab() })
 
 async function ensurePinterestTabs() {
   try {
@@ -36,8 +74,15 @@ async function ensurePinterestTabs() {
     for (const tab of tabs) await ensureCollectScript(tab)
   } catch { /* 权限/页面限制 */ }
 }
-chrome.runtime.onStartup.addListener(() => { void ensurePinterestTabs() })
-chrome.runtime.onInstalled.addListener(() => { void ensurePinterestTabs() })
+function ensurePinterestSoon() {
+  void ensurePinterestTabs()
+  setTimeout(() => { void ensurePinterestTabs() }, 1500)
+  setTimeout(() => { void ensurePinterestTabs() }, 4500)
+}
+chrome.runtime.onStartup.addListener(ensurePinterestSoon)
+chrome.runtime.onInstalled.addListener(ensurePinterestSoon)
+/* service worker 启动即补一次：扩展重载/休眠唤醒不依赖 onInstalled */
+ensurePinterestSoon()
 
 async function apiRaw(path, body, method) {
   const init = { method: method || (body ? 'POST' : 'GET') }
