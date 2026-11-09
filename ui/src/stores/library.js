@@ -143,6 +143,7 @@ export const useLibrary = defineStore('library', {
     tags: [],                // [{id,name,count}] 当前根
     imageTags: {},           // imageId -> [tagId]（当前根，不含回收站）
     palettes: {},            // file_path -> [{r,g,b,percent}]
+    displayThumbs: {},       // file_path -> { p: 1024px 显示图路径|'' , m: modify_time }（网格大格用）
     paletteBuild: { running: false, done: 0, total: 0 },
     colorDist: {},           // file_path -> d76（颜色命中排序用）
     sidebarWidth: Number(localStorage.getItem('picnest.sidebarWidth')) || 236,
@@ -1564,9 +1565,29 @@ export const useLibrary = defineStore('library', {
       return arr
     },
 
+    /* 网格大格显示图：1024px 有界缓存（有则用，没有让主进程生成；失败退回 400 缩略图） */
+    async ensureDisplayThumbs(items) {
+      const need = []
+      for (const it of items || []) {
+        if (!it?.path) continue
+        const e = this.displayThumbs[it.path]
+        if (e && e.m === (it.mtime || 0)) continue // 已请求（成功/失败/进行中）
+        need.push(it)
+      }
+      if (!need.length) return
+      for (const it of need) this.displayThumbs[it.path] = { p: null, m: it.mtime || 0 }
+      try {
+        const r = await window.picrand.picnestDisplayThumbs(need.map((x) => x.path))
+        const got = new Map((r?.results || []).map((x) => [x.file_path, x.thumbnail_path]))
+        for (const it of need) this.displayThumbs[it.path] = { p: got.get(it.path) || '', m: it.mtime || 0 }
+      } catch {
+        for (const it of need) this.displayThumbs[it.path] = { p: '', m: it.mtime || 0 }
+      }
+      this.layoutTick++
+    },
+
     // ---- 色板索引：渐进构建（分步防挂起）----
-    async ensurePalettes() {
-      if (this.paletteBuild.running) return
+    async ensurePalettes() {      if (this.paletteBuild.running) return
       this.paletteBuild.running = true
       try {
         for (let i = 0; i < 400; i++) {

@@ -350,6 +350,29 @@ function picnestThumbRepairNeed(folderId) {
   return out;
 }
 electron.ipcMain.handle("picnest-thumbs-missing", (_event, folderId) => ({ ok: true, count: picnestThumbRepairNeed(folderId).length }));
+/* 大格子显示图：1024px 有界缩略图（网格不再解码 10MB+ 原图；Chromium 解码缓存预算会偶发失败）。
+   缓存名带 modify_time，旋转/裁剪/外部修改后自动失效；失败返回空串，前端退回 400 缩略图。 */
+electron.ipcMain.handle("picnest-display-thumbs", async (_event, paths) => {
+  const results = [];
+  try {
+    const sharp = (await import("sharp")).default;
+    const list = [...new Set((paths || []).filter(Boolean))].slice(0, 80);
+    await picnestMapLimit(list, 2, async (fp) => {
+      try {
+        const row = getDb().prepare("SELECT modify_time FROM images WHERE file_path = ?").get(fp);
+        const mt = row?.modify_time || 0;
+        const out = path.join(cacheDir, crypto.createHash("md5").update(fp + "|d1024|" + mt).digest("hex") + "-d1024.webp");
+        if (!fs.existsSync(out)) {
+          await sharp(fp, { failOn: "none" }).rotate().flatten({ background: "#ffffff" })
+            .resize({ width: 1024, height: 1024, fit: "inside", withoutEnlargement: true })
+            .webp({ quality: 82 }).toFile(out);
+        }
+        results.push({ file_path: fp, thumbnail_path: out });
+      } catch (e) { results.push({ file_path: fp, thumbnail_path: "" }); }
+    });
+  } catch (e) { /* sharp 不可用：前端用 400 缩略图 */ }
+  return { ok: true, results };
+});
 electron.ipcMain.handle("picnest-repair-thumbs-cancel", () => { picnestThumbRepairCancel = true; return { ok: true }; });
 electron.ipcMain.handle("picnest-repair-thumbs", async (event, folderId) => {
   const send = (p) => { try { if (!event.sender.isDestroyed()) event.sender.send("picnest-thumb-repair-progress", p); } catch (e) {} };

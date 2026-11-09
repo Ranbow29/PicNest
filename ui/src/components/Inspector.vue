@@ -93,6 +93,18 @@ function queueSave() {
    缓存里的空数组（ensurePalettes 对 SKIP/失败项标的）不能当作“已有色板”，否则永远显示 — */
 const palette = ref([])
 const paletteLoading = ref(false)
+/* 预览图加载兜底：原图失败→缩略图；缩略图也失败→后缀占位（大图 PNG 偶发解码失败） */
+const previewFallback = ref(false)
+const previewDead = ref(false)
+function onPreviewError() {
+  const im = img.value
+  if (!previewFallback.value && im?.thumbnail_path && im.thumbnail_path !== 'SKIP') {
+    previewFallback.value = true
+    return
+  }
+  previewDead.value = true
+}
+watch(() => lib.selectedPath, () => { previewFallback.value = false; previewDead.value = false })
 watch(() => lib.selectedPath, async (p) => {
   palette.value = []
   if (!p) return
@@ -345,9 +357,11 @@ async function exportFolder() {
     <!-- ========== 单选图片 ========== -->
     <template v-if="mode === 'img' && img">
       <div class="preview">
-        <img v-if="!isTextImg && !isVideoImg" :src="fullSrc(img)" :class="{ gray: lib.grayscaleMode }" loading="lazy" draggable="false" />
-        <img v-else-if="img.thumbnail_path && img.thumbnail_path !== 'SKIP'" :src="thumbSrc(img)" :class="{ gray: lib.grayscaleMode }" loading="lazy" draggable="false" />
-        <div v-else class="preview-doc">{{ extLabel(img.file_path) }}</div>
+        <img v-if="!previewDead && !isTextImg && !isVideoImg" :src="previewFallback ? thumbSrc(img) : fullSrc(img)"
+             :class="{ gray: lib.grayscaleMode }" loading="lazy" decoding="async" draggable="false" @error="onPreviewError" />
+        <img v-else-if="!previewDead && img.thumbnail_path && img.thumbnail_path !== 'SKIP'" :src="thumbSrc(img)"
+             :class="{ gray: lib.grayscaleMode }" loading="lazy" decoding="async" draggable="false" @error="onPreviewError" />
+        <div v-else class="preview-doc">{{ previewDead ? '无法预览' : extLabel(img.file_path) }}</div>
       </div>
 
       <input

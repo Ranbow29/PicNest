@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onMounted, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useLibrary, extractDropUrls } from '../stores/library'
 import { api, fileUrl } from '../api'
 import { startWindowDrag } from '../lib/winDrag'
@@ -381,7 +381,17 @@ function onRulerUp() { dragRuler = false }
 
 /* ---------- 缩略图按需补齐（只对可视窗口，带超时兜底防子进程挂起） ---------- */
 const inFlight = new Map() // path -> 时间戳
+/* 大格子显示图：1024px 有界缓存（主进程生成）；没有时先用 400 缩略图，到了再换 */
+function requestDisplayThumbs(vis) {
+  const big = (vis || []).filter((i) =>
+    i.w > 500 && !isTextPath(i.file_path) && !isVideoPath(i.file_path) && !/\.gif$/i.test(i.file_path) &&
+    i.thumbnail_path && i.thumbnail_path !== 'SKIP')
+  if (big.length) lib.ensureDisplayThumbs(big.map((i) => ({ path: i.file_path, mtime: i.modify_time || 0 })))
+}
+watch(() => visible.value.map((i) => `${i.file_path}:${i.thumbnail_path || ''}:${i.modify_time || 0}`).join('|'),
+  () => requestDisplayThumbs(visible.value))
 watch(visible, (vis) => {
+  requestDisplayThumbs(vis)
   const now = Date.now()
   for (const [p, t] of inFlight) if (now - t > 25000) inFlight.delete(p) // 超时释放
   const need = vis.filter((i) => !i.thumbnail_path && !inFlight.has(i.file_path)).map((i) => i.file_path)
@@ -414,19 +424,66 @@ watch(visible, (vis) => {
   })
 })
 
+/* 图片加载兜底：显示图/缩略图失败逐级降级（1024 显示图 → 400 缩略图 → 原图重试一次 → 占位可点重试）。
+   网格不再直接解码原图（Chromium 解码缓存预算下 10MB+ PNG 会偶发失败），原图只留给灯箱。 */
+const imgFix = reactive({}) // path -> { mode: 'thumb' | 'original' | 'error', n?: number }
+function onCellImgError(cell) {
+  const p = cell.file_path
+  const hasThumb = !!(cell.thumbnail_path && cell.thumbnail_path !== 'SKIP')
+  const cur = imgFix[p] || { n: 0 }
+  if (cell.srcKind === 'display' || cell.srcKind === 'original') {
+    imgFix[p] = hasThumb ? { ...cur, mode: 'thumb' } : (cur.n ? { ...cur, mode: 'error' } : { ...cur, mode: 'original', n: 1 })
+  } else if (cell.srcKind === 'thumb') {
+    imgFix[p] = cur.n ? { ...cur, mode: 'error' } : { ...cur, mode: 'original', n: 1 }
+  } else {
+    imgFix[p] = { ...cur, mode: 'error' }
+  }
+}
+function retryCellImg(cell) {
+  const cur = imgFix[cell.file_path] || {}
+  imgFix[cell.file_path] = { mode: 'original', n: (cur.n || 0) + 1 }
+}
+
 const cells = computed(() =>
   visible.value.map((img) => {
-    // 取源策略：大格子/无缩略图 → 原图直链（gif 含动画；视频/文本永不直链，没缩略图就占位）
+    // 取源策略：文本/视频不直链；gif 大格保留原图动画；其余优先 1024 显示图 → 400 缩略图 → 原图
     const isVideo = isVideoPath(img.file_path)
     const isText = isTextPath(img.file_path)
     const isGif = /\.gif$/i.test(img.file_path)
     const hasThumb = img.thumbnail_path && img.thumbnail_path !== 'SKIP'
-    const wantOriginal = (img.w > 500 || !hasThumb) && !isVideo && !isText
     const ver = img.modify_time || 0
+    const disp = lib.displayThumbs[img.file_path]
+    const hasDisplay = !!(disp && disp.p && disp.m === ver)
+    const fx = imgFix[img.file_path]
     const withVer = (u) => (u ? `${u}?v=${ver}` : '')
-    const src = isText
-      ? (hasThumb ? withVer(fileUrl(img.thumbnail_path)) : '')
-      : ((hasThumb && !wantOriginal) ? withVer(fileUrl(img.thumbnail_path)) : (isVideo ? '' : withVer(fileUrl(img.file_path))))
+    let src = ''
+    let srcKind = ''
+    if (isText) {
+      if (hasThumb) { src = withVer(fileUrl(img.thumbnail_path)); srcKind = 'thumb' }
+    } else if (isVideo) {
+      src = ''
+    } else if (fx?.mode === 'error') {
+      src = ''
+      srcKind = 'error'
+    } else if (fx?.mode === 'thumb' && hasThumb) {
+      src = withVer(fileUrl(img.thumbnail_path)) + (fx.n ? `&r=${fx.n}` : '')
+      srcKind = 'thumb'
+    } else if (fx?.mode === 'original') {
+      src = withVer(fileUrl(img.file_path)) + (fx.n ? `&r=${fx.n}` : '')
+      srcKind = 'original'
+    } else if (isGif && img.w > 500) {
+      src = withVer(fileUrl(img.file_path))
+      srcKind = 'original'
+    } else if (hasDisplay) {
+      src = withVer(fileUrl(disp.p))
+      srcKind = 'display'
+    } else if (hasThumb) {
+      src = withVer(fileUrl(img.thumbnail_path))
+      srcKind = 'thumb'
+    } else {
+      src = withVer(fileUrl(img.file_path))
+      srcKind = 'original'
+    }
     const sizeText = (n) => !n ? '' : n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : n >= 1024 ? Math.round(n / 1024) + ' KB' : n + ' B'
     const res = isText
       ? ['文本', extOf(img.file_path).slice(1).toUpperCase(), sizeText(img.file_size)].filter(Boolean).join(' · ')
@@ -434,6 +491,7 @@ const cells = computed(() =>
     return {
       ...img,
       src,
+      srcKind,
       isText,
       isVideo,
       extLabel: isText ? extOf(img.file_path).slice(1).toUpperCase() : '',
@@ -685,7 +743,7 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
               @contextmenu.prevent="lib.openDirMenu($event, { rel: f.rel, node: f })"
             >
               <div class="sf-cover">
-                <img v-if="covers[f.rel]" :src="covers[f.rel]" :class="{ gray: lib.grayscaleMode }" draggable="false" loading="lazy" />
+                <img v-if="covers[f.rel]" :src="covers[f.rel]" :class="{ gray: lib.grayscaleMode }" draggable="false" loading="lazy" decoding="async" @error="$event.target.style.visibility='hidden'" />
                 <FolderIcon v-else :color="lib.dirMemory[f.rel]?.color || ''" :size="30" />
               </div>
               <div class="sf-name" :title="f.name + ' · 双击进入'">{{ f.name }}</div>
@@ -732,11 +790,12 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
         @contextmenu.prevent="lib.openContextMenu($event, img)"
       >
         <div class="thumb wi" :class="{ nowi: img.gi >= 48, gray: lib.grayscaleMode }">
-          <img v-if="img.src" :src="img.src" loading="lazy" draggable="false" />
+          <img v-if="img.src" :src="img.src" loading="lazy" decoding="async" draggable="false" @error="onCellImgError(img)" />
           <div v-else-if="img.isText" class="docph">
             <b>{{ img.extLabel }}</b>
             <span>{{ img.file_name }}</span>
           </div>
+          <div v-else-if="img.srcKind === 'error'" class="noimg broken" title="加载失败，点击重试" @click.stop="retryCellImg(img)">⟳</div>
           <div v-else class="noimg">{{ img.isVideo ? '▶' : '∘' }}</div>
           <!-- PicRand 式悬停信息条：叠在图片内部底部，不占布局 -->
           <div v-if="showLabels" class="hover-overlay" :data-info="img.info" />
@@ -804,6 +863,8 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
 .thumb img { width: 100%; height: 100%; object-fit: cover; }
 .thumb.gray img, .sf-cover img.gray { filter: grayscale(1); }
 .noimg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--text-2); font-size: 22px; }
+.noimg.broken { cursor: pointer; color: var(--accent); font-size: 20px; opacity: 0.75; }
+.noimg.broken:hover { opacity: 1; background: var(--accent-weak); }
 /* 文本文件占位卡（文字缩略图还没生成时）：牛皮纸底 + 后缀徽标，避免裂图 */
 .docph {
   position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;

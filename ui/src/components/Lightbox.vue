@@ -26,6 +26,25 @@ const url = computed(() => {
 })
 const fileName = computed(() => String(lib.lightbox.path || '').split(/[\\/]/).pop())
 const hasTransform = computed(() => lib.viewer.rot % 360 !== 0 || lib.viewer.flopX)
+/* 大图加载兜底：原图失败→缩略图；都失败→错误提示（不显示裂图） */
+const stageFallback = ref(false)
+const stageDead = ref(false)
+const stageUrl = computed(() => {
+  const img = meta.value
+  if (stageFallback.value && img?.thumbnail_path && img.thumbnail_path !== 'SKIP') {
+    return fileUrl(img.thumbnail_path) + '?v=' + (img.modify_time || 0)
+  }
+  return url.value
+})
+function onStageError() {
+  const img = meta.value
+  if (!stageFallback.value && img?.thumbnail_path && img.thumbnail_path !== 'SKIP') {
+    stageFallback.value = true
+    return
+  }
+  stageDead.value = true
+}
+watch(() => lib.lightbox.path, () => { stageFallback.value = false; stageDead.value = false })
 
 function fitToWindow() {
   if (!stageEl.value || kind.value === 'text') return
@@ -623,12 +642,13 @@ function onKey(e) {
       <div v-if="textState.note" class="text-note">{{ textState.note }}</div>
     </div>
     <img
-      v-else
-      ref="imgEl" :src="url" class="stage" :class="{ gray: lib.grayscaleMode }" draggable="false"
+      v-else-if="!stageDead"
+      ref="imgEl" :src="stageUrl" class="stage" :class="{ gray: lib.grayscaleMode }" draggable="false"
       :style="{
         transform: `translate(${lib.viewer.tx}px, ${lib.viewer.ty}px) scale(${lib.viewer.scale}) rotate(${lib.viewer.rot}deg)` + (lib.viewer.flopX ? ' scaleX(-1)' : ''),
         cursor: lib.viewer.cropMode ? 'default' : dragging ? 'grabbing' : 'grab',
       }"
+      @error="onStageError"
       @dblclick="dblClick"
     />
     <!-- 专业裁切层：覆盖在图片上（外部压暗 + 三分网格 + 手柄） -->
@@ -692,6 +712,7 @@ function onKey(e) {
       <button class="dock-btn" title="下一张（→/D）" @click="lib.lightboxNav(1)">›</button>
     </div>
     <div v-if="!url" class="empty">图片不存在</div>
+    <div v-else-if="stageDead && kind === 'image'" class="empty">图片加载失败（原图与缩略图都不可读）</div>
     <!-- 裁剪结果 toast：不随 cropMode 消失（挂在舞台根层） -->
     <div v-if="cropNote" class="crop-toast">{{ cropNote }}</div>
     <div v-if="saveNote" class="crop-toast">{{ saveNote }}</div>
