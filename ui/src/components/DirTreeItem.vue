@@ -77,6 +77,14 @@ function onDragOver(e) {
   e.preventDefault()
   const external = isExternalDT(e) // 内部拖拽优先：text/uri-list 是浏览器自动附带的，不能当外部文件
   e.dataTransfer.dropEffect = external ? 'copy' : 'move'
+  /* 根行不是可排序项：内部文件夹只能“移入库根”，外部文件/文件夹录入库根；
+     不允许在根行做 before/after，否则会把根名与同名子文件夹混淆并写坏顶层顺序 */
+  if (!props.node.rel) {
+    e.stopPropagation()
+    dropMark.value = 'into'
+    if (external) lib.setDropHint('dir', dragHintLabel('into'), e.clientX, e.clientY)
+    return
+  }
   const r = e.currentTarget.getBoundingClientRect()
   const y = e.clientY - r.top
   /* 外部拖入与内部文件夹拖动同规则：上/下 30% = 缝隙插入，中间 = 放进该文件夹 */

@@ -1922,6 +1922,8 @@ export const useLibrary = defineStore('library', {
 
     // 拖拽排序/移动三段式落点：before / after / into
     async dropOnDir(srcRel, targetRel, pos) {
+      if (!srcRel) return
+      if (pos !== 'into' && !targetRel) return // 根行只能 into（移入库根），不能排序
       const destParent = pos === 'into' ? targetRel : (targetRel.includes('/') ? targetRel.split('/').slice(0, -1).join('/') : '')
       const srcParent = srcRel.includes('/') ? srcRel.split('/').slice(0, -1).join('/') : ''
       const srcName = srcRel.split('/').pop()
@@ -1929,11 +1931,15 @@ export const useLibrary = defineStore('library', {
 
       if (pos === 'into') {
         if (srcRel === targetRel || (targetRel + '/').startsWith(srcRel + '/')) return
-        await this.moveDir(srcRel, destParent)
+        const moved = await this.moveDir(srcRel, destParent)
+        if (!moved?.ok) return
         await this.appendOrder(destParent, srcName)
       } else {
-        if (srcRel === targetRel) return
-        if (srcParent !== destParent) await this.moveDir(srcRel, destParent)
+        if (srcRel === targetRel || (targetRel + '/').startsWith(srcRel + '/')) return
+        if (srcParent !== destParent) {
+          const moved = await this.moveDir(srcRel, destParent)
+          if (!moved?.ok) return
+        }
         await this.refreshTree()
         // 从最新树里取目标父级的现有顺序
         const node = destParent ? this.findNode(this.tree?.tree, destParent) : this.tree?.tree
