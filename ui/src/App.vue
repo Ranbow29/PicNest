@@ -288,8 +288,18 @@ const chipStyle = computed(() => {
 .browse.insp-h-fixed :deep(.inspector), .insp-overlay.insp-h-fixed :deep(.inspector) {
   top: auto; height: var(--insp-h, auto);
 }
-.insp-enter-active, .insp-leave-active { transition: transform 0.24s ease, opacity 0.24s ease; }
-.insp-enter-from, .insp-leave-to { transform: translateX(40px); opacity: 0; }
+.insp-enter-active {
+  transition: transform 0.26s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.2s ease;
+  will-change: transform, opacity;
+}
+.insp-leave-active {
+  transition: transform 0.2s cubic-bezier(0.4, 0, 1, 1), opacity 0.16s ease;
+  will-change: transform, opacity;
+}
+.insp-enter-from, .insp-leave-to {
+  transform: translate3d(32px, 0, 0);
+  opacity: 0;
+}
 /* 大图模式详情容器：必须 inset:0（缺 left 会收缩成手柄宽，overflow:hidden 裁掉整个面板）；
    pointer-events:none 让舞台拖拽/缩放照常，面板与拖宽手柄各自恢复 auto */
 .insp-overlay {
