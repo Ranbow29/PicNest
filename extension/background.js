@@ -249,9 +249,13 @@ chrome.runtime.onInstalled.addListener(ensurePinterestSoon)
 ensurePinterestSoon()
 
 async function apiRaw(path, body, method) {
-  const init = { method: method || (body ? 'POST' : 'GET') }
+  const init = { method: method || (body ? 'POST' : 'GET'), headers: {} }
+  try {
+    const s = await chrome.storage.local.get(['picnestToken'])
+    if (s.picnestToken) init.headers['X-PicNest-Token'] = s.picnestToken
+  } catch (e) {}
   if (body) {
-    init.headers = { 'Content-Type': 'application/json' }
+    init.headers['Content-Type'] = 'application/json'
     init.body = JSON.stringify(body)
   }
   const res = await fetch(API + path, init)
