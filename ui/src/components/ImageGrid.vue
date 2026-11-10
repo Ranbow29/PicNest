@@ -1002,9 +1002,10 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
 .drag-image { position: fixed; left: -200px; top: -200px; width: 96px; height: 96px; pointer-events: none; }
 .grid-viewport {
   flex: 1; overflow-y: auto; overflow-x: hidden;
-  transition: padding-right 0.2s ease;
+  transition: padding-right 0.26s cubic-bezier(0.16, 1, 0.3, 1);
   padding: 0 calc(6px + var(--insp-reserve, 0px)) 20px 26px; /* 右缘：滑尺 6 + 详情浮岛让位 */
   position: relative;
+  contain: layout style; /* 阻止视口内部频繁重排穿透溢出到主面板 */
 }
 /* 原生滚动条隐藏：概览滑尺接管其职能（残留即它） */
 .grid-viewport { scrollbar-width: none; }

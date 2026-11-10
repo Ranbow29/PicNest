@@ -588,9 +588,9 @@ async function exportFolder() {
   border-radius: var(--radius);
   box-shadow: var(--shadow-float), inset 0 1px 0 var(--panel-edge); /* 悬浮于正文之上 */
   overflow-y: auto; overflow-x: hidden;
-  animation: slide-in 0.22s ease;
+  will-change: transform, opacity;
+  transform: translateZ(0); /* 提升至独立 GPU 合成层，规避毛玻璃模糊每帧全屏重绘 */
 }
-@keyframes slide-in { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
 .inspector { scrollbar-width: none; }
 .inspector::-webkit-scrollbar { display: none; }
 

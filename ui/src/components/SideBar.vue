@@ -216,7 +216,7 @@ async function dropOnLib(e, l) {
 <template>
   <aside
     class="sidebar" :class="{ collapsed: lib.sidebarCollapsed }"
-    :style="{ width: (lib.sidebarCollapsed ? 0 : lib.sidebarWidth) + 'px' }"
+    :style="{ width: (lib.sidebarCollapsed ? 0 : lib.sidebarWidth) + 'px', '--sb-target-w': lib.sidebarWidth + 'px' }"
     @dragover="onSidebarDragOver" @dragleave="onSidebarDragLeave" @drop.prevent="dropToRoot"
   >
     <div class="brand">
@@ -306,11 +306,24 @@ async function dropOnLib(e, l) {
   /* 左侧栏 = 底层（不是浮岛卡）：主面板浮在它上面，ZCode 同构；宽度可拖 */
   flex: none; display: flex; flex-direction: column;
   padding: 10px 8px 8px; overflow: hidden;
-  transition: width 0.24s var(--ease-overshoot), padding 0.2s ease, opacity 0.18s ease;
+  box-sizing: border-box;
+  will-change: width, transform, opacity;
+  transform: translateZ(0);
+  transition: width 0.26s cubic-bezier(0.16, 1, 0.3, 1),
+              padding 0.22s cubic-bezier(0.16, 1, 0.3, 1),
+              opacity 0.2s ease,
+              transform 0.26s cubic-bezier(0.16, 1, 0.3, 1);
   /* 底子顶部白色渐变：从栏顶亮起，150px 内渐隐回 --bg（范围对齐品牌区+「全部」行） */
   background: linear-gradient(180deg, var(--sidebar-glow) 0, rgba(255, 255, 255, 0) 150px);
 }
-.sidebar.collapsed { padding-left: 0; padding-right: 0; opacity: 0; pointer-events: none; }
+.sidebar.collapsed {
+  padding-left: 0; padding-right: 0;
+  opacity: 0; pointer-events: none;
+  transform: translate3d(-18px, 0, 0);
+}
+.sidebar > * {
+  min-width: calc(var(--sb-target-w, 240px) - 16px);
+}
 .brand { display: flex; align-items: baseline; gap: 8px; padding: 1px 10px 8px; border-bottom: 1px solid var(--border); user-select: none; -webkit-app-region: drag; }
 .brand h1 { font-family: var(--font-serif); font-size: 19px; margin: 0; letter-spacing: 4px; }
 .brand .sub { font-size: 10px; color: var(--text-2); letter-spacing: 1.5px; }
