@@ -50,7 +50,11 @@ const items = computed(() => {
   }
   return [
     { key: 'reveal', label: '在文件管理器打开', run: () => lib.reveal(menu.value.image.file_path) },
-    { key: 'brief', label: '进入简报模式', run: () => lib.openBrief(menu.value.image.file_path) },
+    {
+      key: 'brief',
+      label: (lib.brief.open ? '✓ ' : '') + '简报模式',
+      run: () => (lib.brief.open ? lib.closeBrief() : lib.openBrief(menu.value.image.file_path)),
+    },
     { key: 'gray', label: (lib.grayscaleMode ? '✓ ' : '') + '黑白预览', run: () => lib.toggleGrayscale() },
     { key: 'copy', label: '复制', run: () => {
       const path = menu.value.image.file_path
