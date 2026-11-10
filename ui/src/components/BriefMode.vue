@@ -14,7 +14,8 @@ const kind = computed(() => {
 })
 const meta = computed(() => lib.images.find((i) => i.file_path === lib.brief.path) || null)
 const isPsd = computed(() => extOf(lib.brief.path) === '.psd')
-const idx = computed(() => Math.max(0, lib.images.findIndex((i) => i.file_path === lib.brief.path)))
+const orderList = computed(() => (lib.gridOrder?.length ? lib.gridOrder : lib.filteredImages.map((i) => i.file_path)))
+const idx = computed(() => Math.max(0, orderList.value.indexOf(lib.brief.path)))
 const dragging = ref(false)
 const mediaEl = ref(null)
 const canvasStage = ref(null)
@@ -218,7 +219,7 @@ onBeforeUnmount(() => {
       <div v-if="isPsd && (psdLoading || psdError)" class="brief-note">
         {{ psdError || 'PSD 原图渲染中，先显示缩略图…' }}
       </div>
-      <div class="brief-count">{{ idx + 1 }} / {{ lib.images.length }}</div>
+      <div class="brief-count">{{ idx + 1 }} / {{ orderList.length }}</div>
       <div class="brief-hint">←/A D→ 切换 · 滚轮缩放 · 拖拽平移 · 单击下一张 · 右键菜单 · Esc 退出</div>
       <button class="brief-x" title="退出（Esc）" @click.stop="lib.closeBrief()">✕</button>
     </div>
