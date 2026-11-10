@@ -2553,15 +2553,30 @@ export const useLibrary = defineStore('library', {
     },
 
     /* ---- M3: 灯箱 / 右键菜单 / 详情操作 ---- */
-    openLightbox(path) {
+    openLightbox(path, originRect = null) {
       if (this.brief.open) this.closeBrief()
+      const targetPath = path || this.selectedPath
+      /* 在切换到灯箱前抓取网格缩略图的屏幕坐标（FLIP 共享元素过渡起点） */
+      let rect = originRect
+      if (!rect && targetPath && !this.lightbox.open && typeof document !== 'undefined') {
+        const cells = document.querySelectorAll('.grid-viewport .cell[data-cell-path]')
+        for (const el of cells) {
+          if (el.dataset.cellPath === targetPath) {
+            const sub = el.querySelector('.thumb') || el
+            const r = sub.getBoundingClientRect()
+            if (r.width > 0 && r.height > 0) rect = { left: r.left, top: r.top, width: r.width, height: r.height }
+            break
+          }
+        }
+      }
+      this.lightboxOrigin = rect ? { ...rect, path: targetPath, at: Date.now() } : null
       if (path) this.selectedPath = path
       if (this.selectedPath) {
         this.selectedPaths = [this.selectedPath]
         this.selectionAnchor = this.selectedPath
       }
       if (!this.selectionView) this.clearDirSelection()
-      this.lightbox = { open: true, path: path || this.selectedPath }
+      this.lightbox = { open: true, path: targetPath }
       if (this.lightbox.path) this.markOpened(this.lightbox.path)
       emitPluginEvent('image-opened', { path: this.lightbox.path })
       this.viewer.rot = 0; this.viewer.flopX = false

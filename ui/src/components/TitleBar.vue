@@ -289,9 +289,9 @@ function onKey(e) {
   background: linear-gradient(180deg, var(--glass-weak), transparent);
   pointer-events: none;
 }
-/* 大图模式：顶栏不铺玻璃，只留一条自上而下渐隐的柔光罩——图片压到顶栏下时控件仍读得清 */
+/* 大图模式：顶栏底完全透明（玻璃与拖尾都关掉），只留悬浮控件 */
 .titlebar.lb-clear .glass {
-  background: linear-gradient(180deg, var(--glass-strong) 0%, var(--glass-weak) 55%, transparent 100%);
+  background: transparent;
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }
