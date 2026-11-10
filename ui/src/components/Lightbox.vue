@@ -49,6 +49,21 @@ const url = computed(() => {
 })
 const fileName = computed(() => String(lib.lightbox.path || '').split(/[\\/]/).pop())
 const hasTransform = computed(() => lib.viewer.rot % 360 !== 0 || lib.viewer.flopX)
+/* 氛围底：用当前图的小缩略图做超大模糊铺底（只取 400px 缩略图，GPU 成本可忽略），切图时交叉淡化 */
+const ambientUrl = computed(() => {
+  const img = meta.value
+  if (!img || kind.value !== 'image') return ''
+  if (img.thumbnail_path && img.thumbnail_path !== 'SKIP') return fileUrl(img.thumbnail_path) + '?v=' + (img.modify_time || 0)
+  return url.value
+})
+/* 工具条空闲隐身：鼠标静止 2.4s 后底部工具条淡出，移动即回（裁剪态常驻） */
+const dockIdle = ref(false)
+let dockIdleTimer = null
+function pokeDock() {
+  dockIdle.value = false
+  clearTimeout(dockIdleTimer)
+  dockIdleTimer = setTimeout(() => { dockIdle.value = true }, 2400)
+}
 const isPsd = computed(() => extOf(lib.lightbox.path) === '.psd')
 /* PSD 原图：主进程用 ag-psd 合成整幅 PNG（不是 400/1024 缩略图），先显示缩略图占位 */
 const psdFull = ref('')
@@ -782,12 +797,18 @@ function onKey(e) {
 
 <template>
   <div
-    ref="stageEl" class="viewer"
+    ref="stageEl" class="viewer" :class="{ 'dock-idle': dockIdle && !lib.viewer.cropMode, 'has-ambient': !!ambientUrl }"
     @wheel="onWheel" @contextmenu="onContext"
     @mousedown="onDown" @mousemove="onMove" @mouseup="onUp" @mouseleave="onUp"
+    @pointermove="pokeDock"
     @dblclick="onViewerDblclick"
     :style="canvasMode ? { cursor: dragging ? 'grabbing' : 'grab' } : undefined"
   >
+    <!-- 氛围底：当前图的模糊放大铺底 + 暗角，切图交叉淡化 -->
+    <Transition name="amb">
+      <div v-if="ambientUrl" :key="ambientUrl" class="ambient" :style="{ backgroundImage: `url(&quot;${ambientUrl}&quot;)` }" />
+    </Transition>
+    <div v-if="ambientUrl" class="ambient-veil" />
     <!-- 视频：自绘控制条（无原生 UI） -->
     <video
       v-if="kind === 'video'"
@@ -933,6 +954,33 @@ function onKey(e) {
   display: flex; align-items: center; justify-content: center;
   background: var(--panel-strong);
 }
+/* ---- 氛围底（Ambient）：当前图模糊放大铺满舞台，图片像浮在自己的光晕里 ---- */
+.ambient {
+  position: absolute; inset: -12%; z-index: 0; pointer-events: none;
+  background-size: cover; background-position: center;
+  filter: blur(64px) saturate(1.5) brightness(1.04);
+  opacity: 0.62;
+  transform: translateZ(0);
+  animation: amb-drift 28s ease-in-out infinite alternate;
+}
+@keyframes amb-drift {
+  from { transform: translateZ(0) scale(1) translate(0, 0); }
+  to { transform: translateZ(0) scale(1.08) translate(-1.5%, 1%); }
+}
+/* 柔光罩：亮色主题压一层奶白、暗色压一层深底，保证 UI 文字可读，再叠四角暗角聚焦中心 */
+.ambient-veil {
+  position: absolute; inset: 0; z-index: 0; pointer-events: none;
+  background:
+    radial-gradient(ellipse 75% 70% at 50% 50%, transparent 40%, rgba(0, 0, 0, 0.16) 100%),
+    linear-gradient(180deg, var(--glass-weak) 0%, transparent 18%, transparent 82%, var(--glass-weak) 100%);
+}
+.amb-enter-active, .amb-leave-active { transition: opacity 0.6s ease; }
+.amb-enter-from, .amb-leave-to { opacity: 0 !important; }
+.viewer.has-ambient .stage:not(.video) {
+  /* 有氛围底时图片投一层柔影，从光晕里“浮”出来（影子跟随 transform 一起缩放） */
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.28), 0 4px 14px rgba(0, 0, 0, 0.14);
+}
+@media (prefers-reduced-motion: reduce) { .ambient { animation: none; } }
 .stage {
   /* 基础尺寸=原始像素，适配完全由 transform scale 负责（单一权威）
      沉浸模式不做浮岛：无投影/圆角，图片平面贴在正文上 */
@@ -948,16 +996,22 @@ function onKey(e) {
   background: var(--panel); backdrop-filter: blur(var(--blur)) saturate(1.2);
   border: 1px solid var(--border); box-shadow: var(--shadow);
 }
-/* 大图底部工具条：全透明（与透明顶栏同一层级观感），只留按钮 */
+/* 大图底部工具条：浮动玻璃胶囊（压在图上也读得清），空闲淡出 */
 .dock.dock-clear {
-  background: transparent;
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
-  border-color: transparent;
-  box-shadow: none;
+  background: var(--glass-strong);
+  backdrop-filter: blur(24px) saturate(1.4);
+  -webkit-backdrop-filter: blur(24px) saturate(1.4);
+  border-color: var(--panel-edge);
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.18), inset 0 1px 0 var(--panel-edge);
+  padding: 5px 8px;
+  transition: opacity 0.35s ease, transform 0.35s var(--ease-overshoot);
 }
-/* 透明底上按钮靠自身色块辨识：悬停仍给 accent 底 */
-.dock.dock-clear .dock-btn:hover { background: var(--accent-weak); }
+.viewer.dock-idle .dock.dock-clear {
+  opacity: 0; transform: translateX(-50%) translateY(10px); pointer-events: none;
+}
+.dock.dock-clear .dock-btn { color: var(--text); font-size: 14px; }
+.dock.dock-clear .dock-btn:hover { background: var(--accent-weak); color: var(--accent); transform: translateY(-1px); }
+.dock.dock-clear .dock-btn:active { transform: scale(0.92); }
 .dock-btn {
   height: 32px; min-width: 32px; border: none; border-radius: 999px;
   background: transparent; color: var(--text-2); font-size: 13px;

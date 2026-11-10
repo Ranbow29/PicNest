@@ -317,7 +317,10 @@ async function dropOnLib(e, l) {
 
 /* ---- 视图区：主入口一行 + 2×2 小卡网格 ---- */
 .views { display: flex; flex-direction: column; gap: 4px; padding: 7px 2px 6px; }
-.view-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+.view-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; container-type: inline-size; }
+/* 侧栏拖窄时逐级让位：先藏图标，再藏数字，保证「最近使用」等标签完整 */
+@container (max-width: 236px) { .view-item.chip .v-ico { display: none; } }
+@container (max-width: 196px) { .view-item.chip .count { display: none; } }
 .view-item {
   position: relative;
   display: flex; align-items: center; gap: 7px; height: 28px; padding: 0 9px;

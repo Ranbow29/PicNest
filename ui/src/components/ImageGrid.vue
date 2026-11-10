@@ -1057,8 +1057,9 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
   text-transform: uppercase; margin-bottom: 10px;
 }
 .head-rule { display: flex; align-items: center; gap: 8px; margin-right: 36px; } /* 右侧让位概览滑尺 */
-.head-rule i { flex: 1; height: 1px; background: var(--border); }
-.head-rule::after { content: ''; width: 5px; height: 5px; background: var(--accent); }
+.head-rule i { flex: 1; height: 1px; background: linear-gradient(90deg, var(--accent) 0, var(--border) 72px, var(--border) 70%, transparent); transform-origin: left; animation: rule-grow 0.9s cubic-bezier(0.18, 0.72, 0.18, 1) both; }
+@keyframes rule-grow { from { transform: scaleX(0); opacity: 0; } to { transform: scaleX(1); opacity: 1; } }
+.head-rule::after { content: ''; width: 5px; height: 5px; background: var(--accent); transform: rotate(45deg); }
 
 /* ---- 子文件夹卡片条（Eagle 式） ---- */
 .subfolders { position: absolute; left: 4px; right: 4px; padding: 0 10px; }
