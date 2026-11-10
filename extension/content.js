@@ -143,6 +143,17 @@
     .row:hover, .row.on { background: rgba(180,136,75,.12); color: #8a5f24; }
     .row.last { box-shadow: inset 0 0 0 1px rgba(180,136,75,.35); }
     .loading, .empty { padding: 10px 8px; font-size: 11px; color: #8a8a8a; }
+    .auth-box { padding: 8px 4px; display: flex; flex-direction: column; gap: 6px; }
+    .auth-title { font-size: 11.5px; font-weight: 600; color: #b4463b; }
+    .auth-desc { font-size: 10.5px; color: #737373; line-height: 1.45; }
+    .auth-row { display: flex; gap: 6px; margin-top: 4px; }
+    .auth-input { flex: 1; min-width: 0; height: 26px; border-radius: 6px; border: 1px solid rgba(0,0,0,.2);
+      padding: 0 8px; font-size: 11px; background: #fff; color: #262626; outline: none; }
+    .auth-input:focus { border-color: #b4884b; box-shadow: 0 0 0 2px rgba(180,136,75,.2); }
+    .auth-btn { height: 26px; padding: 0 12px; border-radius: 6px; border: none;
+      background: #b4884b; color: #fff; font-size: 11px; cursor: pointer; flex: none; font-weight: 500; }
+    .auth-btn:hover { background: #9e753c; }
+    .auth-err { font-size: 10px; color: #b4463b; margin-top: 2px; }
     .foot { display: flex; align-items: center; gap: 8px; padding: 7px 14px 9px;
       border-top: 1px solid rgba(0,0,0,.07); color: #8a8a8a; font-size: 10.5px; }
     .state { margin-left: auto; color: #4f7d5e; }
@@ -462,11 +473,67 @@
 
     const list = panel.querySelector('.list')
     if (error) {
-      const el = document.createElement('div')
-      el.className = 'empty'
-      el.textContent = error
-      list.appendChild(el)
-      setStatus(s, 'err', '未连接')
+      if (typeof error === 'string' && (error.includes('未授权') || error.includes('Token') || error.includes('401'))) {
+        const box = document.createElement('div')
+        box.className = 'auth-box'
+        box.innerHTML = `
+          <div class="auth-title">需配对密钥</div>
+          <div class="auth-desc">安全防护已生效。请在 PicNest 顶栏「设置」中点击「复制密钥」，粘贴到下方配对：</div>
+          <div class="auth-row">
+            <input class="auth-input" type="password" placeholder="在此粘贴 32 位配对密钥…" spellcheck="false" />
+            <button class="auth-btn" type="button">配对</button>
+          </div>
+          <div class="auth-err" style="display:none"></div>
+        `
+        const inp = box.querySelector('.auth-input')
+        const btn = box.querySelector('.auth-btn')
+        const errEl = box.querySelector('.auth-err')
+        const doPair = () => {
+          const val = inp.value.trim()
+          if (!val) {
+            errEl.textContent = '密钥不能为空'
+            errEl.style.display = 'block'
+            return
+          }
+          btn.disabled = true
+          btn.textContent = '验证中…'
+          chrome.runtime.sendMessage({ type: 'save-token', token: val }, (resp) => {
+            if (resp?.ok) {
+              btn.textContent = '已配对 ✓'
+              setTimeout(() => {
+                renderPanel(s)
+                chrome.runtime.sendMessage({ type: 'collect-folders', rootId: last.rootId }, (res) => {
+                  if (session !== s || !s.opened) return
+                  if (!res?.ok) { renderPanel(s, res?.error || '读取文件夹失败'); return }
+                  s.root = res.root
+                  s.folders = flatten(res.folders)
+                  renderPanel(s)
+                })
+              }, 300)
+            } else {
+              btn.disabled = false
+              btn.textContent = '配对'
+              errEl.textContent = resp?.error || '配对失败'
+              errEl.style.display = 'block'
+            }
+          })
+        }
+        btn.addEventListener('click', (e) => { e.stopPropagation(); doPair() })
+        inp.addEventListener('click', (e) => e.stopPropagation())
+        inp.addEventListener('keydown', (e) => {
+          e.stopPropagation()
+          if (e.key === 'Enter') doPair()
+        })
+        list.appendChild(box)
+        setStatus(s, 'err', '需配对')
+        setTimeout(() => inp.focus(), 60)
+      } else {
+        const el = document.createElement('div')
+        el.className = 'empty'
+        el.textContent = error
+        list.appendChild(el)
+        setStatus(s, 'err', '未连接')
+      }
     } else if (!s.folders) {
       const el = document.createElement('div')
       el.className = 'loading'

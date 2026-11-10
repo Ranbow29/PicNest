@@ -413,6 +413,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (!ctx.roots.some((r) => String(r.id) === String(rootId))) rootId = ctx.rootId
         const data = await api('/api/v1/folders?rootId=' + encodeURIComponent(rootId))
         sendResponse({ ok: true, root: data.root, folders: data.folders, context: ctx })
+      } else if (msg?.type === 'save-token') {
+        const token = String(msg.token || '').trim()
+        if (!token) throw new Error('Token 不能为空')
+        await chrome.storage.local.set({ picnestToken: token })
+        sendResponse({ ok: true })
       } else if (msg?.type === 'create-folder') {
         const data = await apiRaw('/api/v1/folder/create', {
           rootId: msg.rootId,
