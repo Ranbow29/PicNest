@@ -73,6 +73,30 @@ const lightboxKind = computed(() => {
 })
 const panelOpen = ref(false)
 const settingsOpen = ref(false)
+const collectToken = ref('')
+const copyTokenText = ref('复制密钥')
+const collectTokenDesc = computed(() => {
+  if (!collectToken.value) return '用于授权浏览器采集插件安全配对'
+  return collectToken.value.slice(0, 6) + '••••••••' + collectToken.value.slice(-6)
+})
+async function loadCollectToken() {
+  try {
+    const res = await window.picrand?.picnestCollectGetToken?.()
+    if (res?.ok && res.token) collectToken.value = res.token
+  } catch (e) {}
+}
+async function copyCollectToken() {
+  if (!collectToken.value) return
+  try {
+    await navigator.clipboard.writeText(collectToken.value)
+    copyTokenText.value = '已复制 ✓'
+    setTimeout(() => { copyTokenText.value = '复制密钥' }, 2000)
+  } catch (e) {
+    copyTokenText.value = '复制失败'
+  }
+}
+loadCollectToken()
+
 const topPinned = ref(false)
 async function refreshTopPinned() { try { topPinned.value = !!(await window.picrand.windowIsAlwaysOnTop()) } catch { /* 静默 */ } }
 async function toggleTop() { api.windowToggleAlwaysOnTop(); await refreshTopPinned(); collectiveShake() }
@@ -276,6 +300,13 @@ function onKey(e) {
               <div class="set-desc">悬停时卡片视差微倾与柔光掠影</div>
             </div>
             <button class="set-switch" :class="{ on: lib.cardTilt3D }" type="button"><i /></button>
+          </div>
+                    <div class="set-row">
+            <div class="set-meta">
+              <div class="set-title">采集扩展配对密钥</div>
+              <div class="set-desc">{{ collectTokenDesc }}</div>
+            </div>
+            <button class="set-copy-btn" type="button" @click.stop="copyCollectToken">{{ copyTokenText }}</button>
           </div>
           <div class="set-row" @click="lib.toggleDocPrivacyMode()">
             <div class="set-meta">
@@ -506,6 +537,14 @@ button.tool.funnel .badge {
 .set-meta { min-width: 0; flex: 1; }
 .set-title { font-size: 12.5px; font-weight: 600; color: var(--text); }
 .set-desc { font-size: 10.5px; color: var(--text-2); margin-top: 2px; line-height: 1.35; }
+.set-copy-btn {
+  padding: 4px 10px; border-radius: var(--radius-sm, 6px);
+  border: 1px solid var(--border); background: var(--panel);
+  font-size: 11px; color: var(--text-1); cursor: pointer;
+  transition: all 0.18s ease; flex-shrink: 0;
+}
+.set-copy-btn:hover { background: var(--hover); border-color: var(--accent); color: var(--accent); }
+
 .set-switch {
   flex: none; width: 34px; height: 19px; padding: 2px;
   border: 1px solid var(--border); border-radius: 999px;

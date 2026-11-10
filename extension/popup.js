@@ -57,7 +57,11 @@ function msg(text, err) {
   elMsg.className = 'msg' + (err ? ' err' : '')
 }
 async function api(path) {
-  const res = await fetch(API + path)
+  const s = await chrome.storage.local.get(['picnestToken'])
+  const headers = {}
+  if (s.picnestToken) headers['X-PicNest-Token'] = s.picnestToken
+  const res = await fetch(API + path, { headers })
+  if (res.status === 401) throw new Error('TOKEN_REQUIRED')
   const data = await res.json().catch(() => ({}))
   if (!res.ok || !data.ok) throw new Error(data.error || ('HTTP ' + res.status))
   return data
@@ -98,7 +102,10 @@ async function init() {
     return
   }
   try {
+    const s = await chrome.storage.local.get(['picnestToken'])
+    if (s.picnestToken) elTokenInput.value = s.picnestToken
     const ctx = await api('/api/v1/context')
+    elTokenBox.style.display = 'none' 
     const saved = await chrome.storage.local.get(['rootId', 'rel'])
     elRoot.innerHTML = ''
     for (const r of ctx.roots) {
@@ -114,7 +121,13 @@ async function init() {
     await loadFolders(rootId, saved.rel || '')
     elSave.disabled = false
   } catch (e) {
-    msg('初始化失败：' + e.message, true)
+    if (e.message === 'TOKEN_REQUIRED') {
+      setStatus('off', '需配对密钥')
+      elTokenBox.style.display = 'flex'
+      msg('请在图巢「设置」中点击「复制密钥」，粘贴到上方完成配对。', true)
+    } else {
+      msg('初始化失败：' + e.message, true)
+    }
   }
 }
 

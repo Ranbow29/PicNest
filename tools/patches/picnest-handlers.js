@@ -278,6 +278,7 @@ electron.ipcMain.handle("picnest-set-image-meta", (_event, filePath, patch) => {
   const allow = ["annotation", "url"];
   for (const k of allow) {
     if (k in patch) getDb().prepare(`UPDATE images SET ${k} = ? WHERE file_path = ?`).run(String(patch[k] ?? ""), filePath);
+    picnestScheduleMetaExportByFilePath(filePath);
   }
   return true;
 });
@@ -2112,6 +2113,38 @@ function picnestMetaWrite(rootPath, meta) {
     return true;
   } catch (e) { return false; }
 }
+
+/* ==== M7-META: 30 秒防抖异步落盘队列 ==== */
+const _picnestMetaDebounceTimers = new Map();
+function picnestScheduleMetaExport(rootId, delayMs = 30000) {
+  if (!rootId) return;
+  const rid = Number(rootId);
+  if (isNaN(rid) || rid <= 0) return;
+  if (_picnestMetaDebounceTimers.has(rid)) {
+    clearTimeout(_picnestMetaDebounceTimers.get(rid));
+  }
+  const timer = setTimeout(() => {
+    _picnestMetaDebounceTimers.delete(rid);
+    try {
+      picnestMetaExport(rid);
+    } catch (e) {}
+  }, delayMs);
+  _picnestMetaDebounceTimers.set(rid, timer);
+}
+function picnestScheduleMetaExportByFilePath(filePath, delayMs = 30000) {
+  try {
+    const row = getDb().prepare("SELECT folder_id FROM images WHERE file_path = ?").get(filePath);
+    if (row?.folder_id) picnestScheduleMetaExport(row.folder_id, delayMs);
+  } catch (e) {}
+}
+function picnestFlushAllMetaExports() {
+  for (const [rid, timer] of _picnestMetaDebounceTimers.entries()) {
+    clearTimeout(timer);
+    try { picnestMetaExport(rid); } catch (e) {}
+  }
+  _picnestMetaDebounceTimers.clear();
+}
+
 function picnestMetaExport(rootId) {
   try {
     picnestMigrate();
@@ -2270,6 +2303,7 @@ function picnestMetaImport(rootId) {
         c.dirs++;
       }
       picnestDirMemoryWrite(mem);
+  picnestScheduleMetaExport(rootId);
     }
     /* 目录排序 + 图片排序 */
     const dirOrder = picnestDirOrderRead();
@@ -3366,6 +3400,7 @@ async function picnestAiDHash(file) {
   const src = file.thumbnail_path && fs.existsSync(file.thumbnail_path) ? file.thumbnail_path : file.file_path;
   const buf = await sharp(src).rotate().resize(9, 8, { fit: "fill" }).greyscale().raw().toBuffer();
   let a = 0, b = 0, bit = 0;
+  let fa = 0, fb = 0;
   for (let y = 0; y < 8; y++) {
     for (let x = 0; x < 8; x++) {
       const left = buf[y * 9 + x], right = buf[y * 9 + x + 1];
@@ -3373,10 +3408,16 @@ async function picnestAiDHash(file) {
         if (bit < 32) a = (a | (1 << bit)) >>> 0;
         else b = (b | (1 << (bit - 32))) >>> 0;
       }
+      // 水平镜像: 镜像后第 x 格等于原图从右向左 (8-x) 对比 (7-x)
+      const mLeft = buf[y * 9 + (8 - x)], mRight = buf[y * 9 + (7 - x)];
+      if (mLeft > mRight) {
+        if (bit < 32) fa = (fa | (1 << bit)) >>> 0;
+        else fb = (fb | (1 << (bit - 32))) >>> 0;
+      }
       bit++;
     }
   }
-  return [a, b];
+  return { hash: [a, b], flip: [fa, fb] };
 }
 // 32×32 RGB 色块签名：每块量化到 3bit/通道（512 色），比较时统计有多少块颜色不同。
 // 8×8 太粗（文字/小结构会被平均掉），32×32 能区分“同版式不同内容”，又比逐像素抗压缩。
@@ -3403,6 +3444,7 @@ function picnestAiPHash(rgb) {
   const g = new Float64Array(1024);
   for (let i = 0; i < 1024; i++) g[i] = 0.299 * rgb[i * 3] + 0.587 * rgb[i * 3 + 1] + 0.114 * rgb[i * 3 + 2];
   const vals = [];
+  const flipVals = [];
   for (let v = 0; v < 8; v++) {
     for (let u = 0; u < 8; u++) {
       if (!u && !v) continue;
@@ -3414,19 +3456,24 @@ function picnestAiPHash(rgb) {
         s += rowSum * PICNEST_AI_COS[v][y];
       }
       vals.push(s);
+      // 数学定理：2D-DCT 在水平翻转后，奇数阶 u 余弦基反号 (-1)^u * s，偶数阶不变
+      flipVals.push(u % 2 === 1 ? -s : s);
     }
   }
-  const sorted = [...vals].sort((a, b) => a - b);
-  const med = sorted[Math.floor(sorted.length / 2)];
-  let a = 0, b = 0, bit = 0;
-  for (const val of vals) {
-    if (val > med) {
-      if (bit < 32) a = (a | (1 << bit)) >>> 0;
-      else b = (b | (1 << (bit - 32))) >>> 0;
+  const toBits = (arr) => {
+    const sorted = [...arr].sort((x, y) => x - y);
+    const med = sorted[Math.floor(sorted.length / 2)];
+    let a = 0, b = 0, bit = 0;
+    for (const val of arr) {
+      if (val > med) {
+        if (bit < 32) a = (a | (1 << bit)) >>> 0;
+        else b = (b | (1 << (bit - 32))) >>> 0;
+      }
+      bit++;
     }
-    bit++;
-  }
-  return [a, b];
+    return [a, b];
+  };
+  return { phash: toBits(vals), flip: toBits(flipVals) };
 }
 async function picnestAiThumbData(file) {
   const sharp = (await import("sharp")).default;
@@ -3474,9 +3521,22 @@ electron.ipcMain.handle("picnest-ai-dup-scan", async (event, folderId, rel, maxP
     let done = 0;
     await picnestMapLimit(images, 4, async (im) => {
       const [h, c] = await Promise.allSettled([picnestAiDHash(im), picnestAiColorBlocks(im)]);
-      im.hash = h.status === "fulfilled" ? h.value : null;
+      if (h.status === "fulfilled" && h.value) {
+        im.hash = h.value.hash;
+        im.hashFlip = h.value.flip;
+      } else {
+        im.hash = null;
+        im.hashFlip = null;
+      }
       im.color = c.status === "fulfilled" ? c.value : null;
-      im.phash = im.color ? picnestAiPHash(im.color) : null;
+      if (im.color) {
+        const pObj = picnestAiPHash(im.color);
+        im.phash = pObj.phash;
+        im.phashFlip = pObj.flip;
+      } else {
+        im.phash = null;
+        im.phashFlip = null;
+      }
       done++;
       if (done % 4 === 0 || done === images.length) send({ phase: "hash", done, total: images.length });
     });
@@ -3490,13 +3550,19 @@ electron.ipcMain.handle("picnest-ai-dup-scan", async (event, folderId, rel, maxP
     let pairs = [];
     for (let i = 0; i < valid.length; i++) {
       for (let j = i + 1; j < valid.length; j++) {
-        const d = picnestAiHam(valid[i].hash, valid[j].hash);
+        const dDirect = picnestAiHam(valid[i].hash, valid[j].hash);
+        const dFlip = (valid[i].hashFlip && valid[j].hash) ? picnestAiHam(valid[i].hashFlip, valid[j].hash) : 999;
+        const d = Math.min(dDirect, dFlip);
         if (d <= threshold) {
           dhashPairs++;
           let cd = null;
           if (valid[i].color && valid[j].color) cd = picnestAiColorDiff(valid[i].color, valid[j].color);
           let ph = null;
-          if (valid[i].phash && valid[j].phash) ph = picnestAiHam(valid[i].phash, valid[j].phash);
+          if (valid[i].phash && valid[j].phash) {
+            const phDirect = picnestAiHam(valid[i].phash, valid[j].phash);
+            const phFlip = (valid[i].phashFlip && valid[j].phash) ? picnestAiHam(valid[i].phashFlip, valid[j].phash) : 999;
+            ph = Math.min(phDirect, phFlip);
+          }
           if (d <= colorBypass || cd == null || ph == null || (cd <= colorLimit && ph <= phashLimit)) {
             pairs.push({ i, j, d, color: cd, phash: ph });
             if (pairs.length > 20000) {
@@ -4056,6 +4122,22 @@ function picnestCollectReadJson(req, limit = 2 * 1024 * 1024) {
     req.on("error", reject);
   });
 }
+
+/* ==== M6-AUTH: 采集端 Token 鉴权 ==== */
+function picnestGetCollectToken() {
+  try {
+    const c = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+    if (c.collectToken && typeof c.collectToken === "string" && c.collectToken.length >= 16) return c.collectToken;
+    const crypto = require("crypto");
+    const token = crypto.randomBytes(16).toString("hex");
+    c.collectToken = token;
+    fs.writeFileSync(configPath, JSON.stringify(c, null, 2));
+    return token;
+  } catch (e) {
+    return "picnest-token-fallback";
+  }
+}
+
 function picnestStartCollectServer() {
   if (picnestCollectHttp) return;
   const http = require("http");
@@ -4070,7 +4152,14 @@ function picnestStartCollectServer() {
     const url = new URL(req.url || "/", `http://127.0.0.1:${PICNEST_COLLECT_PORT}`);
     try {
       if (req.method === "GET" && url.pathname === "/api/v1/ping") {
-        return picnestCollectJson(res, 200, { ok: true, app: "PicNest", api: 1, port: PICNEST_COLLECT_PORT });
+        return picnestCollectJson(res, 200, { ok: true, app: "PicNest", api: 1, port: PICNEST_COLLECT_PORT, auth: true });
+      }
+      /* 强制校验 X-PicNest-Token，防止任意第三方未授权扩展偷取物理路径与注入文件 */
+      const reqToken = String(req.headers["x-picnest-token"] || url.searchParams.get("token") || "");
+      const validToken = picnestGetCollectToken();
+      if (!reqToken || reqToken !== validToken) {
+        picnestCollectLog("unauthorized", req.method, url.pathname, `origin=${origin}`);
+        return picnestCollectJson(res, 401, { ok: false, error: "未授权：无效或缺失的采集密钥 (X-PicNest-Token)" });
       }
       if (req.method === "GET" && url.pathname === "/api/v1/context") {
         const roots = picnestCollectRoots();
@@ -4150,6 +4239,21 @@ electron.ipcMain.handle("picnest-collect-set-root", (_event, id) => {
   picnestCollectRootId = id == null || id === "" ? null : Number(id);
   return { ok: true, rootId: picnestCollectRootId };
 });
+
+electron.ipcMain.handle("picnest-collect-get-token", () => ({ ok: true, token: picnestGetCollectToken() }));
+electron.ipcMain.handle("picnest-collect-reset-token", () => {
+  try {
+    const c = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+    const crypto = require("crypto");
+    const token = crypto.randomBytes(16).toString("hex");
+    c.collectToken = token;
+    fs.writeFileSync(configPath, JSON.stringify(c, null, 2));
+    return { ok: true, token };
+  } catch (e) {
+    return { ok: false, error: String(e?.message || e) };
+  }
+});
+
 electron.ipcMain.handle("picnest-collect-info", () => ({
   ok: true,
   port: PICNEST_COLLECT_PORT,
