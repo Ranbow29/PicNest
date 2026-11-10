@@ -861,7 +861,8 @@ export const useLibrary = defineStore('library', {
       if (r.width) img.width = r.width
       if (r.height) img.height = r.height
       if (r.size) img.file_size = r.size
-      img.modify_time = Math.floor(Date.now() / 1000)
+      if (r.modify_time) img.modify_time = r.modify_time
+      else img.modify_time = Math.floor(Date.now() / 1000)
       img.thumbnail_path = ''
       delete this.palettes[p]
       this.viewer.rot = 0

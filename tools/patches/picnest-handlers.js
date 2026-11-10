@@ -1048,14 +1048,15 @@ electron.ipcMain.handle("picnest-crop", async (_event, filePath, opts) => {
     const tmp = filePath + ".cropping";
     fs.writeFileSync(tmp, buf);
     fs.renameSync(tmp, filePath);
-    // DB：新尺寸 + 色板失效
-    getDb().prepare("UPDATE images SET width = ?, height = ?, palettes = NULL WHERE file_path = ?").run(width, height, filePath);
+    // DB：新尺寸 + 色板失效 + 更新修改时间
+    const mt = Math.floor(fs.statSync(filePath).mtimeMs / 1000);
+    getDb().prepare("UPDATE images SET width = ?, height = ?, modify_time = ?, palettes = NULL WHERE file_path = ?").run(width, height, mt, filePath);
     // 缩略图缓存失效（md5 寻址的三种变体全清）
     for (const suffix of [ext, ".webp", ".jpg"]) {
       const t = path.join(cacheDir, key + suffix);
       if (fs.existsSync(t)) { try { fs.unlinkSync(t); } catch (e) {} }
     }
-    return { ok: true, width, height, backup };
+    return { ok: true, width, height, modify_time: mt, backup };
   } catch (e) {
     return { ok: false, error: String(e?.message || e) };
   }
@@ -1109,16 +1110,17 @@ electron.ipcMain.handle("picnest-apply-transform", async (_event, filePath, opts
     const st = fs.statSync(filePath);
     const width = m.width || 0;
     const height = m.height || 0;
+    const mt = Math.floor(st.mtimeMs / 1e3);
     try {
       getDb().prepare(
         "UPDATE images SET width = ?, height = ?, file_size = ?, modify_time = ?, palettes = NULL, thumbnail_path = '' WHERE file_path = ?"
-      ).run(width, height, st.size, Math.floor(st.mtimeMs / 1e3), filePath);
+      ).run(width, height, st.size, mt, filePath);
     } catch (e) {}
     for (const suffix of [ext, ".webp", ".jpg"]) {
       const t = path.join(cacheDir, key + suffix);
       if (fs.existsSync(t)) { try { fs.unlinkSync(t); } catch (e) {} }
     }
-    return { ok: true, changed: true, width, height, size: st.size, backup };
+    return { ok: true, changed: true, width, height, size: st.size, modify_time: mt, backup };
   } catch (e) {
     return { ok: false, error: String((e && e.message) || e) };
   }

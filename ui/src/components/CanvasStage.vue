@@ -92,6 +92,13 @@ function draw() {
   if (!img || !img.naturalWidth || !img.naturalHeight) return
   const mw = props.width || img.naturalWidth
   const mh = props.height || img.naturalHeight
+  // 防御检查：旋转或裁剪后，如果缓存纹理的宽高比与目标宽高比严重冲突（例如横竖颠倒），
+  // 坚决不执行拉伸错位绘制，等待新朝向纹理载入完成
+  if (img.naturalWidth && img.naturalHeight && mw && mh) {
+    const naturalRatio = img.naturalWidth / img.naturalHeight
+    const targetRatio = mw / mh
+    if (Math.abs(naturalRatio - targetRatio) > 0.08) return
+  }
   let sc = view.scale || 1
   if (props.fitMode) sc *= Math.min(1, W / mw, H / mh)
   if (!(sc > 0)) return
