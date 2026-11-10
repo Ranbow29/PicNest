@@ -838,6 +838,31 @@ function clearDragUi() {
   dragging.value = false
   try { api.dragEnd() } catch (err) { console.error('[drag-end]', err) }
 }
+/* 双击打开灯箱：抓取当前卡片屏幕坐标，供灯箱做 FLIP 共享元素放大过渡 */
+function onCellDblClick(e, img) {
+  const el = e.currentTarget?.querySelector?.('.thumb') || e.currentTarget
+  const r = el?.getBoundingClientRect?.()
+  const rect = r && r.width > 0 ? { left: r.left, top: r.top, width: r.width, height: r.height } : null
+  lib.openLightbox(img.file_path, rect)
+}
+/* 卡片 3D 微倾 + 柔光镜面跟随：直接写当前 DOM 节点的 CSS 变量，不触发 Vue 响应式重渲染 */
+function onCellTiltMove(e) {
+  if (dragging.value) return
+  const el = e.currentTarget
+  const r = el.getBoundingClientRect()
+  if (!r.width || !r.height) return
+  const px = (e.clientX - r.left) / r.width
+  const py = (e.clientY - r.top) / r.height
+  el.style.setProperty('--rx', ((0.5 - py) * 7.2).toFixed(2) + 'deg')
+  el.style.setProperty('--ry', ((px - 0.5) * 7.2).toFixed(2) + 'deg')
+  el.style.setProperty('--gx', (px * 100).toFixed(1) + '%')
+  el.style.setProperty('--gy', (py * 100).toFixed(1) + '%')
+}
+function onCellTiltLeave(e) {
+  const el = e.currentTarget
+  el.style.removeProperty('--rx')
+  el.style.removeProperty('--ry')
+}
 onMounted(() => window.addEventListener('dragend', clearDragUi))
 onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
 </script>
@@ -917,11 +942,14 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
       <div
         v-for="img in cells" :key="img.id + '-' + waveSeq"
         class="cell" :class="{ selected: selectedSet.has(img.file_path) }"
+        :data-cell-path="img.file_path"
         :style="{ transform: `translate(${img.x}px, ${img.y + 0}px)`, width: img.w + 'px', height: img.h + 'px', '--d': waveDelay(img.gi) + 'ms' }"
         draggable="true"
         @dragstart="onCellDragStart($event, img)"
         @click="onCellClick($event, img)"
-        @dblclick="lib.openLightbox(img.file_path)"
+        @dblclick="onCellDblClick($event, img)"
+        @pointermove="onCellTiltMove"
+        @pointerleave="onCellTiltLeave"
         @contextmenu.prevent="lib.openContextMenu($event, img)"
       >
         <div class="thumb wi" :class="{ nowi: img.gi >= 48, gray: lib.grayscaleMode }">
@@ -964,20 +992,38 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
 .grid-viewport::-webkit-scrollbar { width: 0; height: 0; }
 .grid-viewport::-webkit-scrollbar-thumb { background: transparent; }
 .canvas { position: relative; width: 100%; margin-right: 26px; user-select: none; } /* 右缘让位概览滑尺（详情在其右侧） */
-.cell { position: absolute; top: 0; left: 0; cursor: default; will-change: transform; }
+.cell { position: absolute; top: 0; left: 0; cursor: default; will-change: transform; perspective: 820px; }
 .thumb {
   position: relative; width: 100%; height: 100%;
   border-radius: 12px; overflow: hidden;
   background: var(--bg-2); border: 1px solid var(--border);
   box-shadow: var(--shadow-tile);
-  transition: box-shadow 0.24s ease, border-color 0.18s, transform 0.26s var(--ease-overshoot);
+  transform-style: preserve-3d;
+  transition: box-shadow 0.24s ease, border-color 0.18s, transform 0.22s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+/* 浮岛 3D 柔光掠影：随鼠标位置扫过卡片表面 */
+.thumb::before {
+  content: ''; position: absolute; inset: 0; z-index: 2; border-radius: inherit; pointer-events: none;
+  background: radial-gradient(
+    circle 155px at var(--gx, 50%) var(--gy, 25%),
+    rgba(255, 255, 255, 0.28) 0%,
+    rgba(255, 255, 255, 0.08) 42%,
+    transparent 74%
+  );
+  opacity: 0; transition: opacity 0.24s ease;
+  mix-blend-mode: overlay;
 }
 /* 浮岛顶缘：一线玻璃高光 + 极淡整圈内描边（只有 ::after 能压在 img 之上） */
 .thumb::after {
   content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
   box-shadow: inset 0 1px 0 var(--tile-edge), inset 0 0 0 1px rgba(255, 255, 255, 0.08);
 }
-.cell:hover .thumb { transform: translateY(-3px); box-shadow: var(--shadow-tile-hover); }
+.cell:hover .thumb {
+  transform: translateY(-3px) rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg)) scale(1.012);
+  box-shadow: var(--shadow-tile-hover);
+}
+.cell:hover .thumb::before { opacity: 1; }
+.canvas.dragging .cell:hover .thumb::before { opacity: 0; }
 .cell.selected .thumb {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px var(--accent), 0 0 0 6px var(--accent-weak), var(--shadow-tile);

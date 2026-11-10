@@ -56,14 +56,22 @@ const ambientUrl = computed(() => {
   if (img.thumbnail_path && img.thumbnail_path !== 'SKIP') return fileUrl(img.thumbnail_path) + '?v=' + (img.modify_time || 0)
   return url.value
 })
-/* 工具条空闲隐身：鼠标静止 2.4s 后底部工具条淡出，移动即回（裁剪态常驻） */
-const dockIdle = ref(false)
-let dockIdleTimer = null
-function pokeDock() {
-  dockIdle.value = false
-  clearTimeout(dockIdleTimer)
-  dockIdleTimer = setTimeout(() => { dockIdle.value = true }, 2400)
+/* 底部工具条仅在鼠标移到底部按钮区域时才缓慢浮现，其余时刻完全隐身，不抢画面 */
+const dockHover = ref(false)
+function onViewerPointerMove(e) {
+  const el = stageEl.value
+  if (!el) return
+  const r = el.getBoundingClientRect()
+  const fromBottom = r.bottom - e.clientY
+  const fromCenter = Math.abs(e.clientX - (r.left + r.width / 2))
+  const halfW = kind.value === 'video' ? 280 : 210
+  dockHover.value = fromBottom >= 0 && fromBottom <= 64 && fromCenter <= halfW
 }
+function onViewerLeave() {
+  onUp()
+  dockHover.value = false
+}
+let flipRaf = 0
 const isPsd = computed(() => extOf(lib.lightbox.path) === '.psd')
 /* PSD 原图：主进程用 ag-psd 合成整幅 PNG（不是 400/1024 缩略图），先显示缩略图占位 */
 const psdFull = ref('')
@@ -199,7 +207,7 @@ const canvasPreviewSrc = computed(() => {
 })
 function onCanvasError() { stageDead.value = true }
 
-function fitToWindow() {
+function fitToWindow(animateFlip = false) {
   if (!stageEl.value || kind.value === 'text') return
   let iw = 0, ih = 0
   if (kind.value === 'video') {
@@ -220,7 +228,47 @@ function fitToWindow() {
      旧版只留总 110px，居中后上下各 55px，顶边会钻进拖尾、底边会压到 dock。 */
   const TOP_INSET = 70, BOTTOM_INSET = 70
   const availH = Math.max(120, rect.height - TOP_INSET - BOTTOM_INSET)
-  lib.viewer.scale = Math.min(availW / iw, availH / ih) || 1 /* 按工作区适配，可放大不超出 */
+  const targetScale = Math.min(availW / iw, availH / ih) || 1 /* 按工作区适配，可放大不超出 */
+  if (flipRaf) { cancelAnimationFrame(flipRaf); flipRaf = 0 }
+  const orig = animateFlip === true ? lib.lightboxOrigin : null
+  if (orig) lib.lightboxOrigin = null
+  if (orig && orig.path === lib.lightbox.path && Date.now() - orig.at < 900 && iw > 0 && ih > 0) {
+    const startScale = Math.max(0.04, Math.min(orig.width / iw, orig.height / ih))
+    const startTx = (orig.left + orig.width / 2) - (rect.left + rect.width / 2)
+    const startTy = (orig.top + orig.height / 2) - (rect.top + rect.height / 2)
+    const dur = 360
+    const t0 = performance.now()
+    lib.viewer.scale = startScale
+    lib.viewer.tx = startTx
+    lib.viewer.ty = startTy
+    if (canvasMode.value) canvasStage.value?.drawAt(startTx, startTy, startScale)
+    const step = (now) => {
+      const p = Math.min(1, (now - t0) / dur)
+      const ease = 1 - Math.pow(1 - p, 3.8)
+      const curTx = startTx * (1 - ease)
+      const curTy = startTy * (1 - ease)
+      const curScale = startScale + (targetScale - startScale) * ease
+      if (canvasMode.value && canvasStage.value?.drawAt) {
+        canvasStage.value.drawAt(curTx, curTy, curScale)
+      } else {
+        lib.viewer.tx = curTx
+        lib.viewer.ty = curTy
+        lib.viewer.scale = curScale
+      }
+      if (p < 1) {
+        flipRaf = requestAnimationFrame(step)
+      } else {
+        flipRaf = 0
+        lib.viewer.scale = targetScale
+        lib.viewer.tx = 0
+        lib.viewer.ty = 0
+        if (canvasMode.value) canvasStage.value?.drawAt(0, 0, targetScale)
+      }
+    }
+    flipRaf = requestAnimationFrame(step)
+    return
+  }
+  lib.viewer.scale = targetScale
   lib.viewer.tx = 0; lib.viewer.ty = 0
 }
 function oneToOne() { lib.viewer.scale = 1; lib.viewer.tx = 0; lib.viewer.ty = 0 }
@@ -247,8 +295,8 @@ watch(() => [lib.viewer.scale, lib.viewer.tx, lib.viewer.ty, lib.viewer.showInsp
   })
 })
 watch(() => lib.lightbox.path, () => { lib.viewer.rot = 0; lib.viewer.flopX = false; nextTick(fitToWindow) })
-onMounted(() => { nextTick(fitToWindow); window.addEventListener('keydown', onKey) })
-onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
+onMounted(() => { nextTick(() => fitToWindow(true)); window.addEventListener('keydown', onKey) })
+onBeforeUnmount(() => { if (flipRaf) cancelAnimationFrame(flipRaf); window.removeEventListener('keydown', onKey) })
 
 function onWheel(e) {
   if (kind.value === 'text') return // 文本编辑器里滚轮 = 滚动正文
@@ -797,10 +845,10 @@ function onKey(e) {
 
 <template>
   <div
-    ref="stageEl" class="viewer" :class="{ 'dock-idle': dockIdle && !lib.viewer.cropMode, 'has-ambient': !!ambientUrl }"
+    ref="stageEl" class="viewer" :class="{ 'dock-show': dockHover, 'has-ambient': !!ambientUrl }"
     @wheel="onWheel" @contextmenu="onContext"
-    @mousedown="onDown" @mousemove="onMove" @mouseup="onUp" @mouseleave="onUp"
-    @pointermove="pokeDock"
+    @mousedown="onDown" @mousemove="onMove" @mouseup="onUp" @mouseleave="onViewerLeave"
+    @pointermove="onViewerPointerMove"
     @dblclick="onViewerDblclick"
     :style="canvasMode ? { cursor: dragging ? 'grabbing' : 'grab' } : undefined"
   >
@@ -954,31 +1002,39 @@ function onKey(e) {
   display: flex; align-items: center; justify-content: center;
   background: var(--panel-strong);
 }
-/* ---- 氛围底（Ambient）：当前图模糊放大铺满舞台，图片像浮在自己的光晕里 ---- */
+/* ---- 氛围底（Ambient）：亮色主题克制温润（不抢画面），暗色主题稍微浓郁 ---- */
 .ambient {
-  position: absolute; inset: -12%; z-index: 0; pointer-events: none;
+  position: absolute; inset: -14%; z-index: 0; pointer-events: none;
   background-size: cover; background-position: center;
-  filter: blur(64px) saturate(1.5) brightness(1.04);
-  opacity: 0.62;
+  filter: blur(92px) saturate(1.16) brightness(1.04);
+  opacity: 0.20;
   transform: translateZ(0);
   animation: amb-drift 28s ease-in-out infinite alternate;
+}
+:global(:root[data-theme="dark"]) .ambient,
+:global(:root[data-theme="mono-charcoal"]) .ambient,
+:global(:root[data-theme="mono-dark"]) .ambient {
+  filter: blur(78px) saturate(1.36) brightness(0.88);
+  opacity: 0.40;
 }
 @keyframes amb-drift {
   from { transform: translateZ(0) scale(1) translate(0, 0); }
   to { transform: translateZ(0) scale(1.08) translate(-1.5%, 1%); }
 }
-/* 柔光罩：亮色主题压一层奶白、暗色压一层深底，保证 UI 文字可读，再叠四角暗角聚焦中心 */
+/* 柔光罩：亮色主题只做极淡暖边晕，不压脏白底 */
 .ambient-veil {
   position: absolute; inset: 0; z-index: 0; pointer-events: none;
-  background:
-    radial-gradient(ellipse 75% 70% at 50% 50%, transparent 40%, rgba(0, 0, 0, 0.16) 100%),
-    linear-gradient(180deg, var(--glass-weak) 0%, transparent 18%, transparent 82%, var(--glass-weak) 100%);
+  background: radial-gradient(ellipse 82% 76% at 50% 50%, transparent 50%, rgba(60, 50, 30, 0.05) 100%);
+}
+:global(:root[data-theme="dark"]) .ambient-veil,
+:global(:root[data-theme="mono-charcoal"]) .ambient-veil,
+:global(:root[data-theme="mono-dark"]) .ambient-veil {
+  background: radial-gradient(ellipse 78% 72% at 50% 50%, transparent 42%, rgba(0, 0, 0, 0.24) 100%);
 }
 .amb-enter-active, .amb-leave-active { transition: opacity 0.6s ease; }
 .amb-enter-from, .amb-leave-to { opacity: 0 !important; }
 .viewer.has-ambient .stage:not(.video) {
-  /* 有氛围底时图片投一层柔影，从光晕里“浮”出来（影子跟随 transform 一起缩放） */
-  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.28), 0 4px 14px rgba(0, 0, 0, 0.14);
+  box-shadow: 0 14px 44px rgba(0, 0, 0, 0.16), 0 3px 10px rgba(0, 0, 0, 0.08);
 }
 @media (prefers-reduced-motion: reduce) { .ambient { animation: none; } }
 .stage {
@@ -996,18 +1052,25 @@ function onKey(e) {
   background: var(--panel); backdrop-filter: blur(var(--blur)) saturate(1.2);
   border: 1px solid var(--border); box-shadow: var(--shadow);
 }
-/* 大图底部工具条：浮动玻璃胶囊（压在图上也读得清），空闲淡出 */
+/* 大图底部工具条：高透薄雾胶囊，默认完全隐身（0 不透明度），仅当鼠标移到底部按钮位置才缓慢浮现 */
 .dock.dock-clear {
-  background: var(--glass-strong);
-  backdrop-filter: blur(24px) saturate(1.4);
-  -webkit-backdrop-filter: blur(24px) saturate(1.4);
-  border-color: var(--panel-edge);
-  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.18), inset 0 1px 0 var(--panel-edge);
+  background: rgba(255, 253, 249, 0.28);
+  background: color-mix(in srgb, var(--glass-strong) 34%, transparent);
+  backdrop-filter: blur(14px) saturate(1.15);
+  -webkit-backdrop-filter: blur(14px) saturate(1.15);
+  border-color: rgba(128, 128, 128, 0.14);
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.08);
   padding: 5px 8px;
-  transition: opacity 0.35s ease, transform 0.35s var(--ease-overshoot);
+  opacity: 0;
+  transform: translateX(-50%) translateY(12px) scale(0.96);
+  pointer-events: none;
+  transition: opacity 0.48s cubic-bezier(0.22, 1, 0.36, 1), transform 0.48s cubic-bezier(0.22, 1, 0.36, 1);
 }
-.viewer.dock-idle .dock.dock-clear {
-  opacity: 0; transform: translateX(-50%) translateY(10px); pointer-events: none;
+.viewer.dock-show .dock.dock-clear,
+.dock.dock-clear:hover {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0) scale(1);
+  pointer-events: auto;
 }
 .dock.dock-clear .dock-btn { color: var(--text); font-size: 14px; }
 .dock.dock-clear .dock-btn:hover { background: var(--accent-weak); color: var(--accent); transform: translateY(-1px); }
