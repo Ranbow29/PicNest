@@ -392,6 +392,7 @@ electron.ipcMain.handle("picnest-psd-preview", async (_event, filePath) => {
     return { ok: false, error: String(e?.message || e) };
   }
 });
+const picnestPreviewJobs = new Map();
 electron.ipcMain.handle("picnest-view-preview", async (_event, filePath) => {
   try {
     if (!filePath) return { ok: false, error: "文件不存在" };
@@ -401,8 +402,15 @@ electron.ipcMain.handle("picnest-view-preview", async (_event, filePath) => {
     const exts = new Set([".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff", ".avif", ".heic", ".heif", ".psd"]);
     if (!exts.has(ext)) return { ok: false, error: "该格式不支持大图预览" };
     const mt = Math.floor(fs.statSync(abs).mtimeMs);
-    const out = path.join(cacheDir, "view-" + crypto.createHash("md5").update(abs + "|2048|" + mt).digest("hex") + ".webp");
-    if (!fs.existsSync(out)) {
+    const outKey = abs + "|2048|" + mt;
+    const out = path.join(cacheDir, "view-" + crypto.createHash("md5").update(outKey).digest("hex") + ".webp");
+    if (fs.existsSync(out) && fs.statSync(out).size > 0) {
+      return { ok: true, path: out };
+    }
+    if (picnestPreviewJobs.has(outKey)) {
+      return await picnestPreviewJobs.get(outKey);
+    }
+    const job = (async () => {
       let src = abs;
       if (ext === ".psd") {
         const png = path.join(cacheDir, "psd-" + crypto.createHash("md5").update(abs).digest("hex") + ".png");
@@ -413,11 +421,27 @@ electron.ipcMain.handle("picnest-view-preview", async (_event, filePath) => {
         if (!src || src === abs || !fs.existsSync(src)) return { ok: false, error: "PSD 渲染失败" };
       }
       const sharp = (await import("sharp")).default;
-      await sharp(src, { failOn: "none" }).rotate()
+      sharp.cache(false);
+      const tmpOut = out + "." + Date.now() + ".tmp";
+      // 读取为 Buffer，避免 Windows 下文件句柄被 sharp 持续独占锁定
+      const srcBuf = ext === ".psd" ? src : fs.readFileSync(src);
+      await sharp(srcBuf, { failOn: "none" }).rotate()
         .resize({ width: 2048, height: 2048, fit: "inside", withoutEnlargement: true })
-        .webp({ quality: 88, alphaQuality: 100 }).toFile(out);
+        .webp({ quality: 88, alphaQuality: 100 }).toFile(tmpOut);
+      try {
+        fs.renameSync(tmpOut, out);
+      } catch (e) {
+        if (!fs.existsSync(out)) throw e;
+        try { fs.unlinkSync(tmpOut); } catch (e2) {}
+      }
+      return { ok: true, path: out };
+    })();
+    picnestPreviewJobs.set(outKey, job);
+    try {
+      return await job;
+    } finally {
+      picnestPreviewJobs.delete(outKey);
     }
-    return { ok: true, path: out };
   } catch (e) {
     return { ok: false, error: String(e?.message || e) };
   }
@@ -1032,18 +1056,20 @@ electron.ipcMain.handle("picnest-import-check", async (_event, paths, folderId) 
 electron.ipcMain.handle("picnest-crop", async (_event, filePath, opts) => {
   try {
     const sharp = (await import("sharp")).default;
+    sharp.cache(false);
     const o = opts || {};
-    const meta = await sharp(filePath).metadata();
+    const inputBuf = fs.readFileSync(filePath);
+    const meta = await sharp(inputBuf).metadata();
     const left = Math.max(0, Math.min(Math.round(o.left || 0), meta.width - 1));
     const top = Math.max(0, Math.min(Math.round(o.top || 0), meta.height - 1));
     const width = Math.max(1, Math.min(Math.round(o.width || meta.width), meta.width - left));
     const height = Math.max(1, Math.min(Math.round(o.height || meta.height), meta.height - top));
-    const buf = await sharp(filePath).extract({ left, top, width, height }).toBuffer();
+    const buf = await sharp(inputBuf).extract({ left, top, width, height }).toBuffer();
     // 原件备份进缓存目录
     const ext = path.extname(filePath);
     const key = crypto.createHash("md5").update(filePath).digest("hex");
     const backup = path.join(cacheDir, "crop-backup-" + key + "-" + Date.now() + ext);
-    fs.copyFileSync(filePath, backup);
+    try { fs.copyFileSync(filePath, backup); } catch (e) {}
     // 原子覆写
     const tmp = filePath + ".cropping";
     fs.writeFileSync(tmp, buf);
@@ -1066,8 +1092,10 @@ electron.ipcMain.handle("picnest-crop", async (_event, filePath, opts) => {
 electron.ipcMain.handle("picnest-crop-as", async (_event, filePath, opts) => {
   try {
     const sharp = (await import("sharp")).default;
+    sharp.cache(false);
     const o = opts || {};
-    const meta = await sharp(filePath).metadata();
+    const inputBuf = fs.readFileSync(filePath);
+    const meta = await sharp(inputBuf).metadata();
     const left = Math.max(0, Math.min(Math.round(o.left || 0), meta.width - 1));
     const top = Math.max(0, Math.min(Math.round(o.top || 0), meta.height - 1));
     const width = Math.max(1, Math.min(Math.round(o.width || meta.width), meta.width - left));
@@ -1077,7 +1105,7 @@ electron.ipcMain.handle("picnest-crop-as", async (_event, filePath, opts) => {
     const base = path.basename(filePath, ext);
     let finalPath = path.join(dir, base + "-cropped" + ext);
     for (let i = 2; fs.existsSync(finalPath); i++) finalPath = path.join(dir, base + "-cropped-" + i + ext);
-    const buf = await sharp(filePath).extract({ left, top, width, height }).toBuffer();
+    const buf = await sharp(inputBuf).extract({ left, top, width, height }).toBuffer();
     const tmp = finalPath + ".cropping";
     fs.writeFileSync(tmp, buf);
     fs.renameSync(tmp, finalPath);
@@ -1091,12 +1119,14 @@ electron.ipcMain.handle("picnest-crop-as", async (_event, filePath, opts) => {
 electron.ipcMain.handle("picnest-apply-transform", async (_event, filePath, opts) => {
   try {
     const sharp = (await import("sharp")).default;
+    sharp.cache(false);
     const rot = ((Math.round(Number(opts?.rot) || 0) % 360) + 360) % 360;
     const flopX = !!opts?.flopX;
     if (!rot && !flopX) return { ok: true, changed: false };
     if (!fs.existsSync(filePath)) return { ok: false, error: "文件不存在" };
     const ext = path.extname(filePath).toLowerCase();
-    let pipe = sharp(filePath);
+    const inputBuf = fs.readFileSync(filePath);
+    let pipe = sharp(inputBuf);
     if (flopX) pipe = pipe.flop(); // CSS 是 scaleX(-1) 后再 rotate，这里同序
     if (rot) pipe = pipe.rotate(rot);
     const buf = await pipe.toBuffer();
@@ -1106,7 +1136,7 @@ electron.ipcMain.handle("picnest-apply-transform", async (_event, filePath, opts
     const tmp = filePath + ".picnest-transform-tmp";
     fs.writeFileSync(tmp, buf);
     fs.renameSync(tmp, filePath);
-    const m = await sharp(filePath).metadata();
+    const m = await sharp(buf).metadata();
     const st = fs.statSync(filePath);
     const width = m.width || 0;
     const height = m.height || 0;

@@ -49,10 +49,15 @@ function load(kind, src) {
   im.src = src
 }
 function maybeError() {
+  // 如果 preview 失败但还有 fullSrc 且尚未尝试过，先尝试载入 full 作为安全兜底
+  if (failed.preview && props.fullSrc && !imgs.full && !failed.full) {
+    load('full', props.fullSrc)
+    return
+  }
   const req = []
   if (props.previewSrc) req.push('preview')
   if (props.fallbackSrc) req.push('fallback')
-  if (props.useFull && props.fullSrc) req.push('full')
+  if (props.fullSrc) req.push('full')
   if (req.length && req.every((k) => failed[k])) emit('error')
 }
 function source() {
