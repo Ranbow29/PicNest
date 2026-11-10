@@ -162,7 +162,7 @@ watch(() => lib.lightbox.path, async (p) => {
     if (lib.lightbox.path === p) psdLoading.value = false
   }
 }, { immediate: true })
-watch(() => lib.lightbox.path, async (p) => {
+async function reloadPreview(p) {
   previewPath.value = ''
   previewError.value = false
   const ext = extOf(p)
@@ -180,6 +180,9 @@ watch(() => lib.lightbox.path, async (p) => {
     })
     if (lib.lightbox.path === p) previewPath.value = res.path
   } catch (e) { /* 预览失败不阻塞原图 */ }
+}
+watch(() => [lib.lightbox.path, meta.value?.modify_time], async ([p]) => {
+  await reloadPreview(p)
 }, { immediate: true })
 
 /* 图片舞台：正常查看走 canvas（只画可视区域）；裁剪/旋转/翻转继续用 <img> 以复用既有坐标逻辑 */
@@ -381,6 +384,10 @@ async function saveTransform() {
   saveBusy.value = true
   try {
     const r = await lib.applyImageTransform()
+    if (r?.ok && r.changed !== false) {
+      await reloadPreview(lib.lightbox.path)
+      nextTick(fitToWindow)
+    }
     saveNote.value = r?.ok ? (r.changed === false ? '没有可保存的变换' : '已保存到原图（原件已备份）') : (r?.error || '保存失败')
   } catch (e) {
     saveNote.value = String(e?.message || e)
@@ -799,10 +806,16 @@ async function applyCrop() {
     const r = await window.picrand.picnestCrop(img.file_path, { left: n.left, top: n.top, width: n.width, height: n.height })
     if (r?.ok) {
       const img2 = lib.images.find((i) => i.file_path === img.file_path)
-      if (img2) { img2.width = r.width; img2.height = r.height; img2.thumbnail_path = '' }
+      if (img2) {
+        img2.width = r.width; img2.height = r.height; img2.thumbnail_path = ''
+        if (r.modify_time) img2.modify_time = r.modify_time
+        else img2.modify_time = Math.floor(Date.now() / 1000)
+      }
       delete lib.palettes[img.file_path]
       lib.viewer.cropMode = false
       crop.value = null
+      await reloadPreview(lib.lightbox.path)
+      nextTick(fitToWindow)
       /* toast 独立于裁剪条（crop-bar 随 cropMode 消失，曾把成功消息一起带走） */
       cropNote.value = `已裁切 ✓ ${r.width}×${r.height} 已入库（原图已备份）`
       lib.layoutTick++
@@ -1032,6 +1045,7 @@ function onKey(e) {
      沉浸模式不做浮岛：无投影/圆角，图片平面贴在正文上 */
   position: relative; z-index: 1;
   user-select: none;
+  object-fit: contain;
   will-change: transform; /* 平移交给合成器，避免每帧重绘整张大图 */
   backface-visibility: hidden;
 }
