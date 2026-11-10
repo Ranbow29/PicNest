@@ -199,6 +199,11 @@ onBeforeUnmount(() => {
     <div v-if="lib.brief.open" class="brief"
          :style="{ cursor: dragging ? 'grabbing' : (kind === 'image' ? 'grab' : 'default') }"
          @wheel.prevent="onWheel" @pointerdown="onDown" @contextmenu.prevent="onContext">
+      <!-- 氛围底：当前图模糊放大铺满黑场 + 深暗角，切图交叉淡化 -->
+      <Transition name="bamb">
+        <div v-if="kind === 'image' && thumbSrc" :key="thumbSrc" class="brief-amb" :style="{ backgroundImage: `url(&quot;${thumbSrc}&quot;)` }" />
+      </Transition>
+      <div class="brief-vignette" />
       <CanvasStage v-if="kind === 'image' && !imgDead && !noCanvas"
         ref="canvasStage" :class="{ gray: lib.grayscaleMode }"
         :preview-src="canvasPreviewSrc" :full-src="canvasFullSrc" :fallback-src="thumbSrc"
@@ -219,7 +224,8 @@ onBeforeUnmount(() => {
       <div v-if="isPsd && (psdLoading || psdError)" class="brief-note">
         {{ psdError || 'PSD 原图渲染中，先显示缩略图…' }}
       </div>
-      <div class="brief-count">{{ idx + 1 }} / {{ orderList.length }}</div>
+      <div class="brief-count"><b>{{ String(idx + 1).padStart(2, '0') }}</b><span> / {{ orderList.length }}</span></div>
+      <div class="brief-progress"><i :style="{ width: (orderList.length ? ((idx + 1) / orderList.length) * 100 : 0) + '%' }" /></div>
       <div class="brief-hint">←/A D→ 切换 · 滚轮缩放 · 拖拽平移 · 单击下一张 · 右键菜单 · Esc 退出</div>
       <button class="brief-x" title="退出（Esc）" @click.stop="lib.closeBrief()">✕</button>
     </div>
@@ -246,15 +252,53 @@ onBeforeUnmount(() => {
   padding: 5px 10px; border-radius: 8px; pointer-events: none;
   background: rgba(20, 18, 14, 0.62); color: #e8e2d6; font-size: 11.5px;
 }
+/* ---- 氛围底：黑场里透出当前图的色彩光晕（影院 Ambilight 式），切图交叉淡化 ---- */
+.brief-amb {
+  position: absolute; inset: -15%; z-index: 0; pointer-events: none;
+  background-size: cover; background-position: center;
+  filter: blur(90px) saturate(1.6) brightness(0.55);
+  opacity: 0.85;
+  animation: bamb-breathe 22s ease-in-out infinite alternate;
+}
+@keyframes bamb-breathe { from { transform: scale(1); } to { transform: scale(1.1) rotate(1.5deg); } }
+.bamb-enter-active, .bamb-leave-active { transition: opacity 0.9s ease; }
+.bamb-enter-from, .bamb-leave-to { opacity: 0 !important; }
+.brief-vignette {
+  position: absolute; inset: 0; z-index: 0; pointer-events: none;
+  background: radial-gradient(ellipse 70% 65% at 50% 50%, transparent 35%, rgba(0, 0, 0, 0.55) 100%);
+}
+.brief > img, .brief > video { position: relative; z-index: 1; }
+.brief > :deep(.canvas-stage) { z-index: 1; } /* 画布本身 absolute，只抬层级 */
+.brief img, .brief video { filter: drop-shadow(0 24px 60px rgba(0, 0, 0, 0.55)); }
+.brief img.gray, .brief video.gray { filter: grayscale(1) drop-shadow(0 24px 60px rgba(0, 0, 0, 0.55)); }
 .brief-count {
-  position: fixed; top: 18px; left: 22px; color: #b9b3a7;
-  font: 12px Consolas, monospace; opacity: 0.65; pointer-events: none;
+  position: fixed; top: 16px; left: 24px; z-index: 2; color: #d9d3c7;
+  font-family: var(--font-serif); pointer-events: none;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.6);
 }
+.brief-count b { font-size: 22px; font-weight: 600; letter-spacing: 1px; }
+.brief-count span { font-size: 12px; opacity: 0.55; letter-spacing: 1px; }
+/* 底部进度细线：当前位置 / 总数 */
+.brief-progress {
+  position: fixed; left: 0; right: 0; bottom: 0; height: 2px; z-index: 2;
+  background: rgba(255, 255, 255, 0.06); pointer-events: none;
+}
+.brief-progress i {
+  display: block; height: 100%;
+  background: linear-gradient(90deg, transparent, var(--accent));
+  box-shadow: 0 0 10px var(--accent);
+  transition: width 0.5s var(--ease-overshoot);
+}
+/* 操作提示：进场 4s 后自动淡出，不打扰观看 */
 .brief-hint {
-  position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
-  color: #8d877c; font-size: 11.5px; letter-spacing: 0.5px;
-  opacity: 0.6; pointer-events: none; white-space: nowrap;
+  position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); z-index: 2;
+  color: #b9b3a7; font-size: 11.5px; letter-spacing: 0.5px;
+  padding: 6px 14px; border-radius: 999px;
+  background: rgba(0, 0, 0, 0.32); backdrop-filter: blur(12px);
+  pointer-events: none; white-space: nowrap;
+  animation: hint-fade 5s ease forwards;
 }
+@keyframes hint-fade { 0%, 75% { opacity: 0.85; } 100% { opacity: 0; } }
 .brief-x {
   position: fixed; top: 12px; right: 14px; width: 30px; height: 30px;
   border: none; border-radius: 9px; background: rgba(255, 255, 255, 0.06);
