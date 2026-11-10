@@ -1002,20 +1002,14 @@ function onKey(e) {
   display: flex; align-items: center; justify-content: center;
   background: var(--panel-strong);
 }
-/* ---- 氛围底（Ambient）：亮色主题克制温润（不抢画面），暗色主题稍微浓郁 ---- */
+/* ---- 氛围底（Ambient）：亮色主题克制温润（不抢画面），暗色主题稍微浓郁（由 style.css --amb-* 控制） ---- */
 .ambient {
   position: absolute; inset: -14%; z-index: 0; pointer-events: none;
   background-size: cover; background-position: center;
-  filter: blur(92px) saturate(1.16) brightness(1.04);
-  opacity: 0.20;
+  filter: blur(var(--amb-blur, 92px)) saturate(var(--amb-sat, 1.16)) brightness(var(--amb-bright, 1.04));
+  opacity: var(--amb-opacity, 0.20);
   transform: translateZ(0);
   animation: amb-drift 28s ease-in-out infinite alternate;
-}
-:global(:root[data-theme="dark"]) .ambient,
-:global(:root[data-theme="mono-charcoal"]) .ambient,
-:global(:root[data-theme="mono-dark"]) .ambient {
-  filter: blur(78px) saturate(1.36) brightness(0.88);
-  opacity: 0.40;
 }
 @keyframes amb-drift {
   from { transform: translateZ(0) scale(1) translate(0, 0); }
@@ -1024,12 +1018,7 @@ function onKey(e) {
 /* 柔光罩：亮色主题只做极淡暖边晕，不压脏白底 */
 .ambient-veil {
   position: absolute; inset: 0; z-index: 0; pointer-events: none;
-  background: radial-gradient(ellipse 82% 76% at 50% 50%, transparent 50%, rgba(60, 50, 30, 0.05) 100%);
-}
-:global(:root[data-theme="dark"]) .ambient-veil,
-:global(:root[data-theme="mono-charcoal"]) .ambient-veil,
-:global(:root[data-theme="mono-dark"]) .ambient-veil {
-  background: radial-gradient(ellipse 78% 72% at 50% 50%, transparent 42%, rgba(0, 0, 0, 0.24) 100%);
+  background: radial-gradient(ellipse 80% 74% at 50% 50%, transparent 46%, var(--amb-veil, rgba(60, 50, 30, 0.05)) 100%);
 }
 .amb-enter-active, .amb-leave-active { transition: opacity 0.6s ease; }
 .amb-enter-from, .amb-leave-to { opacity: 0 !important; }
@@ -1037,9 +1026,11 @@ function onKey(e) {
   box-shadow: 0 14px 44px rgba(0, 0, 0, 0.16), 0 3px 10px rgba(0, 0, 0, 0.08);
 }
 @media (prefers-reduced-motion: reduce) { .ambient { animation: none; } }
+.viewer :deep(.canvas-stage) { z-index: 1; }
 .stage {
   /* 基础尺寸=原始像素，适配完全由 transform scale 负责（单一权威）
      沉浸模式不做浮岛：无投影/圆角，图片平面贴在正文上 */
+  position: relative; z-index: 1;
   user-select: none;
   will-change: transform; /* 平移交给合成器，避免每帧重绘整张大图 */
   backface-visibility: hidden;
