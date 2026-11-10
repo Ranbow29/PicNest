@@ -119,7 +119,7 @@ export const useLibrary = defineStore('library', {
     brief: { open: false, path: null, scale: 1, tx: 0, ty: 0 }, // 简报模式（全屏演示）
     grayscaleMode: localStorage.getItem('picnest.grayscale') === '1', // 黑白预览（全局显示开关）
     cardTilt3D: localStorage.getItem('picnest.cardTilt3D') === '1', // 网格卡片 3D 视差微倾 + 柔光掠影（默认关闭，个性化开启）
-    docPrivacyMode: localStorage.getItem('picnest.docPrivacyMode') === '1', // 文档隐私折叠（缩略图收起正文仅留纸面标题栏，防窥防泄露）
+    docPrivacyMode: localStorage.getItem('picnest.docPrivacyMode') !== '0', // 文档隐私折叠（默认开启：保护敏感文档隐私，未显式设为 '0' 即生效）
     contextMenu: { open: false, x: 0, y: 0, image: null },
     renaming: false,
     dupDialog: { open: false, items: [], targetRel: undefined, mode: 'files', count: 0, resolve: null },
