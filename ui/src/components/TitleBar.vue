@@ -305,10 +305,10 @@ function onKey(e) {
 .drag-surface {
   position: absolute; inset: 0;
 }
-/* 玻璃拖尾：栏体下方 20px 继续模糊渐隐——内容“溶”进顶栏（Wenku8 式） */
+/* 玻璃拖尾：栏体下方 10px 继续模糊渐隐——内容“溶”进顶栏（Wenku8 式） */
 .titlebar::after {
   content: '';
-  position: absolute; top: 42px; left: 0; right: 0; height: 20px; z-index: 20;
+  position: absolute; top: 42px; left: 0; right: 0; height: 10px; z-index: 20;
   backdrop-filter: blur(26px) saturate(1.25);
   -webkit-backdrop-filter: blur(26px) saturate(1.25);
   background: linear-gradient(180deg, var(--glass-weak), transparent);
