@@ -411,6 +411,10 @@ async function saveTransform() {
     const r = await lib.applyImageTransform()
     if (r?.ok && r.changed !== false) {
       await reloadPreview(lib.lightbox.path, false)
+      lib.viewer.rot = 0
+      lib.viewer.flopX = false
+      lib.viewer.fitNonce++
+      lib.layoutTick++
       stageDead.value = false
       nextTick(fitToWindow)
     }

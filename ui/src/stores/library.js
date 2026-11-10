@@ -865,10 +865,6 @@ export const useLibrary = defineStore('library', {
       else img.modify_time = Math.floor(Date.now() / 1000)
       img.thumbnail_path = ''
       delete this.palettes[p]
-      this.viewer.rot = 0
-      this.viewer.flopX = false
-      this.viewer.fitNonce++
-      this.layoutTick++
       api.generateThumbnailsBatch([p]).then(async (res) => {
         const hit = (res?.results || [])[0]
         const thumb = hit?.thumbnail_path || ''
