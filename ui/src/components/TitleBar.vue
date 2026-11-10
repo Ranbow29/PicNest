@@ -85,6 +85,16 @@ async function loadCollectToken() {
     if (res?.ok && res.token) collectToken.value = res.token
   } catch (e) {}
 }
+async function resetCollectToken() {
+  try {
+    const res = await window.picrand?.picnestCollectResetToken?.()
+    if (res?.ok && res.token) {
+      collectToken.value = res.token
+      copyTokenText.value = '已重置 ✓'
+      setTimeout(() => { copyTokenText.value = '复制密钥' }, 2000)
+    }
+  } catch (e) {}
+}
 async function copyCollectToken() {
   if (!collectToken.value) return
   try {
@@ -306,7 +316,10 @@ function onKey(e) {
               <div class="set-title">采集扩展配对密钥</div>
               <div class="set-desc">{{ collectTokenDesc }}</div>
             </div>
-            <button class="set-copy-btn" type="button" @click.stop="copyCollectToken">{{ copyTokenText }}</button>
+            <div style="display:flex;gap:6px">
+              <button class="set-copy-btn" type="button" @click.stop="copyCollectToken">{{ copyTokenText }}</button>
+              <button class="set-copy-btn" type="button" title="重置密钥将使当前所有已配对浏览器失效，用于重新测试未配对流程" @click.stop="resetCollectToken">重置</button>
+            </div>
           </div>
           <div class="set-row" @click="lib.toggleDocPrivacyMode()">
             <div class="set-meta">
