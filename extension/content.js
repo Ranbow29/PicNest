@@ -480,7 +480,7 @@
           <div class="auth-title">需配对密钥</div>
           <div class="auth-desc">安全防护已生效。请在 PicNest 顶栏「设置」中点击「复制密钥」，粘贴到下方配对：</div>
           <div class="auth-row">
-            <input class="auth-input" type="password" placeholder="在此粘贴 32 位配对密钥…" spellcheck="false" />
+            <input class="auth-input" type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" placeholder="在此粘贴 32 位配对密钥…" style="-webkit-text-security: disc;" />
             <button class="auth-btn" type="button">配对</button>
           </div>
           <div class="auth-err" style="display:none"></div>
