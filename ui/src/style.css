@@ -53,6 +53,7 @@
   --panel-insp-mid: rgba(255, 255, 255, 0.93);
   --panel-insp-low: rgba(255, 255, 255, 0.86);
   --panel-insp-bot: rgba(255, 255, 255, 0.60);
+  --amb-blur: 92px; --amb-sat: 1.16; --amb-bright: 1.04; --amb-opacity: 0.20; --amb-veil: rgba(60, 50, 30, 0.05);
   --radius: 14px;
   --radius-panel: 6px; /* 主面板：锐利小圆角（详情浮岛保持 14px，ZCode 层次） */
   --blur: 22px;
@@ -89,6 +90,7 @@
     --panel-insp-mid: rgba(52, 52, 72, 0.92);
     --panel-insp-low: rgba(52, 52, 72, 0.84);
     --panel-insp-bot: rgba(52, 52, 72, 0.62);
+    --amb-blur: 78px; --amb-sat: 1.36; --amb-bright: 0.88; --amb-opacity: 0.40; --amb-veil: rgba(0, 0, 0, 0.24);
 }
 
 /* ---- 低饱和黑白 · 灰白（中性灰，强调色也去饱和） ---- */
@@ -120,6 +122,7 @@
     --panel-insp-mid: rgba(255, 255, 255, 0.93);
     --panel-insp-low: rgba(255, 255, 255, 0.86);
     --panel-insp-bot: rgba(255, 255, 255, 0.60);
+  --amb-blur: 92px; --amb-sat: 1.16; --amb-bright: 1.04; --amb-opacity: 0.20; --amb-veil: rgba(60, 50, 30, 0.05);
 }
 
 /* ---- 低饱和黑白 · 炭黑（比墨黑浅一档的中性灰） ---- */
@@ -151,6 +154,7 @@
     --panel-insp-mid: rgba(70, 70, 70, 0.92);
     --panel-insp-low: rgba(70, 70, 70, 0.84);
     --panel-insp-bot: rgba(70, 70, 70, 0.62);
+    --amb-blur: 78px; --amb-sat: 1.36; --amb-bright: 0.88; --amb-opacity: 0.38; --amb-veil: rgba(0, 0, 0, 0.22);
 }
 
 /* ---- 低饱和黑白 · 墨黑（中性炭灰） ---- */
@@ -182,6 +186,7 @@
     --panel-insp-mid: rgba(48, 48, 48, 0.92);
     --panel-insp-low: rgba(48, 48, 48, 0.84);
     --panel-insp-bot: rgba(48, 48, 48, 0.62);
+    --amb-blur: 78px; --amb-sat: 1.36; --amb-bright: 0.88; --amb-opacity: 0.40; --amb-veil: rgba(0, 0, 0, 0.24);
 }
 
 * { box-sizing: border-box; }
