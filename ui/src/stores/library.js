@@ -858,8 +858,7 @@ export const useLibrary = defineStore('library', {
       if (!rot && !flopX) return { ok: true, changed: false }
       const r = await window.picrand.picnestApplyTransform(p, { rot, flopX })
       if (!r?.ok) return r
-      if (r.width) img.width = r.width
-      if (r.height) img.height = r.height
+      /* 注意：宽高在 Lightbox 等新纹理预解码完成的那一刻原子更新，避免提前改动造成旧纹理瞬时拉伸留白 */
       if (r.size) img.file_size = r.size
       if (r.modify_time) img.modify_time = r.modify_time
       else img.modify_time = Math.floor(Date.now() / 1000)

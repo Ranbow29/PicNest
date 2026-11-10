@@ -109,6 +109,17 @@ const stageUrl = computed(() => {
   }
   return url.value
 })
+function onStageImgLoad(e) {
+  const el = e?.target
+  if (!el || !el.naturalWidth || !el.naturalHeight) return
+  const img = meta.value
+  if (img && (img.width !== el.naturalWidth || img.height !== el.naturalHeight)) {
+    if (lib.viewer.rot % 180 === 0) {
+      img.width = el.naturalWidth
+      img.height = el.naturalHeight
+    }
+  }
+}
 function onStageError() {
   const img = meta.value
   if (isPsd.value && psdLoading.value) return
@@ -411,6 +422,11 @@ async function saveTransform() {
     const r = await lib.applyImageTransform()
     if (r?.ok && r.changed !== false) {
       await reloadPreview(lib.lightbox.path, false)
+      const img = meta.value
+      if (img && r.width && r.height) {
+        img.width = r.width
+        img.height = r.height
+      }
       lib.viewer.rot = 0
       lib.viewer.flopX = false
       lib.viewer.fitNonce++
@@ -954,6 +970,7 @@ function onKey(e) {
         transform: `translate3d(${lib.viewer.tx}px, ${lib.viewer.ty}px, 0) scale(${lib.viewer.scale}) rotate(${lib.viewer.rot}deg)` + (lib.viewer.flopX ? ' scaleX(-1)' : ''),
         cursor: lib.viewer.cropMode ? 'default' : dragging ? 'grabbing' : 'grab',
       }"
+      @load="onStageImgLoad"
       @error="onStageError"
       @dblclick="dblClick"
     />
@@ -1069,7 +1086,7 @@ function onKey(e) {
 .amb-enter-active, .amb-leave-active { transition: opacity 0.6s ease; }
 .amb-enter-from, .amb-leave-to { opacity: 0 !important; }
 .viewer.has-ambient .stage:not(.video) {
-  box-shadow: 0 14px 44px rgba(0, 0, 0, 0.16), 0 3px 10px rgba(0, 0, 0, 0.08);
+  filter: drop-shadow(0 14px 34px rgba(0, 0, 0, 0.18)) drop-shadow(0 3px 8px rgba(0, 0, 0, 0.10));
 }
 @media (prefers-reduced-motion: reduce) { .ambient { animation: none; } }
 .viewer :deep(.canvas-stage) { z-index: 1; }
@@ -1079,6 +1096,7 @@ function onKey(e) {
   position: relative; z-index: 1;
   user-select: none;
   object-fit: contain;
+  background: transparent;
   will-change: transform; /* 平移交给合成器，避免每帧重绘整张大图 */
   backface-visibility: hidden;
 }
