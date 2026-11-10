@@ -8,8 +8,10 @@
   <body>
     <header>
       <div class="brand"><span class="mark"></span><b>PicNest</b><span class="sub">图巢采集</span></div>
-      <div id="status" class="status"><i></i><span>连接中…</span></div>
-      <button id="unpair-btn" class="mini" style="margin-left:auto;font-size:10px;padding:2px 6px;display:none" title="清除本扩展存储的密钥以测试未配对流程">解除配对</button>
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <div id="status" class="status"><i></i><span>连接中…</span></div>
+        <button id="unpair-btn" class="mini" style="display: none;" title="清除本扩展存储的密钥以测试未配对流程">解除配对</button>
+      </div>
     </header>
 
         <div id="token-box" class="row token-row" style="display:none">

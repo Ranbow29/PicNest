@@ -130,6 +130,7 @@ function createBackground(worlds, tabs, opts = {}) {
         return t
       },
       async captureVisibleTab() { return 'data:image/jpeg;base64,' },
+      async sendMessage() { return null },
     },
     windows: { onFocusChanged: events.onFocusChanged },
     contextMenus: {

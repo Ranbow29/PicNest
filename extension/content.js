@@ -2,7 +2,7 @@
 // 在网页图片上左键按住 → 光标处环形进度 → 弹出双栏面板（左：未分类/库根；右：全部文件夹）
 // 拖到目标松开即保存；松开在面板空白处则面板停留，可点击/滚动选择；Esc / 点外部取消。
 (() => {
-  const VERSION = '0.1.5'
+  const VERSION = '0.1.6'
   const prevLoaded = !!window.__picnestHoldCollectLoaded
   const prevVersion = String(window.__picnestHoldCollectVersion || '')
   /* 同版本重复注入：幂等返回。旧版本实例：0.1.4 起会挂 __picnestHoldCollectCleanup，
@@ -758,8 +758,47 @@
   function onDragStart(e) {
     if (session && session.holding) e.preventDefault()
   }
+  let lastContextMenuTarget = null
   function onCtx(e) {
     if (session && !inHost(e)) e.preventDefault()
+    try {
+      const img = imgFromEvent(e) || imgAtPoint(e.clientX, e.clientY) || (e.target?.closest ? e.target.closest('a')?.querySelector('img') : null)
+      if (img) {
+        lastContextMenuTarget = {
+          src: (img.currentSrc || img.src || '').trim(),
+          title: (img.alt || img.title || document.title || '').trim(),
+          time: Date.now(),
+        }
+      }
+    } catch { /* 静默 */ }
+  }
+
+  function onMessage(req, sender, sendResponse) {
+    if (req?.type === 'get-contextmenu-image') {
+      if (lastContextMenuTarget && Date.now() - lastContextMenuTarget.time < 30000) {
+        sendResponse({ ok: true, src: lastContextMenuTarget.src, title: lastContextMenuTarget.title })
+        return true
+      }
+      if (req.linkUrl) {
+        try {
+          const urlObj = new URL(req.linkUrl)
+          const pathname = urlObj.pathname
+          const links = Array.from(document.querySelectorAll('a'))
+          const a = links.find((el) => el.href === req.linkUrl || (pathname.length > 2 && el.href && el.href.includes(pathname)))
+          const img = a?.querySelector('img') || a?.parentElement?.querySelector('img') || a?.closest('[data-test-id="pin"]')?.querySelector('img')
+          if (img) {
+            sendResponse({
+              ok: true,
+              src: (img.currentSrc || img.src || '').trim(),
+              title: (img.alt || img.title || document.title || '').trim(),
+            })
+            return true
+          }
+        } catch { /* 静默 */ }
+      }
+      sendResponse({ ok: false })
+      return true
+    }
   }
   function onScroll(e) {
     if (!session) return
@@ -820,6 +859,7 @@
       window.addEventListener('resize', closePanel)
       /* window 捕获哨兵：document 监听器被清掉后，下一次按下仍能触发自愈 */
       window.addEventListener('pointerdown', selfCheck, true)
+      try { chrome.runtime?.onMessage?.addListener(onMessage) } catch { /* 静默 */ }
       listenersOn = true
     } catch { /* 页面销毁/权限异常：保持 Loaded，后台下次探测再修 */ }
   }
@@ -827,6 +867,7 @@
   function removeListeners() {
     if (!listenersOn) return
     listenersOn = false
+    try { chrome.runtime?.onMessage?.removeListener(onMessage) } catch { /* 静默 */ }
     try { document.removeEventListener('pointerdown', onDown, true) } catch { /* 静默 */ }
     try { document.removeEventListener('pointermove', onMove, true) } catch { /* 静默 */ }
     try { document.removeEventListener('pointerup', onUp, true) } catch { /* 静默 */ }

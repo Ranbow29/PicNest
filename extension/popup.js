@@ -10,6 +10,10 @@ const elHold = $('#hold')
 const elMsg = $('#msg')
 const elPage = $('#page-state')
 const elRepair = $('#repair')
+const elTokenBox = $('#token-box')
+const elTokenInput = $('#token-input')
+const elTokenSave = $('#token-save')
+const elUnpair = $('#unpair-btn')
 
 const PAGE_TEXT = {
   current: ['已就绪', 'ok'],
@@ -103,9 +107,9 @@ async function init() {
   }
   try {
     const s = await chrome.storage.local.get(['picnestToken'])
-    if (s.picnestToken) elTokenInput.value = s.picnestToken
+    if (s.picnestToken && elTokenInput) elTokenInput.value = s.picnestToken
     const ctx = await api('/api/v1/context')
-    elTokenBox.style.display = 'none'
+    if (elTokenBox) elTokenBox.style.display = 'none'
     if (elUnpair) elUnpair.style.display = 'inline-block' 
     const saved = await chrome.storage.local.get(['rootId', 'rel'])
     elRoot.innerHTML = ''
@@ -124,7 +128,7 @@ async function init() {
   } catch (e) {
     if (e.message === 'TOKEN_REQUIRED') {
       setStatus('off', '需配对密钥')
-      elTokenBox.style.display = 'flex'
+      if (elTokenBox) elTokenBox.style.display = 'flex'
       if (elUnpair) elUnpair.style.display = 'none'
       msg('请在图巢「设置」中点击「复制密钥」，粘贴到上方完成配对。', true)
     } else {
@@ -132,6 +136,38 @@ async function init() {
     }
   }
 }
+
+elTokenSave?.addEventListener('click', async () => {
+  const token = (elTokenInput?.value || '').trim()
+  if (!token) {
+    msg('请输入配对密钥', true)
+    return
+  }
+  msg('正在配对…')
+  await chrome.storage.local.set({ picnestToken: token })
+  init()
+})
+
+elTokenInput?.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault()
+    elTokenSave?.click()
+  }
+})
+
+elUnpair?.addEventListener('click', async () => {
+  await chrome.storage.local.remove(['picnestToken'])
+  if (elTokenInput) elTokenInput.value = ''
+  if (elTokenBox) elTokenBox.style.display = 'flex'
+  if (elUnpair) elUnpair.style.display = 'none'
+  elRoot.innerHTML = ''
+  elRoot.disabled = true
+  elFolder.innerHTML = '<option value="">根目录（库根）</option>'
+  elFolder.disabled = true
+  elSave.disabled = true
+  setStatus('off', '需配对密钥')
+  msg('已解除配对，扩展本地密钥已清空。可在上方重新输入密钥配对。')
+})
 
 elRoot.addEventListener('change', async () => {  const rootId = elRoot.value
   await chrome.storage.local.set({ rootId: Number(rootId), rel: '' })
