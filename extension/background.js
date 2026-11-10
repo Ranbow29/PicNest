@@ -5,12 +5,15 @@ const API = 'http://127.0.0.1:41600'
 const MENU_IMAGE = 'picnest-save-image'
 const MENU_PAGE = 'picnest-save-page'
 
-chrome.runtime.onInstalled.addListener(() => {
+function setupMenus() {
   chrome.contextMenus.removeAll(() => {
-    chrome.contextMenus.create({ id: MENU_IMAGE, title: '保存图片到图巢', contexts: ['image'] })
+    chrome.contextMenus.create({ id: MENU_IMAGE, title: '保存图片到图巢', contexts: ['image', 'link'] })
     chrome.contextMenus.create({ id: MENU_PAGE, title: '保存页面截图到图巢', contexts: ['page'] })
   })
-})
+}
+
+chrome.runtime.onInstalled.addListener(setupMenus)
+chrome.runtime.onStartup.addListener(setupMenus)
 
 /* 标签页恢复（Edge 睡眠标签 / bfcache / 扩展重载）时浏览器不会自动重新注入 content script。
    这里在标签激活、URL 更新、窗口聚焦、扩展启动时主动探测：
@@ -19,7 +22,7 @@ chrome.runtime.onInstalled.addListener(() => {
    - 更老的脚本（无 cleanup）/ 扩展更新后失去 runtime 的孤立脚本 / document 监听器失效
      → 只在 Pinterest 标签自动刷新一次（chrome.storage.session 记标记防循环），其它站点走 popup「修复本页」。
    content.js 在监听器全部注册完成之后才置 Loaded，并提供健康事件，部分初始化也能被发现。 */
-const CONTENT_VERSION = '0.1.5'
+const CONTENT_VERSION = '0.1.6'
 const RELOAD_KEY = 'picnestCollectReloads'
 const INJECTABLE_RE = /^(https?|file):\/\//i
 const PINTEREST_HOST_RE = /(^|\.)pinterest\.[a-z.]+$/i
@@ -305,8 +308,55 @@ async function blobToDataUrl(src, tabId, frameId) {
 }
 
 async function saveImage(info, tab) {
-  const src = info.srcUrl || ''
-  if (!src) throw new Error('没有图片地址')
+  let src = info.srcUrl || ''
+  let title = tab?.title || ''
+
+  if (!src && tab?.id) {
+    if (typeof chrome.tabs?.sendMessage === 'function') {
+      try {
+        const res = await chrome.tabs.sendMessage(tab.id, {
+          type: 'get-contextmenu-image',
+          linkUrl: info.linkUrl || '',
+        })
+        if (res?.ok && res.src) {
+          src = res.src
+          if (res.title) title = res.title
+        }
+      } catch { /* content script 未响应 */ }
+    }
+  }
+
+  if (!src && info.linkUrl && /\.(jpe?g|png|webp|gif|avif|bmp|svg)(\?.*)?$/i.test(info.linkUrl)) {
+    src = info.linkUrl
+  }
+
+  if (!src && tab?.id && info.linkUrl && typeof chrome.scripting?.executeScript === 'function') {
+    try {
+      const [r] = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: (linkUrl) => {
+          try {
+            const urlObj = new URL(linkUrl)
+            const pathname = urlObj.pathname
+            const links = Array.from(document.querySelectorAll('a'))
+            const targetA = links.find((el) => el.href === linkUrl || (pathname.length > 2 && el.href && el.href.includes(pathname)))
+            if (targetA) {
+              const img = targetA.querySelector('img') || targetA.parentElement?.querySelector('img') || targetA.closest('[data-test-id="pin"]')?.querySelector('img')
+              if (img) return { src: (img.currentSrc || img.src || '').trim(), title: (img.alt || img.title || document.title || '').trim() }
+            }
+          } catch {}
+          return null
+        },
+        args: [info.linkUrl],
+      })
+      if (r?.result?.src) {
+        src = r.result.src
+        if (r.result.title) title = r.result.title
+      }
+    } catch { /* 静默 */ }
+  }
+
+  if (!src) throw new Error('未能识别图片地址')
   let payload
   if (src.startsWith('data:')) payload = { dataUrl: src }
   else if (src.startsWith('blob:')) {
@@ -317,8 +367,8 @@ async function saveImage(info, tab) {
   const t = await getTarget()
   const r = await api('/api/v1/save', {
     kind: 'image',
-    title: tab?.title || '',
-    url: info.pageUrl || '',
+    title,
+    url: info.pageUrl || tab?.url || '',
     ...payload,
     ...t,
   })
