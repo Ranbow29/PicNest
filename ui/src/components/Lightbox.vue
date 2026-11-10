@@ -112,6 +112,7 @@ const stageUrl = computed(() => {
 function onStageError() {
   const img = meta.value
   if (isPsd.value && psdLoading.value) return
+  if (saveBusy.value || cropBusy.value) return /* 保存或裁剪过渡期不宣判死亡 */
   /* 2048 预览失败：退回原图/缩略图，避免在同一个坏预览上循环 */
   if (!useFull.value && previewPath.value && !previewError.value) {
     previewError.value = true
@@ -126,6 +127,8 @@ function onStageError() {
     stageFallback.value = true
     return
   }
+  /* 原图在磁盘写入完成或重命名过渡期，等待预览就绪，不轻易判定不可读 */
+  if (previewPath.value) return
   stageDead.value = true
 }
 watch(() => lib.lightbox.path, async (p) => {
@@ -162,14 +165,24 @@ watch(() => lib.lightbox.path, async (p) => {
     if (lib.lightbox.path === p) psdLoading.value = false
   }
 }, { immediate: true })
-async function reloadPreview(p) {
-  previewPath.value = ''
+
+let previewNonce = 0
+async function reloadPreview(p, isSwitch = false) {
+  const nonce = ++previewNonce
   previewError.value = false
+  if (isSwitch) {
+    previewPath.value = ''
+    stageDead.value = false
+    stageFallback.value = false
+  }
   const ext = extOf(p)
-  if (!p || isVideoPath(p) || isTextPath(p) || ext === '.gif' || ext === '.svg') return
+  if (!p || isVideoPath(p) || isTextPath(p) || ext === '.gif' || ext === '.svg') {
+    previewPath.value = ''
+    return
+  }
   try {
     const res = await api.viewPreview(p)
-    if (lib.lightbox.path !== p || !res?.ok || !res.path) return
+    if (nonce !== previewNonce || lib.lightbox.path !== p || !res?.ok || !res.path) return
     const u = fileUrl(res.path) + '?v=' + (meta.value?.modify_time || 0)
     await new Promise((resolve, reject) => {
       const im = new Image()
@@ -178,12 +191,19 @@ async function reloadPreview(p) {
       im.onerror = () => reject(new Error('preview load failed'))
       im.src = u
     })
-    if (lib.lightbox.path === p) previewPath.value = res.path
+    if (nonce === previewNonce && lib.lightbox.path === p) {
+      previewPath.value = res.path
+      stageDead.value = false
+      stageFallback.value = false
+    }
   } catch (e) { /* 预览失败不阻塞原图 */ }
 }
-watch(() => [lib.lightbox.path, meta.value?.modify_time], async ([p]) => {
-  await reloadPreview(p)
+watch(() => lib.lightbox.path, (p) => {
+  reloadPreview(p, true)
 }, { immediate: true })
+watch(() => meta.value?.modify_time, () => {
+  if (lib.lightbox.path) reloadPreview(lib.lightbox.path, false)
+})
 
 /* 图片舞台：正常查看走 canvas（只画可视区域）；裁剪/旋转/翻转继续用 <img> 以复用既有坐标逻辑 */
 const canvasStage = ref(null)
@@ -208,7 +228,10 @@ const canvasPreviewSrc = computed(() => {
   }
   return canvasFallbackSrc.value || canvasFullSrc.value
 })
-function onCanvasError() { stageDead.value = true }
+function onCanvasError() {
+  if (saveBusy.value || cropBusy.value) return
+  stageDead.value = true
+}
 
 function fitToWindow(animateFlip = false) {
   if (!stageEl.value || kind.value === 'text') return
@@ -382,10 +405,13 @@ const saveNote = ref('')
 async function saveTransform() {
   if (!hasTransform.value || saveBusy.value) return
   saveBusy.value = true
+  stageDead.value = false
+  stageFallback.value = false
   try {
     const r = await lib.applyImageTransform()
     if (r?.ok && r.changed !== false) {
-      await reloadPreview(lib.lightbox.path)
+      await reloadPreview(lib.lightbox.path, false)
+      stageDead.value = false
       nextTick(fitToWindow)
     }
     saveNote.value = r?.ok ? (r.changed === false ? '没有可保存的变换' : '已保存到原图（原件已备份）') : (r?.error || '保存失败')
@@ -802,6 +828,8 @@ async function applyCrop() {
   const n = cropNatural.value
   if (!img || !n || n.width < 8 || n.height < 8) return
   cropBusy.value = true
+  stageDead.value = false
+  stageFallback.value = false
   try {
     const r = await window.picrand.picnestCrop(img.file_path, { left: n.left, top: n.top, width: n.width, height: n.height })
     if (r?.ok) {
@@ -814,7 +842,8 @@ async function applyCrop() {
       delete lib.palettes[img.file_path]
       lib.viewer.cropMode = false
       crop.value = null
-      await reloadPreview(lib.lightbox.path)
+      await reloadPreview(lib.lightbox.path, false)
+      stageDead.value = false
       nextTick(fitToWindow)
       /* toast 独立于裁剪条（crop-bar 随 cropMode 消失，曾把成功消息一起带走） */
       cropNote.value = `已裁切 ✓ ${r.width}×${r.height} 已入库（原图已备份）`
