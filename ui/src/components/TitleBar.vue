@@ -258,8 +258,8 @@ function onKey(e) {
       <button class="wc" :class="{ on: lib.sidebarCollapsed }" :title="lib.sidebarCollapsed ? '展开左边栏' : '收起左边栏'" @click="lib.toggleSidebar()"><AnimIcon name="sidebar" :size="14" :collapsed="lib.sidebarCollapsed" /></button>
       <button class="wc" :class="{ on: lib.viewer.showInspector }" title="详情面板（收起/放出）" @click="lib.toggleInspector()"><AnimIcon name="contents" :size="14" /></button>
       <div class="vo-wrap settings-wrap">
-        <button class="wc" :class="{ on: settingsOpen || topPinned || lib.cardTilt3D }" title="窗口与个性化设置" @click.stop="toggleSettings">
-          <AnimIcon name="pin" :size="14" :active="settingsOpen || topPinned || lib.cardTilt3D" />
+        <button class="wc" :class="{ on: settingsOpen || topPinned || lib.cardTilt3D || lib.docPrivacyMode }" title="窗口与个性化设置" @click.stop="toggleSettings">
+          <AnimIcon name="pin" :size="14" :active="settingsOpen || topPinned || lib.cardTilt3D || lib.docPrivacyMode" />
         </button>
         <div v-if="settingsOpen" class="vo-panel glass-card settings-panel" @click.stop>
           <div class="vo-cap">窗口与个性化</div>
@@ -276,6 +276,13 @@ function onKey(e) {
               <div class="set-desc">悬停时卡片视差微倾与柔光掠影</div>
             </div>
             <button class="set-switch" :class="{ on: lib.cardTilt3D }" type="button"><i /></button>
+          </div>
+          <div class="set-row" @click="lib.toggleDocPrivacyMode()">
+            <div class="set-meta">
+              <div class="set-title">文档隐私折叠</div>
+              <div class="set-desc">缩略图隐藏正文仅留标题，防窥防泄露</div>
+            </div>
+            <button class="set-switch" :class="{ on: lib.docPrivacyMode }" type="button"><i /></button>
           </div>
         </div>
       </div>

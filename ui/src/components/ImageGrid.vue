@@ -953,7 +953,26 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
         @contextmenu.prevent="lib.openContextMenu($event, img)"
       >
         <div class="thumb wi" :class="{ nowi: img.gi >= 48, gray: lib.grayscaleMode }">
-          <img v-if="img.src" :src="img.src" loading="lazy" decoding="async" draggable="false" @error="onCellImgError(img)" />
+          <!-- 文档隐私折叠：收起正文，仅展示顶部标题栏与文件规格，防止正文泄露 -->
+          <div v-if="img.isText && lib.docPrivacyMode" class="doc-privacy-card">
+            <div class="dpc-head">
+              <span class="dpc-title" :title="lib.dispName(img.file_name)">{{ lib.dispName(img.file_name) }}</span>
+              <span class="dpc-badge">{{ img.extLabel }}</span>
+            </div>
+            <div class="dpc-body">
+              <div class="dpc-folded-cue">
+                <svg class="dpc-lock" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="4" y="11" width="16" height="10" rx="2.5" />
+                  <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                </svg>
+                <span>正文已收起</span>
+              </div>
+            </div>
+            <div class="dpc-foot">
+              <span>{{ img.res }}</span>
+            </div>
+          </div>
+          <img v-else-if="img.src" :src="img.src" loading="lazy" decoding="async" draggable="false" @error="onCellImgError(img)" />
           <div v-else-if="img.isText" class="docph">
             <b>{{ img.extLabel }}</b>
             <span>{{ lib.dispName(img.file_name) }}</span>
@@ -961,7 +980,7 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
           <div v-else-if="img.srcKind === 'error'" class="noimg broken" title="加载失败，点击重试" @click.stop="retryCellImg(img)">⟳</div>
           <div v-else class="noimg">{{ img.isVideo ? '▶' : '∘' }}</div>
           <!-- PicRand 式悬停信息条：叠在图片内部底部，不占布局 -->
-          <div v-if="showLabels" class="hover-overlay" :data-info="img.info" />
+          <div v-if="showLabels && (!img.isText || !lib.docPrivacyMode)" class="hover-overlay" :data-info="img.info" />
         </div>
       </div>
     </div>
@@ -1070,6 +1089,81 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
 .docph span {
   max-width: 100%; font-size: 11px; color: #8a7c68; text-align: center;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* ---- 文档隐私折叠卡片（纸面标题栏，收起正文防窥） ---- */
+.doc-privacy-card {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column;
+  background: var(--dpc-bg, #f7f3ea);
+  color: var(--dpc-title, #4a4238);
+  user-select: none;
+  cursor: pointer;
+  transition: filter 0.15s ease, transform 0.15s ease;
+}
+.cell:hover .doc-privacy-card {
+  filter: brightness(1.02);
+}
+.dpc-head {
+  height: 38px; min-height: 38px;
+  padding: 0 12px;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  background: var(--dpc-head, #ece4d5);
+  border-bottom: 1px solid var(--dpc-border, #d8cfbd);
+}
+.dpc-title {
+  font-family: Microsoft YaHei, Segoe UI, sans-serif;
+  font-size: 13px; font-weight: 600;
+  color: var(--dpc-title, #4a4238);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.dpc-badge {
+  font-family: var(--font-mono, Consolas, monospace);
+  font-size: 11px; font-weight: 600;
+  color: var(--dpc-badge, #8a7c68);
+  letter-spacing: 0.5px;
+  flex-shrink: 0;
+}
+.dpc-body {
+  flex: 1;
+  display: flex; align-items: center; justify-content: center;
+  position: relative;
+  background: radial-gradient(circle at 50% 50%, var(--dpc-paper-center, rgba(255, 255, 255, 0.45)) 0%, transparent 80%);
+}
+.dpc-folded-cue {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 12px; border-radius: 999px;
+  background: var(--dpc-cue-bg, rgba(138, 124, 104, 0.12));
+  border: 1px solid var(--dpc-cue-border, rgba(138, 124, 104, 0.20));
+  color: var(--dpc-cue-text, #7a6e5b);
+  font-size: 11px; font-weight: 500;
+  backdrop-filter: blur(4px);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
+}
+.dpc-lock {
+  stroke: currentColor;
+  opacity: 0.85;
+}
+.dpc-foot {
+  height: 28px; min-height: 28px;
+  padding: 0 12px;
+  display: flex; align-items: center; justify-content: flex-end;
+  font-family: var(--font-mono, Consolas, monospace);
+  font-size: 10.5px;
+  color: var(--dpc-foot, #a2947e);
+}
+:root[data-theme='dark'] .doc-privacy-card,
+:root.dark .doc-privacy-card {
+  --dpc-bg: #22201d;
+  --dpc-head: #2c2823;
+  --dpc-border: rgba(255, 255, 255, 0.08);
+  --dpc-title: #e4ddd3;
+  --dpc-badge: #9e9382;
+  --dpc-cue-bg: rgba(255, 255, 255, 0.06);
+  --dpc-cue-border: rgba(255, 255, 255, 0.10);
+  --dpc-cue-text: #b8ad9c;
+  --dpc-foot: #7e7465;
+  --dpc-paper-center: rgba(255, 255, 255, 0.02);
 }
 
 /* PicRand 式悬停信息条：图片内部底部渐变，hover 淡入，不占布局 */
