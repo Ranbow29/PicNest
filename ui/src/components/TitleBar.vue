@@ -72,20 +72,23 @@ const lightboxKind = computed(() => {
   return isVideoPath(p) ? 'video' : isTextPath(p) ? 'text' : 'image'
 })
 const panelOpen = ref(false)
+const settingsOpen = ref(false)
 const topPinned = ref(false)
 async function refreshTopPinned() { try { topPinned.value = !!(await window.picrand.windowIsAlwaysOnTop()) } catch { /* 静默 */ } }
-async function toggleTop() { api.windowToggleAlwaysOnTop(); await refreshTopPinned() }
+async function toggleTop() { api.windowToggleAlwaysOnTop(); await refreshTopPinned(); collectiveShake() }
 onMounted(refreshTopPinned)
-function togglePanel() { panelOpen.value = !panelOpen.value; lib.filterBarOpen = false; themeOpen.value = false; collectiveShake() }
-function toggleFilterBar() { lib.filterBarOpen = !lib.filterBarOpen; panelOpen.value = false; themeOpen.value = false; collectiveShake() }
-function toggleThemePanel() { themeOpen.value = !themeOpen.value; panelOpen.value = false; lib.filterBarOpen = false; collectiveShake() }
+function togglePanel() { panelOpen.value = !panelOpen.value; lib.filterBarOpen = false; themeOpen.value = false; settingsOpen.value = false; collectiveShake() }
+function toggleFilterBar() { lib.filterBarOpen = !lib.filterBarOpen; panelOpen.value = false; themeOpen.value = false; settingsOpen.value = false; collectiveShake() }
+function toggleThemePanel() { themeOpen.value = !themeOpen.value; panelOpen.value = false; lib.filterBarOpen = false; settingsOpen.value = false; collectiveShake() }
+function toggleSettings() { settingsOpen.value = !settingsOpen.value; panelOpen.value = false; lib.filterBarOpen = false; themeOpen.value = false; collectiveShake() }
 function pickTheme(key) { theme.setMode(key); themeOpen.value = false; collectiveShake() }
 function closePanel(e) {
   if (!e.target.closest('.vo-wrap') && !e.target.closest('.funnel-pop')) {
-    if (panelOpen.value || lib.filterBarOpen || themeOpen.value) collectiveShake()
+    if (panelOpen.value || lib.filterBarOpen || themeOpen.value || settingsOpen.value) collectiveShake()
     panelOpen.value = false
     lib.filterBarOpen = false
     themeOpen.value = false
+    settingsOpen.value = false
   }
 }
 let themeMountT = 0
@@ -128,11 +131,12 @@ watch(searchText, (v) => {
 function onKey(e) {
   if (e.key === 'Escape') {
     if (lib.lightbox.open || lib.brief.open) return // 大图/简报模式自己处理 Esc
-    if (panelOpen.value || lib.filterBarOpen || themeOpen.value) {
+    if (panelOpen.value || lib.filterBarOpen || themeOpen.value || settingsOpen.value) {
       e.preventDefault() // 告诉 App 这一下 Esc 已被消费，不再清空选中
       panelOpen.value = false
       lib.filterBarOpen = false
       themeOpen.value = false
+      settingsOpen.value = false
       collectiveShake()
     }
     return
@@ -253,7 +257,28 @@ function onKey(e) {
     <div class="bar-controls">
       <button class="wc" :class="{ on: lib.sidebarCollapsed }" :title="lib.sidebarCollapsed ? '展开左边栏' : '收起左边栏'" @click="lib.toggleSidebar()"><AnimIcon name="sidebar" :size="14" :collapsed="lib.sidebarCollapsed" /></button>
       <button class="wc" :class="{ on: lib.viewer.showInspector }" title="详情面板（收起/放出）" @click="lib.toggleInspector()"><AnimIcon name="contents" :size="14" /></button>
-      <button class="wc" :class="{ on: topPinned }" :title="topPinned ? '取消置顶（当前置顶中）' : '置顶窗口'" @click="toggleTop"><AnimIcon name="pin" :size="14" :active="topPinned" /></button>
+      <div class="vo-wrap settings-wrap">
+        <button class="wc" :class="{ on: settingsOpen || topPinned || lib.cardTilt3D }" title="窗口与个性化设置" @click.stop="toggleSettings">
+          <AnimIcon name="pin" :size="14" :active="settingsOpen || topPinned || lib.cardTilt3D" />
+        </button>
+        <div v-if="settingsOpen" class="vo-panel glass-card settings-panel" @click.stop>
+          <div class="vo-cap">窗口与个性化</div>
+          <div class="set-row" @click="toggleTop">
+            <div class="set-meta">
+              <div class="set-title">置顶窗口</div>
+              <div class="set-desc">窗口始终保持在桌面最前端</div>
+            </div>
+            <button class="set-switch" :class="{ on: topPinned }" type="button"><i /></button>
+          </div>
+          <div class="set-row" @click="lib.toggleCardTilt3D()">
+            <div class="set-meta">
+              <div class="set-title">卡片 3D 悬浮光影</div>
+              <div class="set-desc">悬停时卡片视差微倾与柔光掠影</div>
+            </div>
+            <button class="set-switch" :class="{ on: lib.cardTilt3D }" type="button"><i /></button>
+          </div>
+        </div>
+      </div>
       <button class="wc" title="最小化" @click="api.windowMinimize()">─</button>
       <button class="wc" title="最大化" @click="api.windowMaximize()">▢</button>
       <button class="wc close" title="关闭" @click="api.windowClose()">✕</button>
@@ -459,4 +484,37 @@ button.tool.funnel .badge {
 .wc:hover { background: var(--accent-weak); color: var(--text); }
 .wc.on { background: var(--accent-weak); color: var(--accent); font-weight: 600; box-shadow: inset 0 0 0 1px var(--accent); }
 .wc.close:hover { background: #e5484d; color: #fff; }
+/* ---- 右上角个性化与窗口设置弹板 ---- */
+.settings-wrap { position: relative; }
+.settings-panel {
+  left: auto; right: 0; top: 44px; width: 248px;
+  padding: 6px 10px 10px;
+}
+.set-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 8px 8px; border-radius: 10px; cursor: pointer;
+  transition: background 0.15s;
+}
+.set-row:hover { background: var(--accent-weak); }
+.set-meta { min-width: 0; flex: 1; }
+.set-title { font-size: 12.5px; font-weight: 600; color: var(--text); }
+.set-desc { font-size: 10.5px; color: var(--text-2); margin-top: 2px; line-height: 1.35; }
+.set-switch {
+  flex: none; width: 34px; height: 19px; padding: 2px;
+  border: 1px solid var(--border); border-radius: 999px;
+  background: var(--bg-2); cursor: pointer;
+  display: flex; align-items: center;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+.set-switch i {
+  width: 13px; height: 13px; border-radius: 50%;
+  background: var(--text-2);
+  transition: transform 0.22s var(--ease-overshoot), background 0.2s ease;
+}
+.set-switch.on {
+  background: var(--accent-weak); border-color: var(--accent);
+}
+.set-switch.on i {
+  transform: translateX(15px); background: var(--accent);
+}
 </style>
