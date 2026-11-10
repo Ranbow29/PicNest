@@ -445,9 +445,9 @@
   function renderPanel(s, error) {
     if (!s.shadow) return
     const wrap = s.shadow.querySelector('.wrap')
-    s.ringEl?.remove()
+    if (!wrap) return
+    wrap.innerHTML = ''
     s.ringEl = null
-    s.panel?.remove()
 
     const panel = document.createElement('div')
     panel.className = 'panel'

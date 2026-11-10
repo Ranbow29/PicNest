@@ -105,7 +105,8 @@ async function init() {
     const s = await chrome.storage.local.get(['picnestToken'])
     if (s.picnestToken) elTokenInput.value = s.picnestToken
     const ctx = await api('/api/v1/context')
-    elTokenBox.style.display = 'none' 
+    elTokenBox.style.display = 'none'
+    if (elUnpair) elUnpair.style.display = 'inline-block' 
     const saved = await chrome.storage.local.get(['rootId', 'rel'])
     elRoot.innerHTML = ''
     for (const r of ctx.roots) {
@@ -124,6 +125,7 @@ async function init() {
     if (e.message === 'TOKEN_REQUIRED') {
       setStatus('off', '需配对密钥')
       elTokenBox.style.display = 'flex'
+      if (elUnpair) elUnpair.style.display = 'none'
       msg('请在图巢「设置」中点击「复制密钥」，粘贴到上方完成配对。', true)
     } else {
       msg('初始化失败：' + e.message, true)
