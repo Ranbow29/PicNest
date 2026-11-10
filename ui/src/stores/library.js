@@ -118,6 +118,7 @@ export const useLibrary = defineStore('library', {
     lightbox: { open: false, path: null },
     brief: { open: false, path: null, scale: 1, tx: 0, ty: 0 }, // 简报模式（全屏演示）
     grayscaleMode: localStorage.getItem('picnest.grayscale') === '1', // 黑白预览（全局显示开关）
+    cardTilt3D: localStorage.getItem('picnest.cardTilt3D') === '1', // 网格卡片 3D 视差微倾 + 柔光掠影（默认关闭，个性化开启）
     contextMenu: { open: false, x: 0, y: 0, image: null },
     renaming: false,
     dupDialog: { open: false, items: [], targetRel: undefined, mode: 'files', count: 0, resolve: null },
@@ -2596,6 +2597,11 @@ export const useLibrary = defineStore('library', {
     toggleGrayscale() {
       this.grayscaleMode = !this.grayscaleMode
       localStorage.setItem('picnest.grayscale', this.grayscaleMode ? '1' : '0')
+    },
+    toggleCardTilt3D() {
+      this.cardTilt3D = !this.cardTilt3D
+      localStorage.setItem('picnest.cardTilt3D', this.cardTilt3D ? '1' : '0')
+      collectiveShake()
     },
     openBrief(path) {
       this.closeContextMenu()

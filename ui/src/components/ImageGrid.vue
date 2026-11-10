@@ -847,7 +847,7 @@ function onCellDblClick(e, img) {
 }
 /* 卡片 3D 微倾 + 柔光镜面跟随：直接写当前 DOM 节点的 CSS 变量，不触发 Vue 响应式重渲染 */
 function onCellTiltMove(e) {
-  if (dragging.value) return
+  if (!lib.cardTilt3D || dragging.value) return
   const el = e.currentTarget
   const r = el.getBoundingClientRect()
   if (!r.width || !r.height) return
@@ -873,7 +873,7 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
           @pointerup="onRulerUp" @pointercancel="onRulerUp" />
   <canvas ref="dragImageEl" class="drag-image" width="96" height="96" />
   <div ref="viewport" class="grid-viewport" @wheel="onViewportWheel">
-    <div ref="canvasEl" class="canvas" :class="{ dragging }" :style="{ height: totalH + 'px' }"
+    <div ref="canvasEl" class="canvas" :class="{ dragging, 'tilt-on': lib.cardTilt3D }" :style="{ height: totalH + 'px' }"
          @click.self="onBackgroundClick"
          @pointerdown.self="onMarqueeDown"
          @dragover="onCanvasDragOver" @dragleave="onCanvasDragLeave" @drop="onCanvasDrop">
@@ -1019,10 +1019,13 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
   box-shadow: inset 0 1px 0 var(--tile-edge), inset 0 0 0 1px rgba(255, 255, 255, 0.08);
 }
 .cell:hover .thumb {
-  transform: translateY(-3px) rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg)) scale(1.012);
+  transform: translateY(-3px);
   box-shadow: var(--shadow-tile-hover);
 }
-.cell:hover .thumb::before { opacity: 1; }
+.canvas.tilt-on .cell:hover .thumb {
+  transform: translateY(-3px) rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg)) scale(1.012);
+}
+.canvas.tilt-on .cell:hover .thumb::before { opacity: 1; }
 .canvas.dragging .cell:hover .thumb::before { opacity: 0; }
 .cell.selected .thumb {
   border-color: var(--accent);

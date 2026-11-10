@@ -115,7 +115,7 @@ function applyPan(tx, ty) {
   if (el) el.style.transform = `translate3d(${tx}px, ${ty}px, 0) scale(${lib.brief.scale || 1})`
 }
 /* ---- Ken Burns 缓慢推拉运镜 + 自动轮播（幻灯片） ---- */
-const kenBurnsOn = ref(localStorage.getItem('picnest.briefKenBurns') !== '0')
+const kenBurnsOn = ref(localStorage.getItem('picnest.briefKenBurnsV2') === '1')
 const autoPlay = ref(false)
 const intervalSec = ref(Number(localStorage.getItem('picnest.briefInterval')) || 5)
 const topRightHover = ref(false)
@@ -126,7 +126,7 @@ const kbClass = computed(() => (kenBurnsOn.value && isUnzoomed.value && kind.val
 
 function toggleKenBurns() {
   kenBurnsOn.value = !kenBurnsOn.value
-  localStorage.setItem('picnest.briefKenBurns', kenBurnsOn.value ? '1' : '0')
+  localStorage.setItem('picnest.briefKenBurnsV2', kenBurnsOn.value ? '1' : '0')
 }
 function toggleAutoPlay() {
   autoPlay.value = !autoPlay.value
