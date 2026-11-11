@@ -543,7 +543,7 @@ onBeforeUnmount(() => {
 
 <template>
   <Teleport to="body">
-    <div v-if="isOpen" class="vs-modal-mask" @click.self="lib.closeVisualSearch()">
+    <div v-if="isOpen" class="vs-modal-mask">
       <div class="vs-window glass-card">
         
         <!-- 顶栏控制区 -->
@@ -744,41 +744,46 @@ onBeforeUnmount(() => {
                     ✓ 已入库
                   </span>
 
-                  <!-- 悬停操作浮层（对齐 PicNest 极简玻璃） -->
+                  <!-- 悬停操作浮层（对齐灯箱无固有色极简单色图标胶囊） -->
                   <div class="card-overlay">
-                    <div class="action-dock">
-                      <!-- 衍生递归搜索 (F) -->
+                    <div class="card-dock" @click.stop>
+                      <!-- 1. 保存到未分类 (S) -->
                       <button
-                        class="dock-btn search-f"
-                        title="以此图继续搜索 (F)"
-                        @click="researchItem(item, $event)"
+                        class="card-dock-btn"
+                        :class="{ saved: item.saved }"
+                        :disabled="item.saved || savingMap[item.id]"
+                        @click="saveItem(item, $event)"
                       >
-                        🔍 图片搜索 F
+                        <svg v-if="savingMap[item.id]" class="dock-svg spin" viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="2" fill="none"><circle cx="12" cy="12" r="10" stroke-opacity="0.25"/><path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round"/></svg>
+                        <svg v-else-if="item.saved" class="dock-svg ok" viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                        <svg v-else class="dock-svg" viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                        <span class="dock-tooltip">{{ item.saved ? '已存入未分类' : '保存到未分类 S' }}</span>
                       </button>
 
-                      <div class="dock-row">
-                        <!-- 保存到图巢 (S) -->
-                        <button
-                          class="dock-btn save-s"
-                          :class="{ saved: item.saved }"
-                          :disabled="item.saved || savingMap[item.id]"
-                          :title="item.saved ? '已存入图巢' : '保存到未分类 (S)'"
-                          @click="saveItem(item, $event)"
-                        >
-                          <span v-if="savingMap[item.id]">⌛ 保存中…</span>
-                          <span v-else-if="item.saved">✓ 已存</span>
-                          <span v-else>💾 保存 S</span>
-                        </button>
+                      <!-- 2. 以图找图 (F) -->
+                      <button
+                        class="card-dock-btn"
+                        @click="researchItem(item, $event)"
+                      >
+                        <svg class="dock-svg" viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                          <path d="M4 8V4h4"/><path d="M20 8V4h-4"/><path d="M4 16v4h4"/><path d="M20 16v4h-4"/>
+                          <circle cx="11.5" cy="11.5" r="3.2"/><line x1="13.8" y1="13.8" x2="18" y2="18"/>
+                        </svg>
+                        <span class="dock-tooltip">以图找图 F</span>
+                      </button>
 
-                        <!-- 原网直链 (O) -->
-                        <button
-                          class="dock-btn link-o"
-                          title="在浏览器中查看原网页 (O)"
-                          @click="openSource(item, $event)"
-                        >
-                          ↗ 来源 O
-                        </button>
-                      </div>
+                      <!-- 3. 在浏览器中打开原网页 (O) -->
+                      <button
+                        v-if="item.sourceUrl"
+                        class="card-dock-btn"
+                        @click="openSource(item, $event)"
+                      >
+                        <svg class="dock-svg" viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                          <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+                          <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+                        </svg>
+                        <span class="dock-tooltip">在 Pinterest 打开 O</span>
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -1385,11 +1390,11 @@ onBeforeUnmount(() => {
 .card-overlay {
   position: absolute;
   inset: 0;
-  background: linear-gradient(180deg, rgba(0, 0, 0, 0.04) 20%, rgba(0, 0, 0, 0.8) 100%);
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.02) 40%, rgba(0, 0, 0, 0.72) 100%);
   opacity: 0;
   display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
+  align-items: flex-end;
+  justify-content: center;
   padding: 10px;
   transition: opacity 0.2s ease;
   backdrop-filter: blur(2px);
@@ -1399,67 +1404,58 @@ onBeforeUnmount(() => {
   opacity: 1;
 }
 
-.action-dock {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+.card-dock {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(18, 18, 24, 0.78);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  padding: 4px 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
 }
 
-.dock-row {
-  display: flex;
-  gap: 6px;
-}
-
-.dock-btn {
-  background: rgba(255, 255, 255, 0.18);
-  backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  color: #fff;
-  border-radius: 7px;
-  padding: 6px 10px;
-  font-size: 12px;
+.card-dock-btn {
+  height: 28px;
+  width: 30px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.85);
   cursor: pointer;
-  transition: all 0.15s;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
-  text-align: center;
+  position: relative;
+  transition: all 0.15s ease;
+  padding: 0;
 }
 
-.dock-btn:hover {
-  background: rgba(255, 255, 255, 0.3);
+.card-dock-btn:hover {
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+  transform: translateY(-1px);
 }
 
-.dock-btn.search-f {
-  background: rgba(59, 130, 246, 0.85);
-  border-color: rgba(59, 130, 246, 0.95);
-  font-weight: 500;
-  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.35);
+.card-dock-btn:active {
+  transform: scale(0.92);
 }
 
-.dock-btn.search-f:hover {
-  background: #2563eb;
+.card-dock-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+  pointer-events: none;
 }
 
-.dock-btn.save-s {
-  flex: 1;
-  background: rgba(16, 185, 129, 0.8);
-  border-color: rgba(16, 185, 129, 0.9);
+.card-dock-btn.saved {
+  color: #34d399;
 }
 
-.dock-btn.save-s:hover {
-  background: #059669;
-}
-
-.dock-btn.save-s.saved {
-  background: rgba(16, 185, 129, 0.35);
-  color: #a7f3d0;
-  cursor: default;
-}
-
-.dock-btn.link-o {
-  flex: 1;
+.card-dock-btn:hover .dock-tooltip {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
 }
 
 .card-meta {
