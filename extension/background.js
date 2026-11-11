@@ -27,7 +27,7 @@ chrome.runtime.onStartup.addListener(setupMenus)
    - 更老的脚本（无 cleanup）/ 扩展更新后失去 runtime 的孤立脚本 / document 监听器失效
      → 只在 Pinterest 标签自动刷新一次（chrome.storage.session 记标记防循环），其它站点走 popup「修复本页」。
    content.js 在监听器全部注册完成之后才置 Loaded，并提供健康事件，部分初始化也能被发现。 */
-const CONTENT_VERSION = '0.2.3'
+const CONTENT_VERSION = '0.2.4'
 const RELOAD_KEY = 'picnestCollectReloads'
 const INJECTABLE_RE = /^(https?|file):\/\//i
 const PINTEREST_HOST_RE = /(^|\.)pinterest\.[a-z.]+$/i
@@ -292,14 +292,16 @@ async function getTarget() {
 }
 
 function notify(ok, message) {
+  // 采集结果（成功/失败）已全面由页面内右下角优雅读条 Toast 接管，彻底屏蔽系统气泡弹窗
+  if (!message || message.includes('已保存') || message.includes('采集失败') || message.includes('Assignment') || message.includes('HTTP')) return
   try {
     chrome.notifications.create({
       type: 'basic',
       iconUrl: chrome.runtime.getURL('icon128.png'),
-      title: ok ? 'PicNest 图巢' : 'PicNest 采集失败',
+      title: 'PicNest 图巢',
       message: String(message || '').slice(0, 180),
     })
-  } catch { /* 通知权限异常时静默 */ }
+  } catch { /* 静默 */ }
 }
 
 function createTabToast(tabId, initial) {
@@ -791,11 +793,9 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   try {
     const name = info.menuItemId === MENU_IMAGE ? await saveImage(info, tab, toast) : await savePage(tab)
     toast.done(name)
-    notify(true, '已保存：' + name)
   } catch (e) {
     const errMsg = e?.message || String(e)
     toast.error(errMsg)
-    notify(false, errMsg)
   }
 })
 

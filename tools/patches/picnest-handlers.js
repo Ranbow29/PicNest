@@ -3985,7 +3985,7 @@ function picnestCollectDataUrl(u) {
   return { buf, contentType: m[1] || "application/octet-stream" };
 }
 async function picnestCollectFetchImage(src, referer) {
-  const u = String(src || "");
+  let u = String(src || "");
   if (u.startsWith("data:")) {
     const d = picnestCollectDataUrl(u);
     if (!d) throw new Error("dataUrl 解析失败");
