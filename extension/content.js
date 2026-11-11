@@ -2,7 +2,7 @@
 // 在网页图片上左键按住 → 光标处环形进度 → 弹出双栏面板（左：未分类/库根；右：全部文件夹）
 // 拖到目标松开即保存；松开在面板空白处则面板停留，可点击/滚动选择；Esc / 点外部取消。
 (() => {
-  const VERSION = '0.1.8'
+  const VERSION = '0.2.3'
   const prevLoaded = !!window.__picnestHoldCollectLoaded
   const prevVersion = String(window.__picnestHoldCollectVersion || '')
   /* 同版本重复注入：幂等返回。旧版本实例：0.1.4 起会挂 __picnestHoldCollectCleanup，
@@ -19,6 +19,30 @@
     if (!cleaned) return
   }
 
+  // 静默拦截旧版遗留的未捕获 ReferenceError
+  try {
+    window.addEventListener('error', (e) => {
+      if (e?.message && /isPinterest/i.test(e.message)) {
+        e.preventDefault?.()
+        e.stopImmediatePropagation?.()
+      }
+    }, true)
+    window.addEventListener('unhandledrejection', (e) => {
+      if (String(e?.reason?.message || e?.reason).includes('isPinterest')) {
+        e.preventDefault?.()
+      }
+    }, true)
+  } catch {}
+
+  function isPinterestSite() {
+    try {
+      const host = window.location?.hostname || location?.hostname || ''
+      return /(^|\.)pinterest\.[a-z.]+$/i.test(host)
+    } catch {
+      return false
+    }
+  }
+
   const HOLD_MS = 380
   const RING_DELAY = 120
   const MOVE_TOL = 6
@@ -30,6 +54,7 @@
   let last = { rootId: null, rel: '' }
   let probeTicks = 0
   let disposed = false
+  const activeToasts = new Map()
 
   function onStorageChanged(changes) {
     if (changes.holdCollect) enabled = changes.holdCollect.newValue !== false
@@ -182,8 +207,59 @@
       background: #fff; color: #6f6a60; font-size: 11.5px; cursor: pointer; }
     .nd-btn.ok { background: #b4884b; border-color: #b4884b; color: #fff; }
     .nd-btn:hover { filter: brightness(.98); }
+    .toast-wrap { position: fixed; right: 24px; bottom: 24px; z-index: 2147483647;
+      display: flex; flex-direction: column-reverse; gap: 10px; pointer-events: none; }
+    .toast-card { pointer-events: auto; width: 330px; max-width: calc(100vw - 32px);
+      background: #ffffff; color: #262626; border: 1px solid rgba(0,0,0,.12);
+      border-radius: 12px; box-shadow: 0 4px 16px rgba(0,0,0,.14), 0 12px 32px rgba(0,0,0,.12);
+      padding: 10px 12px; box-sizing: border-box; overflow: hidden;
+      animation: toastIn .22s cubic-bezier(.16,1,.3,1); transition: opacity .25s, transform .25s; }
+    .toast-card.slide-out { opacity: 0; transform: translateY(14px); }
+    @keyframes toastIn { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
+    .toast-row { display: flex; align-items: center; gap: 9px; }
+    .toast-thumb { width: 36px; height: 36px; border-radius: 6px; object-fit: cover;
+      background: #f0ede6; flex: none; border: 1px solid rgba(0,0,0,.06); }
+    .toast-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+    .toast-title { font-size: 11.5px; font-weight: 600; color: #262626; overflow: hidden;
+      text-overflow: ellipsis; white-space: nowrap; }
+    .toast-sub { font-size: 10.5px; color: #78736a; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .toast-close { width: 20px; height: 20px; border-radius: 50%; border: none; background: transparent;
+      color: #999; cursor: pointer; display: flex; align-items: center; justify-content: center;
+      font-size: 13px; line-height: 1; padding: 0; flex: none; }
+    .toast-close:hover { background: rgba(0,0,0,.06); color: #333; }
+    .toast-progress { width: 100%; height: 3px; background: rgba(0,0,0,.08); border-radius: 2px;
+      overflow: hidden; margin-top: 8px; position: relative; }
+    .toast-bar { height: 100%; width: 40%; background: #b4884b; border-radius: 2px;
+      position: absolute; left: 0; animation: toastIndet 1.4s infinite ease-in-out; transition: width .3s, background-color .3s; }
+    .toast-card.done .toast-bar { animation: none; width: 100% !important; background: #4f7d5e; }
+    .toast-card.err .toast-bar { animation: none; width: 100% !important; background: #b4463b; }
+    .toast-card.done .toast-sub { color: #4f7d5e; font-weight: 500; }
+    .toast-card.err .toast-sub { color: #b4463b; font-weight: 500; }
+    .toast-dup-actions { display: flex; gap: 6px; margin-top: 8px; }
+    .toast-dup-btn { flex: 1; height: 24px; border-radius: 6px; border: 1px solid rgba(0,0,0,.15);
+      background: #fff; font-size: 11px; cursor: pointer; color: #555; }
+    .toast-dup-btn:hover { background: #f5f5f5; }
+    .toast-dup-btn.ow { color: #b4463b; border-color: rgba(180,68,59,.4); }
+    .toast-dup-btn.ow:hover { background: #fff5f4; }
+    .toast-dup-btn.force { color: #fff; background: #b4884b; border-color: #b4884b; }
+    .toast-dup-btn.force:hover { background: #9e753c; }
+    @keyframes toastIndet {
+      0% { left: -35%; width: 35%; }
+      50% { left: 30%; width: 50%; }
+      100% { left: 100%; width: 35%; }
+    }
     @media (prefers-color-scheme: dark) {
       .ring .bg { stroke: rgba(255,255,255,.25); }
+      .toast-card { background: #1c1c1e; color: #f2f2f2; border-color: rgba(255,255,255,.14);
+        box-shadow: 0 4px 20px rgba(0,0,0,.45), 0 14px 36px rgba(0,0,0,.35); }
+      .toast-title { color: #f2f2f2; }
+      .toast-sub { color: #a1a1a6; }
+      .toast-thumb { background: #2c2c2e; border-color: rgba(255,255,255,.08); }
+      .toast-close { color: #888; }
+      .toast-close:hover { background: rgba(255,255,255,.12); color: #fff; }
+      .toast-progress { background: rgba(255,255,255,.12); }
+      .toast-dup-btn { background: #2c2c2e; border-color: rgba(255,255,255,.16); color: #ddd; }
+      .toast-dup-btn:hover { background: #3a3a3c; }
     }
   `
 
@@ -194,7 +270,7 @@
     host.id = HOST_ID
     host.style.cssText = 'all:initial;position:fixed;inset:0;z-index:2147483647;pointer-events:none;'
     const shadow = host.attachShadow({ mode: 'open' })
-    shadow.innerHTML = `<style>${CSS}</style><div class="wrap"></div>`
+    shadow.innerHTML = `<style>${CSS}</style><div class="wrap"><div class="toast-wrap"></div></div>`
     shadow.addEventListener('pointerdown', (e) => e.stopPropagation(), true)
     shadow.addEventListener('click', (e) => {
       e.stopPropagation()
@@ -240,17 +316,13 @@
 
   function isInteractiveOrTextTarget(target) {
     if (!target) return false
-    // 忽略输入框、富文本、按钮、选择器、超链接等交互元素
-    if (target.closest?.('input, textarea, [contenteditable], button, select, option, label, a[href]:not([data-test-id="pin"])')) return true
+    // 忽略表单输入控件、富文本编辑框、按钮、选择器
+    if (target.closest?.('input, textarea, [contenteditable], button, select, option, label')) return true
     // 忽略播放器控制面板（进度条、音量条、清晰度面板、弹幕栏等）
     if (target.closest?.('[class*="control"], [class*="progress"], [class*="volume"], [class*="danmaku"], [class*="player-toolbar"], [class*="bottom-left"], [class*="bottom-right"]')) return true
-    // 评论区（B站、YouTube等）：评论文本、楼层、回复框等绝不触发采集；除非直接点在评论附带的大图上（>80px）
-    const commentBox = target.closest?.('[class*="comment"], [class*="reply"], [id*="comment"], [id*="reply"]')
-    if (commentBox) {
-      if (target.tagName !== 'IMG') return true
-      const r = target.getBoundingClientRect()
-      if (r.width < 80 || r.height < 80) return true
-      if (target.closest?.('[class*="avatar"], [class*="face"], [class*="head"], [class*="emoji"]')) return true
+    // 评论区（B站、YouTube等）：任何评论文本、楼层、头像、回复框或评论配图一律拒绝触发长按采集
+    if (target.closest?.('[class*="comment"], [class*="reply"], [id*="comment"], [id*="reply"], bili-comments, #comment, .bb-comment, .reply-item, #comment-module')) {
+      return true
     }
     return false
   }
@@ -677,6 +749,8 @@
 
   function findPinUrl(el) {
     if (!el) return ''
+    const pinA = el.closest?.('a[href*="/pin/"]')
+    if (pinA?.href && /\/pin\/\d+/.test(pinA.href)) return pinA.href
     let cur = el
     while (cur && cur !== document.body) {
       if (cur.getAttribute?.('data-test-pin-id')) {
@@ -690,26 +764,140 @@
     return ''
   }
 
+  function normalizePinterestVideoUrl(rawUrl) {
+    if (!rawUrl || typeof rawUrl !== 'string') return ''
+    const u = rawUrl.trim()
+    if (!u.includes('pinimg.com')) return u
+    // 核心逻辑：从任意 Pinterest 资源 URL 中提取 32 位 MD5 hash，直通官方无防盗链 720p MP4
+    const hashMatch = u.match(/([a-f0-9]{32})/i)
+    if (hashMatch) {
+      const hash = hashMatch[1]
+      const p1 = hash.slice(0, 2)
+      const p2 = hash.slice(2, 4)
+      const p3 = hash.slice(4, 6)
+      return `https://v.pinimg.com/videos/mc/720p/${p1}/${p2}/${p3}/${hash}.mp4`
+    }
+    return u.replace(/https?:\/\/[a-z0-9_.-]*pinimg\.com\//i, 'https://v.pinimg.com/')
+            .replace(/\/videos\/(iht|hls)\//i, '/videos/mc/')
+            .replace(/(_\d+[wp]|_\d+p)?\.(cmfv|cmfa|m3u8|ts|mpd).*$/i, '.mp4')
+  }
+
+  function isValidVideoUrl(u) {
+    if (!u || typeof u !== 'string') return false
+    if (/\.(html?|php|jsp|asp)(\?.*)?$/i.test(u)) return false
+    if (/blackboard|mobileplayer|player\.html/i.test(u)) return false
+    return /\.(mp4|webm|mov|mkv|avi|flv|f4v)(\?.*)?$/i.test(u) || /pinimg\.com\/videos/i.test(u)
+  }
+
+  function scanObjectForPinterestVideo(obj, depth = 0) {
+    if (!obj || typeof obj !== 'object' || depth > 8) return ''
+    if (obj.video_list && typeof obj.video_list === 'object') {
+      for (const v of Object.values(obj.video_list)) {
+        if (typeof v?.url === 'string' && v.url.includes('pinimg.com')) {
+          const norm = normalizePinterestVideoUrl(v.url)
+          if (norm) return norm
+        }
+      }
+    }
+    if (typeof obj.url === 'string' && obj.url.includes('pinimg.com') && (obj.url.includes('/videos/') || obj.url.includes('.mp4') || obj.url.includes('.cmfv') || obj.url.includes('.m3u8'))) {
+      const norm = normalizePinterestVideoUrl(obj.url)
+      if (norm) return norm
+    }
+    for (const k of Object.keys(obj)) {
+      if (k === 'parent' || k === 'return' || k === '_owner' || k === 'stateNode') continue
+      if (typeof obj[k] === 'object') {
+        const res = scanObjectForPinterestVideo(obj[k], depth + 1)
+        if (res) return res
+      }
+    }
+    return ''
+  }
+
+  function findPinterestVideoFromPerformance() {
+    try {
+      const entries = performance.getEntriesByType('resource') || []
+      for (let i = entries.length - 1; i >= 0; i--) {
+        const u = entries[i].name || ''
+        if (!u.includes('pinimg.com')) continue
+        const norm = normalizePinterestVideoUrl(u)
+        if (norm && /\.mp4(\?.*)?$/i.test(norm)) return norm
+      }
+    } catch {}
+    return ''
+  }
+
+  function findPinterestVideoFromCard(el) {
+    if (!el) return ''
+    let cur = el
+    let depth = 0
+    while (cur && cur !== document.body && depth < 10) {
+      for (const img of cur.querySelectorAll('img')) {
+        const s = (img.currentSrc || img.src || '').trim()
+        if (s.includes('pinimg.com') && s.includes('/videos_thumbnails/')) {
+          const norm = normalizePinterestVideoUrl(s)
+          if (norm) return norm
+        }
+      }
+      cur = cur.parentElement
+      depth++
+    }
+    return ''
+  }
+
+  function scanHtmlForPinterestVideo() {
+    try {
+      const html = document.documentElement.innerHTML || ''
+      const matches = html.match(/https?:\/\/[a-z0-9_.-]*pinimg\.com\/[^\s"'<>\\]+(?:[a-f0-9]{32})[^\s"'<>\\]*/gi)
+      if (matches && matches.length > 0) {
+        for (const m of matches) {
+          const norm = normalizePinterestVideoUrl(m)
+          if (norm && /\.mp4(\?.*)?$/i.test(norm)) return norm
+        }
+      }
+    } catch {}
+    return ''
+  }
+
+  function findPinterestVideoFromFiber(el) {
+    if (!el) return ''
+    let cur = el
+    let depth = 0
+    while (cur && cur !== document.body && depth < 12) {
+      for (const key of Object.keys(cur)) {
+        if (key.startsWith('__reactFiber$') || key.startsWith('__reactProps$') || key.startsWith('__reactInternalInstance$')) {
+          try {
+            const u = scanObjectForPinterestVideo(cur[key], 0)
+            if (u) return u
+          } catch {}
+        }
+      }
+      cur = cur.parentElement
+      depth++
+    }
+    return ''
+  }
+
+  function findPinterestVideoFromPoster(poster) {
+    if (!poster || !poster.includes('pinimg.com')) return ''
+    if (poster.includes('/videos_thumbnails/')) {
+      return poster
+        .replace(/i\.pinimg\.com\/videos_thumbnails\/(720p|original|[a-z0-9_-]+)\//i, 'v.pinimg.com/videos/mc/720p/')
+        .replace(/(_t)?\.(jpe?g|png|webp).*$/i, '.mp4')
+    }
+    return ''
+  }
+
   function findPinterestVideoFromPws(pinId) {
     try {
-      const pws = document.getElementById('__PWS_DATA__')
-      if (pws && pws.textContent) {
-        const data = JSON.parse(pws.textContent)
-        const pins = data?.props?.initialReduxState?.pins || {}
-        if (pinId && pins[pinId]?.videos?.video_list) {
-          const vl = pins[pinId].videos.video_list
-          const best = vl.V_720P?.url || vl.V_1080P?.url || vl.V_EXP7?.url || Object.values(vl).find((v) => v?.url && v.url.includes('.mp4'))?.url
-          if (best) return best
-          if (vl.V_HLS?.url) return vl.V_HLS.url.replace('/hls/', '/720p/').replace(/\.m3u8.*$/, '.mp4')
-        }
-        for (const p of Object.values(pins)) {
-          if (p?.videos?.video_list) {
-            const vl = p.videos.video_list
-            const best = vl.V_720P?.url || vl.V_1080P?.url || vl.V_EXP7?.url || Object.values(vl).find((v) => v?.url && v.url.includes('.mp4'))?.url
-            if (best) return best
-            if (vl.V_HLS?.url) return vl.V_HLS.url.replace('/hls/', '/720p/').replace(/\.m3u8.*$/, '.mp4')
-          }
-        }
+      const scripts = Array.from(document.querySelectorAll('script[type="application/json"], script#__PWS_DATA__'))
+      for (const s of scripts) {
+        const txt = s.textContent || ''
+        if (!txt.includes('video_list') && !txt.includes('v.pinimg.com')) continue
+        try {
+          const data = JSON.parse(txt)
+          const found = scanObjectForPinterestVideo(data)
+          if (found) return found
+        } catch {}
       }
     } catch {}
     return ''
@@ -721,38 +909,46 @@
     if (!video) return null
 
     let src = (video.currentSrc || video.src || '').trim()
-    if (!src || src.startsWith('blob:')) {
+    if (!isValidVideoUrl(src)) src = ''
+
+    if (!src) {
       for (const s of video.querySelectorAll('source')) {
         const u = (s.src || s.getAttribute('src') || '').trim()
-        if (u && !u.startsWith('blob:')) { src = u; break }
+        if (isValidVideoUrl(u)) { src = u; break }
       }
     }
-    if (!src || src.startsWith('blob:')) {
+    if (!src) {
       const meta = document.querySelector('meta[property="og:video"], meta[property="og:video:secure_url"]')
-      if (meta?.content && /^https?:\/\//i.test(meta.content)) src = meta.content
+      if (meta?.content && isValidVideoUrl(meta.content)) src = meta.content
     }
-    if (!src || src.startsWith('blob:')) {
+    if (!src) {
       for (const s of document.querySelectorAll('script[type="application/ld+json"]')) {
         try {
           const j = JSON.parse(s.textContent)
           const item = Array.isArray(j) ? j[0] : j
           const cu = item?.contentUrl || item?.video?.contentUrl
-          if (cu && /^https?:\/\//i.test(cu)) { src = cu; break }
+          if (isValidVideoUrl(cu)) { src = cu; break }
         } catch {}
       }
     }
 
+    const poster = (video.poster || video.getAttribute('poster') || '').trim()
     const pinUrl = findPinUrl(video)
-    const pinMatch = pinUrl.match(/\/pin\/(\d+)/)
+    const pinMatch = pinUrl.match(/\/pin\/(\d+)/) || (typeof location !== 'undefined' ? location.pathname.match(/\/pin\/(\d+)/) : null)
     const pinId = pinMatch ? pinMatch[1] : ''
 
-    if ((!src || src.startsWith('blob:') || src.includes('/hls/')) && isPinterest) {
-      const pwsSrc = findPinterestVideoFromPws(pinId)
-      if (pwsSrc) src = pwsSrc
-    }
-
-    if (src.includes('v.pinimg.com') && src.includes('/hls/')) {
-      src = src.replace('/hls/', '/720p/').replace(/\.m3u8.*$/, '.mp4')
+    if (isPinterestSite()) {
+      if (!src || src.startsWith('blob:') || src.includes('/hls/')) {
+        src = findPinterestVideoFromPerformance() ||
+              findPinterestVideoFromFiber(video) ||
+              findPinterestVideoFromCard(video) ||
+              findPinterestVideoFromPoster(poster) ||
+              findPinterestVideoFromPws(pinId) ||
+              scanHtmlForPinterestVideo() || ''
+      }
+      if (src.includes('v.pinimg.com') && src.includes('/hls/')) {
+        src = src.replace('/hls/', '/720p/').replace(/(_\d+p)?\.(m3u8|ts).*$/i, '.mp4')
+      }
     }
 
     let frameDataUrl = ''
@@ -769,96 +965,253 @@
       }
     } catch {}
 
-    const poster = (video.poster || video.getAttribute('poster') || '').trim()
     const title = (video.getAttribute('title') || video.getAttribute('aria-label') || document.title || '视频采集').trim()
 
     return {
       src,
-      pinUrl,
       pinId,
+      pinUrl,
       poster,
       frameDataUrl,
       title,
     }
   }
 
+  async function fetchPinterestVideoByPinId(pinId) {
+    if (!pinId) return ''
+    try {
+      const apiUrl = `/resource/PinResource/get/?data=%7B%22options%22%3A%7B%22id%22%3A%22${pinId}%22%2C%22field_set_key%22%3A%22detailed%22%7D%7D`
+      const res = await fetch(apiUrl, {
+        headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json' },
+        credentials: 'include',
+      })
+      if (!res.ok) return ''
+      const j = await res.json()
+      const found = scanObjectForPinterestVideo(j?.resource_response?.data)
+      if (found) return found
+    } catch {}
+    return ''
+  }
+
+  function showProgressToast({ thumb, title, folderName }) {
+    const host = ensureHost()
+    let toastWrap = host.shadowRoot.querySelector('.toast-wrap')
+    if (!toastWrap) {
+      toastWrap = document.createElement('div')
+      toastWrap.className = 'toast-wrap'
+      host.shadowRoot.querySelector('.wrap')?.appendChild(toastWrap)
+    }
+
+    const card = document.createElement('div')
+    card.className = 'toast-card'
+    card.innerHTML = `
+      <div class="toast-row">
+        ${thumb ? `<img class="toast-thumb" src="${thumb}" />` : `<div class="toast-thumb"></div>`}
+        <div class="toast-meta">
+          <div class="toast-title" title="${title || ''}">${title || '正在采集…'}</div>
+          <div class="toast-sub">${folderName ? `保存到 · ${folderName}` : '保存中…'}</div>
+        </div>
+        <button class="toast-close" title="关闭">✕</button>
+      </div>
+      <div class="toast-progress"><div class="toast-bar"></div></div>
+      <div class="toast-dup-actions" style="display:none"></div>
+    `
+    toastWrap.appendChild(card)
+
+    const subEl = card.querySelector('.toast-sub')
+    const closeBtn = card.querySelector('.toast-close')
+    const dupBox = card.querySelector('.toast-dup-actions')
+    let removeTimer = 0
+
+    const dismiss = () => {
+      clearTimeout(removeTimer)
+      card.classList.add('slide-out')
+      setTimeout(() => card.remove(), 260)
+    }
+
+    closeBtn.addEventListener('click', (e) => {
+      e.stopPropagation()
+      dismiss()
+    })
+
+    return {
+      card,
+      setThumb(url) {
+        if (!url) return
+        const img = card.querySelector('.toast-thumb')
+        if (img) {
+          if (img.tagName === 'IMG') img.src = url
+          else {
+            const newImg = document.createElement('img')
+            newImg.className = 'toast-thumb'
+            newImg.src = url
+            img.replaceWith(newImg)
+          }
+        }
+      },
+      updateStatus(text) {
+        subEl.textContent = text
+      },
+      done(name, extra) {
+        card.classList.remove('err')
+        card.classList.add('done')
+        subEl.textContent = `已保存：${name || ''}${extra || ''}`
+        removeTimer = setTimeout(dismiss, 2500)
+      },
+      error(errText) {
+        card.classList.remove('done')
+        card.classList.add('err')
+        subEl.textContent = `保存失败：${errText || '未知错误'}`
+        removeTimer = setTimeout(dismiss, 8000)
+      },
+      duplicate(matches, onOverwrite, onForce) {
+        card.classList.remove('done')
+        card.classList.add('err')
+        subEl.textContent = '图库中已有相同图片'
+        dupBox.style.display = 'flex'
+        dupBox.innerHTML = `
+          <button class="toast-dup-btn" data-act="skip">跳过</button>
+          <button class="toast-dup-btn ow" data-act="overwrite">覆盖旧图</button>
+          <button class="toast-dup-btn force" data-act="force">仍然保存</button>
+        `
+        dupBox.querySelector('[data-act="skip"]').onclick = (e) => { e.stopPropagation(); dismiss() }
+        dupBox.querySelector('[data-act="overwrite"]').onclick = (e) => {
+          e.stopPropagation()
+          dupBox.style.display = 'none'
+          subEl.textContent = '正在覆盖保存…'
+          card.classList.remove('err')
+          onOverwrite()
+        }
+        dupBox.querySelector('[data-act="force"]').onclick = (e) => {
+          e.stopPropagation()
+          dupBox.style.display = 'none'
+          subEl.textContent = '正在保存…'
+          card.classList.remove('err')
+          onForce()
+        }
+      },
+      dismiss,
+    }
+  }
+
   async function saveTo(s, rel, force, overwrite) {
-    if (s.saving || !s.root) return
-    s.saving = true
-    s.pendingRel = rel
-    s.skipClick = Date.now() + 500
-    removeDup(s)
-    setStatus(s, 'saving', '保存中…')
-
-    const isVideo = s.img?.tagName === 'VIDEO' || !!s.img?.querySelector?.('video')
-    let payload = null
-
+    if (!s?.img) return
+    const img = s.img
+    const rootId = s.root?.id
+    const isVideo = img.tagName === 'VIDEO' || !!img.querySelector?.('video')
+    const folderName = (s.folders || []).find((f) => f.rel === rel)?.name || (rel ? rel : '未分类')
+    const title = (img.getAttribute?.('title') || img.alt || document.title || (isVideo ? '视频采集' : '图片采集')).trim()
+    let thumb = ''
     if (isVideo) {
-      const vInfo = extractVideoInfo(s.img)
-      if (!vInfo?.src && !vInfo?.pinUrl && !vInfo?.poster && !vInfo?.frameDataUrl) {
-        s.saving = false
-        setStatus(s, 'err', '未能探测到视频流地址')
+      thumb = img.poster || ''
+    } else {
+      thumb = img.currentSrc || img.src || ''
+    }
+
+    // 关键体验提升：立刻关闭中央大选单，释放页面，由右下角读条弹窗接管全流程
+    closePanel()
+
+    const toast = showProgressToast({ thumb, title, folderName })
+
+    async function executeSave(forceFlag, overwriteFlag) {
+      let payload = null
+      if (isVideo) {
+        toast.updateStatus('正在探测视频画面与直链…')
+        let vInfo = extractVideoInfo(img)
+        if (isPinterestSite() && (!vInfo?.src || vInfo.src.startsWith('blob:'))) {
+          toast.updateStatus('正在解析视频原片…')
+          const pId = vInfo?.pinId || (typeof location !== 'undefined' ? location.pathname.match(/\/pin\/(\d+)/)?.[1] : '')
+          if (pId) {
+            const apiSrc = await fetchPinterestVideoByPinId(pId)
+            if (apiSrc) {
+              if (!vInfo) vInfo = {}
+              vInfo.src = apiSrc
+            }
+          }
+          if (!vInfo?.src) {
+            vInfo.src = findPinterestVideoFromPerformance() || findPinterestVideoFromCard(img) || scanHtmlForPinterestVideo() || ''
+          }
+        }
+        if (vInfo?.frameDataUrl && !thumb) {
+          toast.setThumb(vInfo.frameDataUrl)
+        }
+        if (vInfo?.src) {
+          payload = {
+            kind: 'video',
+            url: vInfo.pinUrl || location.href,
+            pinUrl: vInfo.pinUrl,
+            title: vInfo.title || title,
+            src: vInfo.src,
+            poster: vInfo.poster || vInfo.frameDataUrl,
+          }
+        } else if (isPinterestSite()) {
+          // Pinterest 视频绝不降级存为截屏，带入后台执行网络级深度解析
+          payload = {
+            kind: 'video',
+            url: vInfo?.pinUrl || location.href,
+            pinUrl: vInfo?.pinUrl,
+            title: vInfo?.title || title,
+            src: '',
+            poster: vInfo?.poster || vInfo?.frameDataUrl,
+          }
+        } else {
+          // 仅在明确无法解析原片的站点上截屏当前画面
+          if (!vInfo?.frameDataUrl && !vInfo?.poster) {
+            toast.error('未能获取到视频画面')
+            return
+          }
+          payload = {
+            kind: 'image',
+            url: location.href,
+            title: (vInfo?.title || title) + ' (截屏)',
+            dataUrl: vInfo?.frameDataUrl || vInfo?.poster,
+          }
+        }
+      } else {
+        const src = getMediaSrc(img)
+        if (!src) { toast.error('没有图片地址'); return }
+        payload = { url: location.href, title, kind: 'image' }
+        if (src.startsWith('data:')) payload.dataUrl = src
+        else if (src.startsWith('blob:')) {
+          const dataUrl = await blobToDataUrl(src)
+          if (!dataUrl) { toast.error('blob 读取失败'); return }
+          payload.dataUrl = dataUrl
+        } else payload.src = src
+      }
+
+      if (!runtimeAlive()) {
+        toast.error(refreshHint())
         return
       }
-      payload = {
-        kind: 'video',
-        url: vInfo.pinUrl || location.href,
-        pinUrl: vInfo.pinUrl,
-        title: vInfo.title,
-        src: vInfo.src,
-        poster: vInfo.poster,
-        dataUrl: vInfo.frameDataUrl,
+
+      toast.updateStatus('正在保存至图巢…')
+      try {
+        chrome.runtime.sendMessage({
+          type: 'save-panel',
+          ...payload,
+          rootId,
+          rel,
+          force: !!forceFlag,
+          overwrite: !!overwriteFlag,
+        }, (res) => {
+          if (res?.duplicate) {
+            toast.duplicate(res.matches || [], () => executeSave(false, true), () => executeSave(true, false))
+            return
+          }
+          if (res?.ok) {
+            const extra = res.overwritten ? ' (旧图已回收)' : ''
+            toast.done(res.name || '', extra)
+          } else {
+            toast.error(res?.error || '保存失败')
+          }
+        })
+      } catch (e) {
+        const msg = String(e?.message || e)
+        toast.error(/context invalidated|Extension context/i.test(msg) ? refreshHint() : msg)
       }
-    } else {
-      const src = getMediaSrc(s.img)
-      if (!src) { s.saving = false; setStatus(s, 'err', '没有图片地址'); return }
-      const title = (s.img.getAttribute?.('title') || s.img.alt || document.title || '').trim()
-      payload = { url: location.href, title, kind: 'image' }
-      if (src.startsWith('data:')) payload.dataUrl = src
-      else if (src.startsWith('blob:')) {
-        const dataUrl = await blobToDataUrl(src)
-        if (!dataUrl) { s.saving = false; setStatus(s, 'err', 'blob 图片读取失败'); return }
-        payload.dataUrl = dataUrl
-      } else payload.src = src
     }
 
-    if (!runtimeAlive()) {
-      s.saving = false
-      setStatus(s, 'err', refreshHint())
-      return
-    }
-    try {
-      chrome.runtime.sendMessage({
-        type: 'save-panel',
-        ...payload,
-        rootId: s.root.id,
-        rel,
-        force: !!force,
-        overwrite: !!overwrite,
-      }, (res) => {
-        if (session !== s) return
-        if (res?.duplicate) {
-          s.saving = false
-          s.holding = false
-          s.pendingRel = rel
-          setHint(s)
-          showDuplicate(s, res.matches || [])
-          return
-        }
-        if (res?.ok) {
-          const extra = res.overwritten ? `（旧图 ${res.overwritten} 张已进回收站）` : ''
-          setStatus(s, '', '已保存：' + (res.name || '') + extra)
-          setTimeout(() => { if (session === s) closePanel() }, 750)
-        } else {
-          s.saving = false
-          setStatus(s, 'err', res?.error || '保存失败')
-        }
-      })
-    } catch (e) {
-      s.saving = false
-      const msg = String(e?.message || e)
-      setStatus(s, 'err', /context invalidated|Extension context/i.test(msg) ? refreshHint() : msg)
-    }
+    executeSave(force, overwrite)
   }
 
   function startSession(e, img) {
@@ -885,7 +1238,8 @@
     clearTimeout(s.ringTimer)
     try { s.img.draggable = s.prevDraggable } catch { /* 静默 */ }
     document.documentElement.style.userSelect = s.prevSelect || ''
-    try { s.host?.remove() } catch { /* 静默 */ }
+    try { s.ringEl?.remove() } catch { /* 静默 */ }
+    try { s.panel?.remove() } catch { /* 静默 */ }
   }
 
   function onDown(e) {
@@ -964,6 +1318,33 @@
   }
 
   function onMessage(req, sender, sendResponse) {
+    if (req?.type === 'toast-start') {
+      const t = showProgressToast({
+        thumb: req.thumb || '',
+        title: req.title || '',
+        folderName: req.folderName || '',
+      })
+      activeToasts.set(req.toastId, t)
+      sendResponse({ ok: true })
+      return true
+    }
+    if (req?.type === 'toast-status') {
+      activeToasts.get(req.toastId)?.updateStatus(req.status)
+      sendResponse({ ok: true })
+      return true
+    }
+    if (req?.type === 'toast-done') {
+      activeToasts.get(req.toastId)?.done(req.name, req.extra)
+      activeToasts.delete(req.toastId)
+      sendResponse({ ok: true })
+      return true
+    }
+    if (req?.type === 'toast-error') {
+      activeToasts.get(req.toastId)?.error(req.error)
+      activeToasts.delete(req.toastId)
+      sendResponse({ ok: true })
+      return true
+    }
     if (req?.type === 'get-contextmenu-media' || req?.type === 'get-contextmenu-image') {
       if (lastContextMenuTarget && Date.now() - lastContextMenuTarget.time < 30000) {
         sendResponse({

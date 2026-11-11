@@ -23,6 +23,11 @@ function applyPan(tx, ty) {
     canvasStage.value.drawAt(tx, ty, lib.viewer.scale)
     return
   }
+  if (kind.value === 'video') {
+    const v = videoEl.value
+    if (v) v.style.transform = `translate(${tx}px, ${ty}px) scale(${lib.viewer.scale})`
+    return
+  }
   const el = imgEl.value
   if (el) el.style.transform = stageTransform(tx, ty)
 }
@@ -369,12 +374,16 @@ function onWheel(e) {
     else applyPan(pan.curTx, pan.curTy)
   }
 }
+let didDrag = false
 function onDown(e) {
-  if (kind.value !== 'image') return // 文本/视频不拖拽平移
+  if (kind.value !== 'image' && kind.value !== 'video') return // 仅文本不拖拽平移
   if (e.button !== 0) return // 右键交给菜单
   /* 裁剪中：落在选区/手柄上交给裁剪层；**选区外保留平移**（用户规格） */
   if (lib.viewer.cropMode && (cropAction.value || insideRect(e) || handleAt(e))) return
+  if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.closest?.('.dock, .crop-bar, .ask-card, button'))) return
+  e.preventDefault() // 阻止视频原生拖拽虚影与选区干扰，保证平移连续性
   pan.active = true
+  didDrag = false
   pan.startX = e.clientX; pan.startY = e.clientY
   pan.baseTx = lib.viewer.tx; pan.baseTy = lib.viewer.ty
   pan.curTx = lib.viewer.tx; pan.curTy = lib.viewer.ty
@@ -383,8 +392,13 @@ function onDown(e) {
 function onMove(e) {
   if (lib.viewer.cropMode && cropAction.value) return // 裁剪框拖拽由 window 级监听独占
   if (!pan.active) return
-  pan.curTx = pan.baseTx + e.clientX - pan.startX
-  pan.curTy = pan.baseTy + e.clientY - pan.startY
+  const dx = e.clientX - pan.startX
+  const dy = e.clientY - pan.startY
+  if (dx * dx + dy * dy > 16) {
+    didDrag = true
+  }
+  pan.curTx = pan.baseTx + dx
+  pan.curTy = pan.baseTy + dy
   if (pan.raf) return
   pan.raf = requestAnimationFrame(() => {
     pan.raf = 0
@@ -470,6 +484,13 @@ function onVideoMeta() {
   v.play?.().catch(() => {}) // 双击进入已有用户手势；被策略拦截就等用户点 ▶
 }
 function onVideoTime() { if (videoEl.value) vid.value.time = videoEl.value.currentTime || 0 }
+function onVideoClick() {
+  if (didDrag) {
+    didDrag = false
+    return
+  }
+  togglePlay()
+}
 function togglePlay() {
   const v = videoEl.value
   if (!v) return
@@ -901,7 +922,7 @@ function onKey(e) {
   else if (e.key === 'Enter' && lib.viewer.cropMode && crop.value) applyCrop()
   else if ((e.key === 'ArrowLeft' || (plain && k === 'a')) && !lib.viewer.cropMode) lib.lightboxNav(-1)
   else if ((e.key === 'ArrowRight' || (plain && k === 'd')) && !lib.viewer.cropMode) lib.lightboxNav(1)
-  else if (e.key === '0' && kind.value === 'image') fitToWindow()
+  else if (e.key === '0' && (kind.value === 'image' || kind.value === 'video')) fitToWindow()
 }
 </script>
 
@@ -923,10 +944,14 @@ function onKey(e) {
     <video
       v-if="kind === 'video'"
       ref="videoEl" :src="url" class="stage video" :class="{ gray: lib.grayscaleMode }" playsinline
-      :style="{ transform: `translate(${lib.viewer.tx}px, ${lib.viewer.ty}px) scale(${lib.viewer.scale})` }"
+      draggable="false" @dragstart.prevent
+      :style="{
+        transform: `translate(${lib.viewer.tx}px, ${lib.viewer.ty}px) scale(${lib.viewer.scale})`,
+        cursor: dragging ? 'grabbing' : (lib.viewer.scale > 1.05 ? 'grab' : 'grab'),
+      }"
       @loadedmetadata="onVideoMeta" @timeupdate="onVideoTime"
       @play="vid.playing = true" @pause="vid.playing = false" @ended="vid.playing = false"
-      @click="togglePlay" @dblclick="toggleFullscreen"
+      @click="onVideoClick" @dblclick="toggleFullscreen"
     />
     <!-- 文本：内置编辑器（自动保存 + Ctrl+S；超 2MB 只读预览） -->
     <div v-else-if="kind === 'text'" class="text-stage">
@@ -955,25 +980,28 @@ function onKey(e) {
       />
       <div v-if="textState.note" class="text-note">{{ textState.note }}</div>
     </div>
-    <CanvasStage v-if="canvasMode"
-      ref="canvasStage" :class="{ gray: lib.grayscaleMode }"
-      :preview-src="canvasPreviewSrc" :full-src="canvasFullSrc" :fallback-src="canvasFallbackSrc"
-      :width="meta?.width || 0" :height="meta?.height || 0"
-      :scale="lib.viewer.scale" :tx="lib.viewer.tx" :ty="lib.viewer.ty"
-      :use-full="useFull" @error="onCanvasError" />
-    <img
-      v-else-if="!stageDead"
-      ref="imgEl" :src="stageUrl" class="stage" :class="{ gray: lib.grayscaleMode }" draggable="false"
-      :style="{
-        width: meta?.width ? meta.width + 'px' : undefined,
-        height: meta?.height ? meta.height + 'px' : undefined,
-        transform: `translate3d(${lib.viewer.tx}px, ${lib.viewer.ty}px, 0) scale(${lib.viewer.scale}) rotate(${lib.viewer.rot}deg)` + (lib.viewer.flopX ? ' scaleX(-1)' : ''),
-        cursor: lib.viewer.cropMode ? 'default' : dragging ? 'grabbing' : 'grab',
-      }"
-      @load="onStageImgLoad"
-      @error="onStageError"
-      @dblclick="dblClick"
-    />
+    <!-- 图片舞台：正常查看走 canvas；裁剪/旋转/翻转/未转入走 img -->
+    <template v-else-if="kind === 'image'">
+      <CanvasStage v-if="canvasMode"
+        ref="canvasStage" :class="{ gray: lib.grayscaleMode }"
+        :preview-src="canvasPreviewSrc" :full-src="canvasFullSrc" :fallback-src="canvasFallbackSrc"
+        :width="meta?.width || 0" :height="meta?.height || 0"
+        :scale="lib.viewer.scale" :tx="lib.viewer.tx" :ty="lib.viewer.ty"
+        :use-full="useFull" @error="onCanvasError" />
+      <img
+        v-else-if="!stageDead"
+        ref="imgEl" :src="stageUrl" class="stage" :class="{ gray: lib.grayscaleMode }" draggable="false"
+        :style="{
+          width: meta?.width ? meta.width + 'px' : undefined,
+          height: meta?.height ? meta.height + 'px' : undefined,
+          transform: `translate3d(${lib.viewer.tx}px, ${lib.viewer.ty}px, 0) scale(${lib.viewer.scale}) rotate(${lib.viewer.rot}deg)` + (lib.viewer.flopX ? ' scaleX(-1)' : ''),
+          cursor: lib.viewer.cropMode ? 'default' : dragging ? 'grabbing' : 'grab',
+        }"
+        @load="onStageImgLoad"
+        @error="onStageError"
+        @dblclick="dblClick"
+      />
+    </template>
     <div v-if="isPsd && (psdLoading || psdError)" class="psd-note">
       {{ psdError || 'PSD 原图渲染中，先显示缩略图…' }}
     </div>

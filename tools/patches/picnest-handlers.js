@@ -3993,14 +3993,21 @@ async function picnestCollectFetchImage(src, referer) {
   }
   if (!/^https?:\/\//i.test(u)) throw new Error("只支持 http(s) 或 data: 资源");
   const ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
-  const timer = setTimeout(() => { try { ctl?.abort(); } catch (e) {} }, 45000);
+  const timer = setTimeout(() => { try { ctl?.abort(); } catch (e) {} }, 12000);
   try {
     /* Pixiv（i.pximg.net）等站点按 Referer 防盗链；用页面 URL 作 Referer，并伪装常规浏览器 UA */
     const ref = String(referer || "").trim() || (() => {
       try { return new URL(u).origin + "/"; } catch (e) { return ""; }
     })();
+    if (u.includes("pinimg.com")) {
+      const hashMatch = u.match(/([a-f0-9]{32})/i);
+      if (hashMatch) {
+        const hash = hashMatch[1];
+        u = `https://v.pinimg.com/videos/mc/720p/${hash.slice(0, 2)}/${hash.slice(2, 4)}/${hash.slice(4, 6)}/${hash}.mp4`;
+      }
+    }
     const isPinImg = /pinimg\.com/i.test(u);
-    const isVideoUrl = /\.(mp4|webm|mov|mkv|avi|flv|f4v)(\?.*)?$/i.test(u);
+    const isVideoUrl = /\.(mp4|webm|mov|mkv|avi|flv|f4v|cmfv)(\?.*)?$/i.test(u) || u.includes("/videos/");
     const headers = {
       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
       "Accept": isVideoUrl
@@ -4019,11 +4026,26 @@ async function picnestCollectFetchImage(src, referer) {
     } else if (ref) {
       headers.Referer = ref;
     }
-    const res = await fetch(u, {
-      redirect: "follow",
-      signal: ctl?.signal,
-      headers,
-    });
+    let res = null;
+    if (typeof electron !== "undefined" && electron.net && typeof electron.net.fetch === "function") {
+      try {
+        res = await electron.net.fetch(u, {
+          method: "GET",
+          headers,
+          redirect: "follow",
+          signal: ctl?.signal,
+        });
+      } catch (e) {
+        res = null;
+      }
+    }
+    if (!res) {
+      res = await fetch(u, {
+        redirect: "follow",
+        signal: ctl?.signal,
+        headers,
+      });
+    }
     if (!res.ok) throw new Error(`下载失败 HTTP ${res.status}`);
     const ab = await res.arrayBuffer();
     if (ab.byteLength > 500 * 1024 * 1024) throw new Error("文件超过 500MB");
@@ -4149,6 +4171,23 @@ async function picnestCollectSaveOne(item) {
   const isVideo = /^video\//i.test(contentType) || /\.(mp4|webm|mov|mkv|avi|flv|f4v|ogv)$/i.test(ext);
   if (!isImage && !isVideo) throw new Error("不是支持的图片或视频内容");
   if (!buf || buf.length === 0) throw new Error("采集数据为空 (0 字节)");
+
+  // 防御性校验：如果拉取到的内容是 HTML 网页（如 B 站的 iframe 外链播放器页或防盗链错误页），绝不当成图片/视频落盘！
+  const headerStr = buf.subarray(0, 64).toString("utf8").trim().toLowerCase();
+  if (headerStr.startsWith("<!doctype") || headerStr.startsWith("<html") || headerStr.startsWith("<?xml")) {
+    if (item.dataUrl && !item.dataUrl.startsWith("data:text/html")) {
+      const d = picnestCollectDataUrl(item.dataUrl);
+      if (d?.buf && d.buf.length > 0) {
+        buf = d.buf;
+        contentType = d.contentType;
+        ext = picnestCollectExt(contentType, "");
+      } else {
+        throw new Error("远程服务器返回了网页而非媒体流");
+      }
+    } else {
+      throw new Error("远程服务器返回了网页而非媒体流");
+    }
+  }
   /* 覆盖模式：先照常写新图，成功后再把旧匹配项软删（进图巢回收站）；普通模式命中即拦截 */
   const matches = (item.overwrite || !item.force) ? await picnestCollectDupes(t.root, buf) : [];
   if (matches.length && !item.overwrite && !item.force) {
@@ -4192,7 +4231,7 @@ function picnestCollectJson(res, code, obj) {
   res.setHeader("Content-Length", Buffer.byteLength(body));
   res.end(body);
 }
-function picnestCollectReadJson(req, limit = 2 * 1024 * 1024) {
+function picnestCollectReadJson(req, limit = 100 * 1024 * 1024) {
   return new Promise((resolve, reject) => {
     let size = 0;
     const chunks = [];
