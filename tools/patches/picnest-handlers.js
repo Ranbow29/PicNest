@@ -4910,17 +4910,111 @@ electron.ipcMain.handle("picnest-visual-search-query", async (_event, opts) => {
         apiURL += `?bookmark=${encodeURIComponent(bookmark)}`;
       }
 
-      const res = await electron.net.fetch(apiURL, {
-        method: "PUT",
-        headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-          "Referer": "https://www.pinterest.com/",
-          "Accept": "application/json, text/plain, */*",
-          "Content-Type": `multipart/form-data; boundary=${boundary}`,
-          "Content-Length": String(multipartBody.length)
-        },
-        body: multipartBody
-      });
+      // 获取当前代理配置 (优先读取环境变量，其次探测系统注册表/本地端口 7897/10809/10808)
+      const getProxyInfo = () => {
+        const envProxy = process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy || process.env.ALL_PROXY;
+        if (envProxy) return envProxy;
+        try {
+          const cp = require("child_process");
+          const reg = cp.execSync('reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyServer', { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+          const m = reg.match(/ProxyServer\s+REG_SZ\s+([^\r\n]+)/i);
+          if (m && m[1]) {
+            const server = m[1].trim();
+            return server.startsWith("http") ? server : "http://" + server;
+          }
+        } catch (e) {}
+        return "http://127.0.0.1:7897";
+      };
+
+      // 双保险请求封装：优先 Chromium 原生 net.fetch；若遇到 ERR_INVALID_ARGUMENT 或网络异常则平滑回退至 Node CONNECT 隧道
+      let res = null;
+      try {
+        // 注意：Chromium URLRequest 规约禁止在 fetch headers 中显式指定 Content-Length，否则触发 net::ERR_INVALID_ARGUMENT
+        res = await electron.net.fetch(apiURL, {
+          method: "PUT",
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Referer": "https://www.pinterest.com/",
+            "Accept": "application/json, text/plain, */*",
+            "Content-Type": `multipart/form-data; boundary=${boundary}`
+          },
+          body: new Uint8Array(multipartBody)
+        });
+      } catch (fetchErr) {
+        picnestCollectLog("visual-search net.fetch fallback due to:", fetchErr?.message || fetchErr);
+        // 回退至 Node 原生 HTTP CONNECT 代理隧道
+        res = await new Promise((resolve, reject) => {
+          const http = require("http");
+          const https = require("https");
+          const targetUrl = new URL(apiURL);
+          let proxyUrlObj = null;
+          try { proxyUrlObj = new URL(getProxyInfo()); } catch (e) { proxyUrlObj = new URL("http://127.0.0.1:7897"); }
+
+          const proxyReq = http.request({
+            host: proxyUrlObj.hostname,
+            port: Number(proxyUrlObj.port) || 7897,
+            method: "CONNECT",
+            path: `${targetUrl.hostname}:443`,
+            timeout: 10000
+          });
+
+          proxyReq.on("connect", (cRes, socket, _head) => {
+            if (cRes.statusCode !== 200) {
+              socket.destroy();
+              return reject(new Error(`代理 CONNECT 隧道失败: HTTP ${cRes.statusCode}`));
+            }
+
+            const httpsReq = https.request({
+              host: targetUrl.hostname,
+              port: 443,
+              path: targetUrl.pathname + targetUrl.search,
+              method: "PUT",
+              socket: socket,
+              agent: false,
+              headers: {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Referer": "https://www.pinterest.com/",
+                "Accept": "application/json, text/plain, */*",
+                "Content-Type": `multipart/form-data; boundary=${boundary}`,
+                "Content-Length": multipartBody.length
+              },
+              timeout: 25000
+            }, (httpsRes) => {
+              const chunks = [];
+              httpsRes.on("data", (chunk) => chunks.push(chunk));
+              httpsRes.on("end", () => {
+                const bodyText = Buffer.concat(chunks).toString("utf8");
+                try {
+                  const dataJson = JSON.parse(bodyText);
+                  resolve({
+                    ok: httpsRes.statusCode >= 200 && httpsRes.statusCode < 300,
+                    status: httpsRes.statusCode,
+                    statusText: httpsRes.statusMessage || "",
+                    json: async () => dataJson,
+                    text: async () => bodyText
+                  });
+                } catch (parseErr) {
+                  reject(new Error("Pinterest 响应非合法 JSON: " + bodyText.slice(0, 100)));
+                }
+              });
+            });
+
+            httpsReq.on("error", reject);
+            httpsReq.on("timeout", () => {
+              httpsReq.destroy(new Error("Pinterest 请求超时"));
+            });
+
+            httpsReq.write(multipartBody);
+            httpsReq.end();
+          });
+
+          proxyReq.on("error", reject);
+          proxyReq.on("timeout", () => {
+            proxyReq.destroy(new Error("连接代理服务器超时"));
+          });
+          proxyReq.end();
+        });
+      }
 
       if (res.status === 401) {
         return { ok: false, authRequired: true, error: "Pinterest 会话已过期或需登录 (401)" };
@@ -4963,43 +5057,64 @@ electron.ipcMain.handle("picnest-visual-search-query", async (_event, opts) => {
       };
     }
 
-    // 4. 花瓣网发现推荐流
+    // 4. 花瓣网多源发现推荐流
     if (engine === "huaban") {
       try {
-        const huabanUrl = `https://api.huaban.com/discovery/illustrations?limit=${pageSize || 40}`;
-        const res = await electron.net.fetch(huabanUrl, {
-          headers: {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Referer": "https://huaban.com/",
-            "Accept": "application/json"
-          }
-        });
-        if (res.ok) {
-          const hbData = await res.json();
-          const pins = hbData.pins || [];
-          const items = pins.map((p) => {
-            const fileKey = p.file?.key || "";
-            const w = p.file?.width || 400;
-            const h = p.file?.height || 600;
-            const thumb = fileKey ? `https://gd-hbimg.huaban.com/${fileKey}_fw240` : "";
-            const large = fileKey ? `https://gd-hbimg.huaban.com/${fileKey}_fw658` : "";
-            const orig = fileKey ? `https://gd-hbimg.huaban.com/${fileKey}` : "";
-            return {
-              id: String(p.pin_id || crypto.randomUUID()),
-              engine: "huaban",
-              title: p.raw_text || "花瓣采集",
-              thumbUrl: thumb,
-              largeUrl: large,
-              origUrl: orig,
-              width: w,
-              height: h,
-              aspectRatio: w / (h || 1),
-              sourceUrl: `https://huaban.com/pins/${p.pin_id}/`,
-              saved: false
-            };
-          });
-          return { ok: true, items, bookmark: null, queryMeta: { width: imgW, height: imgH } };
+        const endpoints = [
+          `https://api.huaban.com/discovery/illustrations?limit=${pageSize || 40}`,
+          `https://api.huaban.com/explore/illustration?limit=${pageSize || 40}`,
+          `https://api.huaban.com/popular?limit=${pageSize || 40}`,
+          `https://api.huaban.com/search/file?text=%E6%8F%92%E7%94%BB&sort=all&limit=${pageSize || 40}`
+        ];
+        let hbData = null;
+        for (const u of endpoints) {
+          try {
+            const res = await electron.net.fetch(u, {
+              headers: {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Referer": "https://huaban.com/",
+                "Accept": "application/json, text/plain, */*",
+                "X-Requested-With": "XMLHttpRequest"
+              }
+            });
+            if (res.ok) {
+              const d = await res.json();
+              if (d && (d.pins?.length || d.data?.pins?.length || d.data?.length || (Array.isArray(d) && d.length))) {
+                hbData = d;
+                break;
+              }
+            }
+          } catch (e) {}
         }
+
+        const rawPins = hbData?.pins || hbData?.data?.pins || hbData?.data || (Array.isArray(hbData) ? hbData : []) || [];
+        const items = rawPins.map((p) => {
+          const fileKey = p.file?.key || p.key || "";
+          const w = p.file?.width || p.width || 400;
+          const h = p.file?.height || p.height || 600;
+          const thumb = fileKey ? `https://gd-hbimg.huaban.com/${fileKey}_fw240` : "";
+          const large = fileKey ? `https://gd-hbimg.huaban.com/${fileKey}_fw658` : "";
+          const orig = fileKey ? `https://gd-hbimg.huaban.com/${fileKey}` : "";
+          return {
+            id: String(p.pin_id || p.id || crypto.randomUUID()),
+            engine: "huaban",
+            title: p.raw_text || p.title || "花瓣采集",
+            thumbUrl: thumb,
+            largeUrl: large,
+            origUrl: orig,
+            width: w,
+            height: h,
+            aspectRatio: w / (h || 1),
+            sourceUrl: p.pin_id ? `https://huaban.com/pins/${p.pin_id}/` : "https://huaban.com/",
+            saved: false
+          };
+        }).filter((item) => item.thumbUrl);
+
+        if (items.length === 0) {
+          return { ok: false, error: "花瓣网未返回公开推荐数据（可能需登录态或接口风控）" };
+        }
+
+        return { ok: true, items, bookmark: null, queryMeta: { width: imgW, height: imgH } };
       } catch (hbErr) {
         return { ok: false, error: "花瓣网网络请求失败: " + String(hbErr?.message || hbErr) };
       }
