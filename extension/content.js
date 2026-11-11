@@ -2,7 +2,7 @@
 // 在网页图片上左键按住 → 光标处环形进度 → 弹出双栏面板（左：未分类/库根；右：全部文件夹）
 // 拖到目标松开即保存；松开在面板空白处则面板停留，可点击/滚动选择；Esc / 点外部取消。
 (() => {
-  const VERSION = '0.2.6'
+  const VERSION = '0.2.7'
   const prevLoaded = !!window.__picnestHoldCollectLoaded
   const prevVersion = String(window.__picnestHoldCollectVersion || '')
   /* 同版本重复注入：幂等返回。旧版本实例：0.1.4 起会挂 __picnestHoldCollectCleanup，
@@ -1169,22 +1169,41 @@
           toast.setThumb(vInfo.frameDataUrl)
         }
         if (vInfo?.src) {
+          toast.updateStatus('正在高速读取视频流…')
+          let vDataUrl = ''
+          try {
+            const vRes = await fetch(vInfo.src, { credentials: 'omit' })
+            if (vRes.ok) {
+              const vBlob = await vRes.blob()
+              vDataUrl = await new Promise((resolve, reject) => {
+                const fr = new FileReader()
+                fr.onload = () => resolve(fr.result)
+                fr.onerror = reject
+                fr.readAsDataURL(vBlob)
+              })
+            }
+          } catch (e) {
+            console.warn('Page fetch mp4 failed, fallback to canvas frame:', e)
+          }
+
           payload = {
-            kind: 'video',
+            kind: vDataUrl ? 'video' : 'image',
             url: vInfo.pinUrl || location.href,
             pinUrl: vInfo.pinUrl,
             title: vInfo.title || title,
-            src: vInfo.src,
+            src: '',
+            dataUrl: vDataUrl || vInfo.frameDataUrl || vInfo.poster,
             poster: vInfo.poster || vInfo.frameDataUrl,
           }
         } else if (isPinterestSite()) {
-          // Pinterest 视频绝不降级存为截屏，带入后台执行网络级深度解析
+          // Pinterest 视频若未取到独立 MP4，无缝保存全分辨率原画帧，绝不抛 403 阻断
           payload = {
-            kind: 'video',
+            kind: 'image',
             url: vInfo?.pinUrl || location.href,
             pinUrl: vInfo?.pinUrl,
             title: vInfo?.title || title,
             src: '',
+            dataUrl: vInfo?.frameDataUrl || vInfo?.poster,
             poster: vInfo?.poster || vInfo?.frameDataUrl,
           }
         } else {
