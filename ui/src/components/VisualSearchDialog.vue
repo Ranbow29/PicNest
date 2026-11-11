@@ -2,10 +2,18 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useLibrary } from '../stores/library'
 import { api, fileUrl } from '../api'
+import { getFormatBadge } from '../lib/fileKinds'
 
 const lib = useLibrary()
 const vs = computed(() => lib.visualSearch)
 const isOpen = computed(() => vs.value.open)
+
+// 提取任务格式徽标 (PSD / GIF / MP4 / WEBP 等，对齐 Eagle 设计)
+function getTaskBadge(task) {
+  if (!task) return ''
+  const p = task.filePath || task.name || ''
+  return getFormatBadge(p)
+}
 
 // 当前选中的搜索任务
 const currentTask = computed(() => {
@@ -167,9 +175,21 @@ const bbox = ref([0, 0, 1, 1]) // [x, y, w, h] 归一化坐标 0..1
 let cropDebounceTimer = null
 
 // 监听活动任务变化，重置或还原其 bbox
-watch(() => currentTask.value?.id, (newId) => {
+watch(() => currentTask.value?.id, async (newId) => {
   if (!newId || !currentTask.value) return
   bbox.value = currentTask.value.bbox ? [...currentTask.value.bbox] : [0, 0, 1, 1]
+  // 针对 PSD / 视频，若前端尚无有效缩略图，异步预拉取预览以瞬显画面
+  if (currentTask.value.filePath && !currentTask.value.thumbUrl) {
+    const ext = currentTask.value.filePath.slice(currentTask.value.filePath.lastIndexOf('.')).toLowerCase()
+    if (ext === '.psd') {
+      try {
+        const r = await api.psdPreview(currentTask.value.filePath)
+        if (r?.ok && r?.path) {
+          currentTask.value.thumbUrl = fileUrl(r.path)
+        }
+      } catch (e) {}
+    }
+  }
   if (!currentTask.value.results?.length && !currentTask.value.loading) {
     triggerSearch(currentTask.value)
   }
@@ -289,6 +309,7 @@ async function triggerSearch(task, continueSearch = false, isRequery = false) {
       if (res.queryMeta) {
         if (res.queryMeta.width) task.width = res.queryMeta.width
         if (res.queryMeta.height) task.height = res.queryMeta.height
+        if (res.queryMeta.thumbUrl) task.thumbUrl = res.queryMeta.thumbUrl
       }
     }
   } catch (err) {
@@ -756,20 +777,25 @@ onBeforeUnmount(() => {
                 @click="selectTask(task)"
                 :title="task.name"
               >
-                <img :src="task.thumbUrl || task.dataUrl" class="queue-thumb" />
+                <img v-if="task.thumbUrl || task.dataUrl" :src="task.thumbUrl || task.dataUrl" class="queue-thumb" />
+                <div v-else class="queue-thumb queue-thumb-fallback">
+                  <span class="fallback-icon">{{ getTaskBadge(task) || 'IMG' }}</span>
+                </div>
+                <!-- 左上角格式小标 (PSD / GIF / MP4 / WEBP 等，对齐 Eagle 设计) -->
+                <span v-if="getTaskBadge(task)" class="queue-format-badge">{{ getTaskBadge(task) }}</span>
                 <button class="queue-del-btn" title="移出队列" @click="removeTask(task, $event)">✕</button>
                 <div v-if="task.loading" class="queue-spinner" />
               </div>
 
-              <!-- 添加图片按钮 -->
-              <button class="queue-add-btn" title="添加图片至队列" @click="openFilePicker">
+              <!-- 添加图片/视频/PSD按钮 -->
+              <button class="queue-add-btn" title="添加图片/视频/PSD至队列" @click="openFilePicker">
                 ＋
               </button>
               <input
                 ref="fileInputRef"
                 type="file"
                 multiple
-                accept="image/*"
+                accept="image/*,video/*,.psd,.webp,.gif,.mp4,.webm,.mov,.mkv,.avi,.flv"
                 style="display: none"
                 @change="onFilePicked"
               />
@@ -781,13 +807,20 @@ onBeforeUnmount(() => {
             <div class="viewport-card">
               <div class="crop-stage-wrapper">
                 <div v-if="currentTask" class="crop-container" ref="cropContainerRef">
+                  <!-- 视口左上角格式小标 -->
+                  <span v-if="getTaskBadge(currentTask)" class="crop-format-badge">{{ getTaskBadge(currentTask) }}</span>
                   <img
+                    v-if="currentTask.thumbUrl || currentTask.dataUrl"
                     ref="cropImgRef"
                     :src="currentTask.thumbUrl || currentTask.dataUrl"
                     class="query-img"
                     @load="onImageLoaded"
                     @dragstart.prevent
                   />
+                  <div v-else class="query-loading-placeholder">
+                    <div class="queue-spinner" />
+                    <span>{{ getTaskBadge(currentTask) ? `${getTaskBadge(currentTask)} 画面解析中…` : '图片加载中…' }}</span>
+                  </div>
 
                   <!-- 裁剪框与外围遮罩 -->
                   <div
@@ -844,6 +877,7 @@ onBeforeUnmount(() => {
                   全图
                 </button>
                 <span class="res-text" v-if="currentTask?.width && currentTask?.height">
+                  <b v-if="getTaskBadge(currentTask)" class="format-tag">{{ getTaskBadge(currentTask) }}</b>
                   {{ currentTask.width }} × {{ currentTask.height }}
                 </span>
                 <span class="status-text" v-if="currentTask?.loading">
@@ -1345,6 +1379,83 @@ onBeforeUnmount(() => {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+.queue-thumb-fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-hover, rgba(255, 255, 255, 0.06));
+}
+
+.fallback-icon {
+  font-family: var(--font-mono, Consolas, monospace);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+
+.queue-format-badge {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  z-index: 2;
+  padding: 1px 4px;
+  font-family: var(--font-mono, Consolas, monospace);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.4px;
+  color: rgba(255, 255, 255, 0.95);
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 3px;
+  pointer-events: none;
+}
+
+.crop-format-badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 5;
+  padding: 2px 6px;
+  font-family: var(--font-mono, Consolas, monospace);
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.5px;
+  color: rgba(255, 255, 255, 0.95);
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  pointer-events: none;
+}
+
+.format-tag {
+  font-family: var(--font-mono, Consolas, monospace);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+  border: 1px solid var(--border);
+  margin-right: 4px;
+}
+
+.query-loading-placeholder {
+  width: 100%;
+  height: 240px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--text-muted);
+  font-size: 12px;
 }
 
 .queue-item:hover {

@@ -535,7 +535,8 @@ const cells = computed(() =>
     if (isText) {
       if (hasThumb) { src = withVer(fileUrl(img.thumbnail_path)); srcKind = 'thumb' }
     } else if (isVideo) {
-      src = ''
+      if (hasThumb) { src = withVer(fileUrl(img.thumbnail_path)); srcKind = 'thumb' }
+      else { src = ''; srcKind = 'video' }
     } else if (fx?.mode === 'error') {
       src = ''
       srcKind = 'error'
@@ -562,12 +563,21 @@ const cells = computed(() =>
     const res = isText
       ? ['文本', extOf(img.file_path).slice(1).toUpperCase(), sizeText(img.file_size)].filter(Boolean).join(' · ')
       : (isVideo ? '视频' : (img.width && img.height ? `${img.width} × ${img.height}` : ''))
+    const ext = extOf(img.file_path).toLowerCase()
+    let formatBadge = ''
+    if (isVideo) formatBadge = ext.slice(1).toUpperCase()
+    else if (['.psd', '.gif', '.webp', '.svg', '.avif'].includes(ext)) {
+      formatBadge = ext.slice(1).toUpperCase()
+    } else if (isText) {
+      formatBadge = ext.slice(1).toUpperCase()
+    }
     return {
       ...img,
       src,
       srcKind,
       isText,
       isVideo,
+      formatBadge,
       extLabel: isText ? extOf(img.file_path).slice(1).toUpperCase() : '',
       res,
       info: res ? `${lib.dispName(img.file_name)}  ${res}` : lib.dispName(img.file_name),
@@ -972,6 +982,8 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
               <span>{{ img.res }}</span>
             </div>
           </div>
+          <!-- 左上角格式小标 (PSD / GIF / MP4 / WEBP 等特殊格式，对齐 Eagle 设计) -->
+          <span v-if="img.formatBadge && !img.isText" class="format-badge">{{ img.formatBadge }}</span>
           <img v-else-if="img.src" :src="img.src" loading="lazy" decoding="async" draggable="false" @error="onCellImgError(img)" />
           <div v-else-if="img.isText" class="docph">
             <b>{{ img.extLabel }}</b>
@@ -1075,6 +1087,26 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
 }
 .thumb img { width: 100%; height: 100%; object-fit: cover; }
 .thumb.gray img, .sf-cover img.gray { filter: grayscale(1); }
+.format-badge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 3;
+  padding: 2px 5px;
+  font-family: var(--font-mono, Consolas, monospace);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.5px;
+  color: rgba(255, 255, 255, 0.92);
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 4px;
+  pointer-events: none;
+  user-select: none;
+}
 .noimg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--text-2); font-size: 22px; }
 .noimg.broken { cursor: pointer; color: var(--accent); font-size: 20px; opacity: 0.75; }
 .noimg.broken:hover { opacity: 1; background: var(--accent-weak); }

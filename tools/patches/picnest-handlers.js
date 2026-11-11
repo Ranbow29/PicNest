@@ -3942,12 +3942,19 @@ function picnestCollectExt(contentType, src) {
   const map = {
     "image/jpeg": ".jpg", "image/jpg": ".jpg", "image/png": ".png", "image/gif": ".gif",
     "image/webp": ".webp", "image/avif": ".avif", "image/bmp": ".bmp", "image/svg+xml": ".svg",
+    "image/vnd.adobe.photoshop": ".psd", "image/x-photoshop": ".psd", "application/x-photoshop": ".psd", "application/photoshop": ".psd",
+    "image/heic": ".heic", "image/heif": ".heif", "image/tiff": ".tif", "image/x-icon": ".ico",
+    "video/mp4": ".mp4", "video/webm": ".webm", "video/quicktime": ".mov", "video/x-matroska": ".mkv",
+    "video/x-msvideo": ".avi", "video/x-flv": ".flv", "video/ogg": ".ogv"
   };
   if (map[ct]) return map[ct];
   const m = /\.([a-z0-9]{2,5})(?:[?#]|$)/i.exec(String(src || ""));
   if (m) {
     const ext = "." + m[1].toLowerCase();
-    if ([".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif", ".bmp", ".svg"].includes(ext)) return ext;
+    if ([
+      ".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif", ".bmp", ".svg", ".psd",
+      ".heic", ".heif", ".tif", ".tiff", ".ico", ".mp4", ".webm", ".mov", ".mkv", ".avi", ".flv", ".f4v"
+    ].includes(ext)) return ext;
   }
   return ".jpg";
 }
@@ -3964,9 +3971,9 @@ async function picnestCollectFetchImage(src, referer) {
     if (!d) throw new Error("dataUrl 解析失败");
     return d;
   }
-  if (!/^https?:\/\//i.test(u)) throw new Error("只支持 http(s) 或 data: 图片");
+  if (!/^https?:\/\//i.test(u)) throw new Error("只支持 http(s) 或 data: 资源");
   const ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
-  const timer = setTimeout(() => { try { ctl?.abort(); } catch (e) {} }, 30000);
+  const timer = setTimeout(() => { try { ctl?.abort(); } catch (e) {} }, 45000);
   try {
     /* Pixiv（i.pximg.net）等站点按 Referer 防盗链；用页面 URL 作 Referer，并伪装常规浏览器 UA */
     const ref = String(referer || "").trim() || (() => {
@@ -3974,7 +3981,7 @@ async function picnestCollectFetchImage(src, referer) {
     })();
     const headers = {
       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
-      "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+      "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,video/*,*/*;q=0.8",
       "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
     };
     if (ref) headers.Referer = ref;
@@ -3985,7 +3992,7 @@ async function picnestCollectFetchImage(src, referer) {
     });
     if (!res.ok) throw new Error(`下载失败 HTTP ${res.status}`);
     const ab = await res.arrayBuffer();
-    if (ab.byteLength > 80 * 1024 * 1024) throw new Error("文件超过 80MB");
+    if (ab.byteLength > 500 * 1024 * 1024) throw new Error("文件超过 500MB");
     return { buf: Buffer.from(ab), contentType: res.headers.get("content-type") || "" };
   } finally { clearTimeout(timer); }
 }
@@ -4060,9 +4067,11 @@ async function picnestCollectSaveOne(item) {
     buf = d.buf;
     contentType = d.contentType;
     ext = picnestCollectExt(contentType, item.src || item.dataUrl);
-    base = picnestCollectSafeName(item.title || "图片");
+    base = picnestCollectSafeName(item.title || "资源采集");
   }
-  if (!/^image\//i.test(contentType) && !/\.(jpe?g|png|gif|webp|avif|bmp|svg)$/i.test(ext)) throw new Error("不是图片内容");
+  const isImage = /^image\//i.test(contentType) || /\.(jpe?g|png|gif|webp|avif|bmp|svg|psd|heic|heif|tif|tiff|ico)$/i.test(ext);
+  const isVideo = /^video\//i.test(contentType) || /\.(mp4|webm|mov|mkv|avi|flv|f4v|ogv)$/i.test(ext);
+  if (!isImage && !isVideo) throw new Error("不是支持的图片或视频内容");
   /* 覆盖模式：先照常写新图，成功后再把旧匹配项软删（进图巢回收站）；普通模式命中即拦截 */
   const matches = (item.overwrite || !item.force) ? await picnestCollectDupes(t.root, buf) : [];
   if (matches.length && !item.overwrite && !item.force) {
@@ -4872,6 +4881,8 @@ electron.ipcMain.handle("picnest-visual-search-query", async (_event, opts) => {
     const bh = Math.max(0.01, Math.min(1 - by, Number(bbox?.[3] ?? 1)));
     const isSubCrop = (bx > 0.02 || by > 0.02 || bw < 0.98 || bh < 0.98);
 
+    let resolvedThumbUrl = null;
+
     // 1. 本地已有 JPEG 文件且未进行子区域裁切时：直接透传原始无损 Buffer！
     // 杜绝 nativeImage.resize 模糊滤镜导致的二次元高频线稿/笔触丢失与质量降级（这是此前搜图质量远逊于 Eagle 的主因）
     if (filePath && fs.existsSync(filePath) && !isSubCrop) {
@@ -4892,64 +4903,149 @@ electron.ipcMain.handle("picnest-visual-search-query", async (_event, opts) => {
       }
     }
 
-    // 2. 需进行子裁切或格式转换（PNG/WebP/PSD/DataURL）：
+    // 2. 特殊格式或子裁切处理（全格式支持：JPEG, PNG, PSD, GIF, MP4/视频, WebP, SVG, AVIF, BMP, TIFF）
     if (!rawJpegBuf) {
+      let targetFilePath = filePath;
+
       if (filePath && fs.existsSync(filePath)) {
-        try {
-          let nativeImg = electron.nativeImage.createFromPath(filePath);
-          if (nativeImg.isEmpty()) {
-            const ext = path.extname(filePath).toLowerCase();
-            if (ext === ".psd") {
-              const cacheThumb = path.join(dataDir, "cache", `psd-${crypto.createHash("md5").update(filePath).digest("hex")}.png`);
-              if (fs.existsSync(cacheThumb)) nativeImg = electron.nativeImage.createFromPath(cacheThumb);
+        const ext = path.extname(filePath).toLowerCase();
+
+        // 2a. 处理 PSD 格式：优先调用 ensurePsdPng 合成整幅真实渲染 PNG
+        if (ext === ".psd") {
+          try {
+            if (typeof ensurePsdPng === "function") {
+              const png = await ensurePsdPng(path.resolve(filePath));
+              if (png && fs.existsSync(png)) {
+                targetFilePath = png;
+                resolvedThumbUrl = "picnest-file://" + encodeURI(png.replace(/\\/g, "/"));
+              }
+            }
+          } catch (e) {
+            picnestCollectLog("visual-search psd error:", e.message);
+          }
+          if (targetFilePath === filePath) {
+            const hash = crypto.createHash("md5").update(path.resolve(filePath)).digest("hex");
+            const candidates = [
+              path.join(cacheDir, `psd-${hash}.png`),
+              path.join(dataDir, "cache", `psd-${hash}.png`)
+            ];
+            for (const c of candidates) {
+              if (fs.existsSync(c)) {
+                targetFilePath = c;
+                resolvedThumbUrl = "picnest-file://" + encodeURI(c.replace(/\\/g, "/"));
+                break;
+              }
             }
           }
-          if (!nativeImg.isEmpty()) {
-            baseImg = nativeImg;
+        }
+
+        // 2b. 处理视频格式（MP4, WebM, MOV, MKV, AVI, FLV, F4V）：提取代表帧画面
+        const isVideoExt = /\.(mp4|webm|mov|mkv|avi|flv|f4v)$/i.test(ext);
+        if (isVideoExt) {
+          try {
+            // 先查数据库 images 表中是否已有提取好的缩略图
+            const row = getDb().prepare("SELECT thumbnail_path, width, height FROM images WHERE file_path = ?").get(filePath);
+            if (row?.thumbnail_path && fs.existsSync(row.thumbnail_path)) {
+              targetFilePath = row.thumbnail_path;
+              resolvedThumbUrl = "picnest-file://" + encodeURI(row.thumbnail_path.replace(/\\/g, "/"));
+              if (row.width && row.height) { imgW = row.width; imgH = row.height; }
+            } else {
+              // 外部拖入或无缩略图视频：调用 ffmpeg 抽取第 0.5 秒代表帧
+              const ffmpegPath = (await import("@ffmpeg-installer/ffmpeg")).path;
+              const { spawn } = await import("child_process");
+              const hash = crypto.createHash("md5").update(path.resolve(filePath)).digest("hex");
+              const vPng = path.join(cacheDir, `vframe-${hash}.png`);
+              if (!fs.existsSync(vPng)) {
+                await new Promise((resolve) => {
+                  const p = spawn(ffmpegPath, ["-y", "-ss", "0.5", "-i", filePath, "-vframes", "1", "-vf", "scale='min(1920,iw)':-1", "-an", vPng], { stdio: "ignore", windowsHide: true });
+                  p.on("exit", () => resolve());
+                  p.on("error", () => resolve());
+                });
+              }
+              if (fs.existsSync(vPng)) {
+                targetFilePath = vPng;
+                resolvedThumbUrl = "picnest-file://" + encodeURI(vPng.replace(/\\/g, "/"));
+              }
+            }
+          } catch (vErr) {
+            picnestCollectLog("visual-search video frame error:", vErr.message);
           }
-        } catch (e) {
-          picnestCollectLog("visual-search nativeImage error:", e.message);
+        }
+
+        // 2c. 透明通道防黑底优化 (针对带 alpha 通道的 GIF / WebP / PNG)：
+        // Pinterest Lens 在纯黑背景下会误判颜色特征，通过 sharp 白底平铺（flatten）修复
+        if (!isSubCrop && /\.(png|gif|webp|avif)$/i.test(targetFilePath)) {
+          try {
+            const sharp = (await import("sharp")).default;
+            const meta = await sharp(targetFilePath, { failOn: "none" }).metadata();
+            if (meta && meta.width && meta.height) {
+              imgW = meta.width;
+              imgH = meta.height;
+              const maxDim = 3840;
+              let sImg = sharp(targetFilePath, { failOn: "none" }).flatten({ background: { r: 255, g: 255, b: 255 } });
+              if (meta.width > maxDim || meta.height > maxDim) {
+                sImg = sImg.resize({ width: maxDim, height: maxDim, fit: "inside", withoutEnlargement: true });
+              }
+              rawJpegBuf = await sImg.jpeg({ quality: 100 }).toBuffer();
+            }
+          } catch (sharpErr) {
+            picnestCollectLog("visual-search sharp flatten fallback to nativeImage:", sharpErr.message);
+          }
+        }
+
+        // 2d. 备用 nativeImage 解码
+        if (!rawJpegBuf) {
+          try {
+            let nativeImg = electron.nativeImage.createFromPath(targetFilePath);
+            if (!nativeImg.isEmpty()) {
+              baseImg = nativeImg;
+            }
+          } catch (e) {
+            picnestCollectLog("visual-search nativeImage error:", e.message);
+          }
         }
       }
 
-      if (!baseImg && dataUrl) {
-        try {
-          const nativeImg = electron.nativeImage.createFromDataURL(dataUrl);
-          if (!nativeImg.isEmpty()) {
-            baseImg = nativeImg;
-          }
-        } catch (e) {}
-      }
-
-      if (!baseImg) {
-        return { ok: false, error: "无法解析或读取待检索图片" };
-      }
-
-      const sz = baseImg.getSize();
-      imgW = sz.width;
-      imgH = sz.height;
-
-      let targetImg = baseImg;
-      if (isSubCrop && imgW > 10 && imgH > 10) {
-        const cropX = Math.max(0, Math.min(imgW - 1, Math.round(bx * imgW)));
-        const cropY = Math.max(0, Math.min(imgH - 1, Math.round(by * imgH)));
-        const cropW = Math.max(16, Math.min(imgW - cropX, Math.round(bw * imgW)));
-        const cropH = Math.max(16, Math.min(imgH - cropY, Math.round(bh * imgH)));
-        targetImg = baseImg.crop({ x: cropX, y: cropY, width: cropW, height: cropH });
-      }
-
-      // 对齐 Eagle：保留原图真实分辨率（仅超大 4K 巨图作 3840px 保护限制），以 100% 极高画质 JPEG 输出
-      const targetSz = targetImg.getSize();
-      const maxDim = 3840;
-      let resized = targetImg;
-      if (targetSz.width > maxDim || targetSz.height > maxDim) {
-        if (targetSz.width >= targetSz.height) {
-          resized = targetImg.resize({ width: maxDim });
-        } else {
-          resized = targetImg.resize({ height: maxDim });
+      if (!rawJpegBuf) {
+        if (!baseImg && dataUrl) {
+          try {
+            const nativeImg = electron.nativeImage.createFromDataURL(dataUrl);
+            if (!nativeImg.isEmpty()) {
+              baseImg = nativeImg;
+            }
+          } catch (e) {}
         }
+
+        if (!baseImg) {
+          return { ok: false, error: "无法解析或读取待检索图片/视频帧" };
+        }
+
+        const sz = baseImg.getSize();
+        imgW = sz.width;
+        imgH = sz.height;
+
+        let targetImg = baseImg;
+        if (isSubCrop && imgW > 10 && imgH > 10) {
+          const cropX = Math.max(0, Math.min(imgW - 1, Math.round(bx * imgW)));
+          const cropY = Math.max(0, Math.min(imgH - 1, Math.round(by * imgH)));
+          const cropW = Math.max(16, Math.min(imgW - cropX, Math.round(bw * imgW)));
+          const cropH = Math.max(16, Math.min(imgH - cropY, Math.round(bh * imgH)));
+          targetImg = baseImg.crop({ x: cropX, y: cropY, width: cropW, height: cropH });
+        }
+
+        // 对齐 Eagle：保留原图真实分辨率（仅超大 4K 巨图作 3840px 保护限制），以 100% 极高画质 JPEG 输出
+        const targetSz = targetImg.getSize();
+        const maxDim = 3840;
+        let resized = targetImg;
+        if (targetSz.width > maxDim || targetSz.height > maxDim) {
+          if (targetSz.width >= targetSz.height) {
+            resized = targetImg.resize({ width: maxDim });
+          } else {
+            resized = targetImg.resize({ height: maxDim });
+          }
+        }
+        rawJpegBuf = resized.toJPEG(100);
       }
-      rawJpegBuf = resized.toJPEG(100);
     }
 
     // 3. Pinterest Lens 视觉检索 (严格对齐 Eagle 原生字段顺序与 filename 规范)
@@ -5119,7 +5215,11 @@ electron.ipcMain.handle("picnest-visual-search-query", async (_event, opts) => {
       ok: true,
       items,
       bookmark: result.bookmark || null,
-      queryMeta: { width: imgW, height: imgH }
+      queryMeta: {
+        width: imgW,
+        height: imgH,
+        thumbUrl: resolvedThumbUrl || null
+      }
     };
   } catch (err) {
     return { ok: false, error: String(err?.message || err) };

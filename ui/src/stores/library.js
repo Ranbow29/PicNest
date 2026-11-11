@@ -2681,14 +2681,28 @@ export const useLibrary = defineStore('library', {
         const isStr = typeof it === 'string'
         const fp = isStr ? it : it.filePath
         const name = isStr ? it.split(/[\\/]/).pop() : (it.name || it.title || 'query')
+        const existing = fp ? this.images.find((im) => im.file_path === fp) : null
+        let thumb = ''
+        if (existing?.thumbnail_path && existing.thumbnail_path !== 'SKIP') {
+          thumb = fileUrl(existing.thumbnail_path)
+        } else if (fp) {
+          const ext = fp.slice(fp.lastIndexOf('.')).toLowerCase()
+          if (ext === '.psd' || ['.mp4', '.webm', '.mov', '.mkv', '.avi', '.flv', '.f4v'].includes(ext)) {
+            thumb = '' // 特殊格式交由后端以图找图管线生成真实预览帧
+          } else {
+            thumb = fileUrl(fp)
+          }
+        } else {
+          thumb = it.thumbUrl || it.dataUrl || ''
+        }
         return {
           id: crypto.randomUUID(),
           name,
           filePath: fp || '',
           dataUrl: !isStr ? (it.dataUrl || '') : '',
-          thumbUrl: fp ? fileUrl(fp) : (it.thumbUrl || it.dataUrl || ''),
-          width: it.width || null,
-          height: it.height || null,
+          thumbUrl: thumb,
+          width: it.width || existing?.width || null,
+          height: it.height || existing?.height || null,
           bbox: [0, 0, 1, 1],
           results: [],
           bookmark: null,
@@ -2719,14 +2733,27 @@ export const useLibrary = defineStore('library', {
       this.visualSearch.open = false
     },
     pushVisualSearchTask(taskOpts, insertAfterId = null) {
+      const fp = taskOpts.filePath || ''
+      const existing = fp ? this.images.find((im) => im.file_path === fp) : null
+      let thumb = taskOpts.thumbUrl || taskOpts.dataUrl || ''
+      if (!thumb && existing?.thumbnail_path && existing.thumbnail_path !== 'SKIP') {
+        thumb = fileUrl(existing.thumbnail_path)
+      } else if (!thumb && fp) {
+        const ext = fp.slice(fp.lastIndexOf('.')).toLowerCase()
+        if (ext === '.psd' || ['.mp4', '.webm', '.mov', '.mkv', '.avi', '.flv', '.f4v'].includes(ext)) {
+          thumb = ''
+        } else {
+          thumb = fileUrl(fp)
+        }
+      }
       const newTask = {
         id: crypto.randomUUID(),
-        name: taskOpts.name || taskOpts.title || 'query',
-        filePath: taskOpts.filePath || '',
+        name: taskOpts.name || taskOpts.title || (fp ? fp.split(/[\\/]/).pop() : 'query'),
+        filePath: fp,
         dataUrl: taskOpts.dataUrl || '',
-        thumbUrl: taskOpts.thumbUrl || taskOpts.dataUrl || (taskOpts.filePath ? fileUrl(taskOpts.filePath) : ''),
-        width: taskOpts.width || null,
-        height: taskOpts.height || null,
+        thumbUrl: thumb,
+        width: taskOpts.width || existing?.width || null,
+        height: taskOpts.height || existing?.height || null,
         bbox: [0, 0, 1, 1],
         results: [],
         bookmark: null,

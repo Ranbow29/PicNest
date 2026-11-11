@@ -1,6 +1,7 @@
 // 文件类别判定（主进程同名白名单见 tools/patches/picnest-handlers.js PICNEST_TEXT_EXTS，两侧需同步）
 export const VIDEO_EXTS = new Set(['.mp4', '.webm', '.mov', '.mkv', '.avi', '.flv', '.f4v'])
 export const TEXT_EXTS = new Set(['.txt', '.md', '.markdown', '.log', '.json', '.jsonc', '.csv', '.tsv', '.ini', '.cfg', '.conf', '.yaml', '.yml'])
+export const SPECIAL_BADGE_EXTS = new Set(['.psd', '.gif', '.webp', '.svg', '.avif'])
 
 export function extOf(p) {
   const s = String(p || '')
@@ -10,3 +11,12 @@ export function extOf(p) {
 }
 export const isVideoPath = (p) => VIDEO_EXTS.has(extOf(p))
 export const isTextPath = (p) => TEXT_EXTS.has(extOf(p))
+
+export function getFormatBadge(p) {
+  const ext = extOf(p).toLowerCase()
+  if (VIDEO_EXTS.has(ext)) return ext.slice(1).toUpperCase()
+  if (SPECIAL_BADGE_EXTS.has(ext)) return ext.slice(1).toUpperCase()
+  if (TEXT_EXTS.has(ext)) return ext.slice(1).toUpperCase()
+  return ''
+}
+
