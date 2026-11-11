@@ -651,6 +651,62 @@
     }
   }
 
+  function extractVideoInfo(el) {
+    if (!el) return null
+    const video = el.tagName === 'VIDEO' ? el : el.querySelector?.('video')
+    if (!video) return null
+
+    let src = (video.currentSrc || video.src || '').trim()
+    if (!src || src.startsWith('blob:')) {
+      for (const s of video.querySelectorAll('source')) {
+        const u = (s.src || s.getAttribute('src') || '').trim()
+        if (u && !u.startsWith('blob:')) { src = u; break }
+      }
+    }
+    if (!src || src.startsWith('blob:')) {
+      const meta = document.querySelector('meta[property="og:video"], meta[property="og:video:secure_url"]')
+      if (meta?.content && /^https?:\/\//i.test(meta.content)) src = meta.content
+    }
+    if (!src || src.startsWith('blob:')) {
+      for (const s of document.querySelectorAll('script[type="application/ld+json"]')) {
+        try {
+          const j = JSON.parse(s.textContent)
+          const item = Array.isArray(j) ? j[0] : j
+          const cu = item?.contentUrl || item?.video?.contentUrl
+          if (cu && /^https?:\/\//i.test(cu)) { src = cu; break }
+        } catch {}
+      }
+    }
+
+    const pinA = video.closest?.('[data-test-id="pin"]')?.querySelector?.('a[href*="/pin/"]') || video.closest?.('a[href*="/pin/"]') || document.querySelector('a[href*="/pin/"]')
+    const pinUrl = pinA?.href || (location.href.includes('/pin/') ? location.href : '')
+
+    let frameDataUrl = ''
+    try {
+      const w = video.videoWidth || video.clientWidth || 800
+      const h = video.videoHeight || video.clientHeight || 600
+      if (w > 0 && h > 0) {
+        const c = document.createElement('canvas')
+        c.width = w
+        c.height = h
+        const ctx = c.getContext('2d')
+        ctx.drawImage(video, 0, 0, w, h)
+        frameDataUrl = c.toDataURL('image/jpeg', 0.95)
+      }
+    } catch {}
+
+    const poster = (video.poster || video.getAttribute('poster') || '').trim()
+    const title = (video.getAttribute('title') || video.getAttribute('aria-label') || document.title || '视频采集').trim()
+
+    return {
+      src,
+      pinUrl,
+      poster,
+      frameDataUrl,
+      title,
+    }
+  }
+
   async function saveTo(s, rel, force, overwrite) {
     if (s.saving || !s.root) return
     s.saving = true
@@ -658,17 +714,38 @@
     s.skipClick = Date.now() + 500
     removeDup(s)
     setStatus(s, 'saving', '保存中…')
-    const src = getMediaSrc(s.img)
-    if (!src) { s.saving = false; setStatus(s, 'err', '没有媒体地址'); return }
-    const isVideo = s.img?.tagName === 'VIDEO' || /\.(mp4|webm|mov|mkv|avi|flv|f4v)(\?.*)?$/i.test(src)
-    const title = (s.img.getAttribute?.('title') || s.img.getAttribute?.('aria-label') || s.img.alt || document.title || '').trim()
-    const payload = { url: location.href, title, kind: isVideo ? 'video' : 'image' }
-    if (src.startsWith('data:')) payload.dataUrl = src
-    else if (src.startsWith('blob:')) {
-      const dataUrl = await blobToDataUrl(src)
-      if (!dataUrl) { s.saving = false; setStatus(s, 'err', 'blob 图片读取失败'); return }
-      payload.dataUrl = dataUrl
-    } else payload.src = src
+
+    const isVideo = s.img?.tagName === 'VIDEO' || !!s.img?.querySelector?.('video')
+    let payload = null
+
+    if (isVideo) {
+      const vInfo = extractVideoInfo(s.img)
+      if (!vInfo?.src && !vInfo?.pinUrl && !vInfo?.poster && !vInfo?.frameDataUrl) {
+        s.saving = false
+        setStatus(s, 'err', '未能探测到视频流地址')
+        return
+      }
+      payload = {
+        kind: 'video',
+        url: vInfo.pinUrl || location.href,
+        pinUrl: vInfo.pinUrl,
+        title: vInfo.title,
+        src: vInfo.src,
+        poster: vInfo.poster,
+        dataUrl: vInfo.frameDataUrl,
+      }
+    } else {
+      const src = getMediaSrc(s.img)
+      if (!src) { s.saving = false; setStatus(s, 'err', '没有图片地址'); return }
+      const title = (s.img.getAttribute?.('title') || s.img.alt || document.title || '').trim()
+      payload = { url: location.href, title, kind: 'image' }
+      if (src.startsWith('data:')) payload.dataUrl = src
+      else if (src.startsWith('blob:')) {
+        const dataUrl = await blobToDataUrl(src)
+        if (!dataUrl) { s.saving = false; setStatus(s, 'err', 'blob 图片读取失败'); return }
+        payload.dataUrl = dataUrl
+      } else payload.src = src
+    }
 
     if (!runtimeAlive()) {
       s.saving = false

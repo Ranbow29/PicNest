@@ -4080,6 +4080,14 @@ function picnestCollectInsert(root, absFile, meta = {}) {  const st = fs.statSyn
       },
     });
   }
+  const ext = path.extname(absFile).toLowerCase();
+  if (typeof isVideoExt === "function" && isVideoExt(ext) && typeof getOrGeneratePoster === "function") {
+    getOrGeneratePoster(absFile).then((poster) => {
+      if (poster && mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("sync-db", { type: "thumb-update", file_path: absFile, thumbnail_path: poster });
+      }
+    }).catch(() => {});
+  }
   return absFile;
 }
 async function picnestCollectSaveOne(item) {
@@ -4103,6 +4111,7 @@ async function picnestCollectSaveOne(item) {
   const isImage = /^image\//i.test(contentType) || /\.(jpe?g|png|gif|webp|avif|bmp|svg|psd|heic|heif|tif|tiff|ico)$/i.test(ext);
   const isVideo = /^video\//i.test(contentType) || /\.(mp4|webm|mov|mkv|avi|flv|f4v|ogv)$/i.test(ext);
   if (!isImage && !isVideo) throw new Error("不是支持的图片或视频内容");
+  if (!buf || buf.length === 0) throw new Error("采集数据为空 (0 字节)");
   /* 覆盖模式：先照常写新图，成功后再把旧匹配项软删（进图巢回收站）；普通模式命中即拦截 */
   const matches = (item.overwrite || !item.force) ? await picnestCollectDupes(t.root, buf) : [];
   if (matches.length && !item.overwrite && !item.force) {

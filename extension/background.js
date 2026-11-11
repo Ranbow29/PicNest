@@ -488,10 +488,49 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (!data.ok) throw new Error(data.error || '新建文件夹失败')
         sendResponse({ ok: true, folder: data.folder })
       } else if (msg?.type === 'save-panel') {
+        let src = msg.src || ''
+        let dataUrl = msg.dataUrl || ''
+
+        // 针对视频，若当前地址仍为 blob 或为空，尝试从 Pinterest PinResource API 解析真实的 MP4 原始直链
+        if (msg.kind === 'video') {
+          if (!src || src.startsWith('blob:')) {
+            const targetPin = msg.pinUrl || msg.url || ''
+            const pinMatch = targetPin.match(/\/pin\/(\d+)/)
+            if (pinMatch) {
+              const pinId = pinMatch[1]
+              try {
+                const apiUrl = `https://www.pinterest.com/resource/PinResource/get/?data=%7B%22options%22%3A%7B%22id%22%3A%22${pinId}%22%2C%22field_set_key%22%3A%22detailed%22%7D%7D`
+                const r = await fetch(apiUrl, {
+                  headers: {
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'Accept': 'application/json'
+                  }
+                })
+                if (r.ok) {
+                  const j = await r.json()
+                  const vList = j?.resource_response?.data?.videos?.video_list
+                  if (vList) {
+                    const best = vList.V_720P?.url || vList.V_1080P?.url || vList.V_EXP7?.url || Object.values(vList).find((v) => v?.url && v.url.includes('.mp4'))?.url
+                    if (best) {
+                      src = best
+                      dataUrl = '' // 已拿到真实 MP4 视频，清空兜底截图
+                    }
+                  }
+                }
+              } catch (e) {
+                console.warn('resolve Pinterest video error:', e)
+              }
+            }
+          }
+          if ((!src || src.startsWith('blob:')) && msg.poster && !dataUrl) {
+            src = msg.poster
+          }
+        }
+
         const body = {
           kind: msg.kind || 'image',
-          src: msg.src,
-          dataUrl: msg.dataUrl,
+          src: src.startsWith('blob:') ? '' : src,
+          dataUrl: dataUrl,
           url: msg.url,
           title: msg.title,
           rootId: msg.rootId,
