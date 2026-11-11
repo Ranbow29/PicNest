@@ -45,6 +45,57 @@ async function toggleAlwaysOnTop() {
 const hoveredItem = ref(null)
 const previewItem = ref(null)
 const waterfallEl = ref(null)
+const waterfallWidth = ref(800)
+let waterfallResizeObserver = null
+
+// 监听 waterfallEl 尺寸以精确计算列数
+watch(waterfallEl, (el) => {
+  if (waterfallResizeObserver) {
+    waterfallResizeObserver.disconnect()
+    waterfallResizeObserver = null
+  }
+  if (el) {
+    waterfallWidth.value = el.clientWidth || 800
+    waterfallResizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        waterfallWidth.value = entry.contentRect.width
+      }
+    })
+    waterfallResizeObserver.observe(el)
+  }
+})
+
+// 根据可用宽度与 scale 动态计算列数
+const columnCount = computed(() => {
+  const availableW = Math.max(120, (waterfallWidth.value || 800) - 32)
+  const colW = scale.value || 240
+  const gap = 14
+  return Math.max(1, Math.floor((availableW + gap) / (colW + gap)))
+})
+
+// 确定性贪心分列 (对齐 Eagle 原生算法，按宽高比预占位，彻底杜绝 CSS Multi-column 重排乱跳与位置篡改)
+const columnData = computed(() => {
+  const count = columnCount.value
+  const cols = Array.from({ length: count }, () => [])
+  const colHeights = Array(count).fill(0)
+  const results = currentTask.value?.results || []
+
+  for (let i = 0; i < results.length; i++) {
+    const item = results[i]
+    let minCol = 0
+    let minH = colHeights[0]
+    for (let c = 1; c < count; c++) {
+      if (colHeights[c] < minH) {
+        minH = colHeights[c]
+        minCol = c
+      }
+    }
+    cols[minCol].push(item)
+    const ratio = (item.height && item.width) ? (item.height / item.width) : 1.3
+    colHeights[minCol] += ratio * 100 + 14
+  }
+  return cols
+})
 
 // 任务队列操作与滚动记忆
 function selectTask(task) {
@@ -231,7 +282,7 @@ async function triggerSearch(task, continueSearch = false, isRequery = false) {
         // 成功获取新数据后整体原子替换，杜绝白屏与黑边闪烁
         task.results = res.items || []
         if (isRequery && waterfallEl.value) {
-          waterfallEl.value.scrollTo({ top: 0, behavior: 'smooth' })
+          waterfallEl.value.scrollTop = 0
         }
       }
       task.bookmark = res.bookmark || null
@@ -617,6 +668,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onGlobalKeyDown)
   window.removeEventListener('wheel', onWindowWheel)
+  waterfallResizeObserver?.disconnect()
   if (isAlwaysOnTop.value) {
     api.setAlwaysOnTop(false).catch(() => {})
   }
@@ -813,9 +865,11 @@ onBeforeUnmount(() => {
               <div class="progress-bar-glow" />
             </div>
 
-            <!-- 加载态骨架屏 (仅首次空数据时展示) -->
-            <div v-if="currentTask?.loading && !currentTask.results?.length" class="skeleton-grid" :style="{ '--col-w': scale + 'px' }">
-              <div v-for="i in 8" :key="i" class="skeleton-card" :style="{ height: 180 + (i % 3) * 60 + 'px' }" />
+            <!-- 加载态骨架屏 (仅首次空数据时展示，对齐列排布) -->
+            <div v-if="currentTask?.loading && !currentTask.results?.length" class="waterfall-columns">
+              <div v-for="c in columnCount" :key="c" class="waterfall-col">
+                <div v-for="i in 3" :key="i" class="skeleton-card" :style="{ aspectRatio: (1 / (1.2 + ((i + c) % 3) * 0.3)).toString() }" />
+              </div>
             </div>
 
             <!-- 错误提示 -->
@@ -831,74 +885,82 @@ onBeforeUnmount(() => {
               <div class="empty-msg">未找到相似结果，请尝试调整框选区域或换张图片</div>
             </div>
 
-            <!-- 结果瀑布流 (真 CSS Masonry，刷新期间平滑微降不透明度) -->
+            <!-- 结果瀑布流 (确定性贪心分列，杜绝 CSS Multi-column 重排乱跳与位置篡改) -->
             <div
               v-else
-              class="waterfall-grid"
+              class="waterfall-columns"
               :class="{ 'waterfall-refreshing': currentTask?.loading && currentTask?.results?.length }"
-              :style="{ '--col-w': scale + 'px' }"
             >
               <div
-                v-for="item in currentTask?.results"
-                :key="item.id"
-                class="waterfall-card"
-                @mouseenter="hoveredItem = item"
-                @mouseleave="hoveredItem = null"
-                @click="openPreview(item)"
+                v-for="(col, colIdx) in columnData"
+                :key="colIdx"
+                class="waterfall-col"
               >
-                <div class="card-media">
-                  <img :src="item.thumbUrl" class="card-img" loading="lazy" />
+                <div
+                  v-for="item in col"
+                  :key="item.id"
+                  class="waterfall-card"
+                  @mouseenter="hoveredItem = item"
+                  @mouseleave="hoveredItem = null"
+                  @click="openPreview(item)"
+                >
+                  <div
+                    class="card-media"
+                    :style="{ aspectRatio: `${item.width || 474} / ${item.height || 600}` }"
+                  >
+                    <img :src="item.thumbUrl" class="card-img" loading="lazy" />
 
-                  <!-- 已保存徽标 -->
-                  <span v-if="item.saved" class="saved-badge">
-                    ✓ 已入库
-                  </span>
+                    <!-- 已保存徽标 -->
+                    <span v-if="item.saved" class="saved-badge">
+                      ✓ 已入库
+                    </span>
 
-                  <!-- 悬停操作浮层（上部点击开大图，底部全宽自适应操作条） -->
-                  <div class="card-overlay">
-                    <div class="card-preview-zone" @click="openPreview(item)" />
-                    <div class="card-actions-bar" @click.stop>
-                      <!-- 1. 保存到未分类 (S) -->
-                      <button
-                        class="card-action-btn"
-                        :class="{ saved: item.saved }"
-                        :disabled="item.saved || savingMap[item.id]"
-                        @click="saveItem(item, $event)"
-                      >
-                        <svg v-if="savingMap[item.id]" class="dock-svg spin" viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><circle cx="12" cy="12" r="10" stroke-opacity="0.25"/><path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round"/></svg>
-                        <svg v-else-if="item.saved" class="dock-svg ok" viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-                        <svg v-else class="dock-svg" viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                        <span class="dock-tooltip">{{ item.saved ? '已存入未分类' : '保存 S' }}</span>
-                      </button>
+                    <!-- 悬停操作浮层（上部点击开大图，底部全宽自适应操作条） -->
+                    <div class="card-overlay">
+                      <div class="card-preview-zone" @click="openPreview(item)" />
+                      <div class="card-actions-bar" @click.stop>
+                        <!-- 1. 保存到未分类 (S) -->
+                        <button
+                          class="card-action-btn"
+                          :class="{ saved: item.saved }"
+                          :disabled="item.saved || savingMap[item.id]"
+                          @click="saveItem(item, $event)"
+                        >
+                          <svg v-if="savingMap[item.id]" class="dock-svg spin" viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><circle cx="12" cy="12" r="10" stroke-opacity="0.25"/><path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round"/></svg>
+                          <svg v-else-if="item.saved" class="dock-svg ok" viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                          <svg v-else class="dock-svg" viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                          <span class="dock-tooltip">{{ item.saved ? '已存入未分类' : '保存 S' }}</span>
+                        </button>
 
-                      <i class="card-action-vsep" />
+                        <i class="card-action-vsep" />
 
-                      <!-- 2. 以图找图 (F) -->
-                      <button
-                        class="card-action-btn"
-                        @click="researchItem(item, $event)"
-                      >
-                        <svg class="dock-svg" viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
-                          <path d="M4 8V4h4"/><path d="M20 8V4h-4"/><path d="M4 16v4h4"/><path d="M20 16v4h-4"/>
-                          <circle cx="11.5" cy="11.5" r="3.2"/><line x1="13.8" y1="13.8" x2="18" y2="18"/>
-                        </svg>
-                        <span class="dock-tooltip">以图找图 F</span>
-                      </button>
+                        <!-- 2. 以图找图 (F) -->
+                        <button
+                          class="card-action-btn"
+                          @click="researchItem(item, $event)"
+                        >
+                          <svg class="dock-svg" viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M4 8V4h4"/><path d="M20 8V4h-4"/><path d="M4 16v4h4"/><path d="M20 16v4h-4"/>
+                            <circle cx="11.5" cy="11.5" r="3.2"/><line x1="13.8" y1="13.8" x2="18" y2="18"/>
+                          </svg>
+                          <span class="dock-tooltip">以图找图 F</span>
+                        </button>
 
-                      <i class="card-action-vsep" v-if="item.sourceUrl" />
+                        <i class="card-action-vsep" v-if="item.sourceUrl" />
 
-                      <!-- 3. 在浏览器中打开原网页 (O) -->
-                      <button
-                        v-if="item.sourceUrl"
-                        class="card-action-btn"
-                        @click="openSource(item, $event)"
-                      >
-                        <svg class="dock-svg" viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
-                          <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
-                          <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
-                        </svg>
-                        <span class="dock-tooltip">在 Pinterest 打开 O</span>
-                      </button>
+                        <!-- 3. 在浏览器中打开原网页 (O) -->
+                        <button
+                          v-if="item.sourceUrl"
+                          class="card-action-btn"
+                          @click="openSource(item, $event)"
+                        >
+                          <svg class="dock-svg" viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+                            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+                          </svg>
+                          <span class="dock-tooltip">在 Pinterest 打开 O</span>
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1107,7 +1169,7 @@ onBeforeUnmount(() => {
   max-width: 1560px;
   height: 88vh;
   min-height: 640px;
-  background: var(--panel-strong);
+  background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 16px;
   box-shadow: var(--shadow-float);
@@ -1483,14 +1545,13 @@ onBeforeUnmount(() => {
   text-overflow: ellipsis;
 }
 
-/* 右栏：结果瀑布流 (真 CSS Masonry，无撕裂空白) */
+/* 右栏：结果瀑布流 (确定性贪心分列，杜绝 CSS Multi-column 重排与跳动) */
 .waterfall-container {
   flex: 1;
   position: relative;
   overflow-y: auto;
   padding: 16px;
-  scroll-behavior: smooth;
-  background: var(--panel-strong);
+  background: var(--bg-2);
 }
 
 /* 渐进式刷新顶部流动进度条 (对齐 Eagle 原生交互规范) */
@@ -1518,31 +1579,36 @@ onBeforeUnmount(() => {
   100% { transform: translateX(300%); }
 }
 
-.waterfall-grid {
-  column-width: var(--col-w, 240px);
-  column-gap: 14px;
+.waterfall-columns {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
   width: 100%;
   transition: opacity 0.25s ease;
 }
 
-.waterfall-grid.waterfall-refreshing {
+.waterfall-columns.waterfall-refreshing {
   opacity: 0.82;
   filter: saturate(0.92);
 }
 
+.waterfall-col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
 .waterfall-card {
-  break-inside: avoid;
-  margin-bottom: 14px;
-  display: inline-block;
   width: 100%;
-  background: var(--bg-2);
+  background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 12px;
   overflow: hidden;
   cursor: pointer;
   box-shadow: var(--shadow-tile);
   transition: transform 0.22s cubic-bezier(0.2, 0.9, 0.3, 1), box-shadow 0.22s ease, border-color 0.18s;
-  vertical-align: top;
   position: relative;
 }
 
@@ -1556,12 +1622,13 @@ onBeforeUnmount(() => {
   position: relative;
   width: 100%;
   overflow: hidden;
-  background: rgba(0, 0, 0, 0.2);
+  background: rgba(128, 128, 128, 0.08);
 }
 
 .card-img {
   width: 100%;
-  height: auto;
+  height: 100%;
+  object-fit: cover;
   display: block;
   transition: transform 0.3s ease;
 }
@@ -1693,15 +1760,7 @@ onBeforeUnmount(() => {
 }
 
 /* 骨架屏 */
-.skeleton-grid {
-  column-width: var(--col-w, 240px);
-  column-gap: 14px;
-}
-
 .skeleton-card {
-  break-inside: avoid;
-  margin-bottom: 14px;
-  display: inline-block;
   width: 100%;
   background: var(--panel);
   border-radius: 12px;
