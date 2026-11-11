@@ -489,7 +489,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse({ ok: true, folder: data.folder })
       } else if (msg?.type === 'save-panel') {
         const body = {
-          kind: 'image',
+          kind: msg.kind || 'image',
           src: msg.src,
           dataUrl: msg.dataUrl,
           url: msg.url,

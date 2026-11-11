@@ -2681,7 +2681,8 @@ export const useLibrary = defineStore('library', {
         const isStr = typeof it === 'string'
         const fp = isStr ? it : it.filePath
         const name = isStr ? it.split(/[\\/]/).pop() : (it.name || it.title || 'query')
-        const existing = fp ? this.images.find((im) => im.file_path === fp) : null
+        const normFp = fp ? fp.replace(/\\/g, '/').toLowerCase() : ''
+        const existing = normFp ? this.images.find((im) => im.file_path && im.file_path.replace(/\\/g, '/').toLowerCase() === normFp) : null
         let thumb = ''
         if (existing?.thumbnail_path && existing.thumbnail_path !== 'SKIP') {
           thumb = fileUrl(existing.thumbnail_path)
@@ -2734,7 +2735,8 @@ export const useLibrary = defineStore('library', {
     },
     pushVisualSearchTask(taskOpts, insertAfterId = null) {
       const fp = taskOpts.filePath || ''
-      const existing = fp ? this.images.find((im) => im.file_path === fp) : null
+      const normFp = fp ? fp.replace(/\\/g, '/').toLowerCase() : ''
+      const existing = normFp ? this.images.find((im) => im.file_path && im.file_path.replace(/\\/g, '/').toLowerCase() === normFp) : null
       let thumb = taskOpts.thumbUrl || taskOpts.dataUrl || ''
       if (!thumb && existing?.thumbnail_path && existing.thumbnail_path !== 'SKIP') {
         thumb = fileUrl(existing.thumbnail_path)

@@ -57,6 +57,7 @@ export const api = {
   dragBegin: (paths) => invoke('picnestDragBegin', paths),
   dragEnd: () => invoke('picnestDragEnd'),
   psdPreview: (filePath) => invoke('picnestPsdPreview', filePath),
+  videoPreview: (filePath) => invoke('picnestVideoPreview', filePath),
   viewPreview: (filePath) => invoke('picnestViewPreview', filePath),
   // 视觉搜索（以图找图）
   visualSearchQuery: (opts) => invoke('picnestVisualSearchQuery', opts),

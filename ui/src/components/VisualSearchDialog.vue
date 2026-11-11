@@ -188,6 +188,13 @@ watch(() => currentTask.value?.id, async (newId) => {
           currentTask.value.thumbUrl = fileUrl(r.path)
         }
       } catch (e) {}
+    } else if (['.mp4', '.webm', '.mov', '.mkv', '.avi', '.flv', '.f4v'].includes(ext)) {
+      try {
+        const r = await api.videoPreview(currentTask.value.filePath)
+        if (r?.ok && r?.path) {
+          currentTask.value.thumbUrl = fileUrl(r.path)
+        }
+      } catch (e) {}
     }
   }
   if (!currentTask.value.results?.length && !currentTask.value.loading) {

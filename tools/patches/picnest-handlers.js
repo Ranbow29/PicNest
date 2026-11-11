@@ -393,6 +393,26 @@ electron.ipcMain.handle("picnest-psd-preview", async (_event, filePath) => {
     return { ok: false, error: String(e?.message || e) };
   }
 });
+electron.ipcMain.handle("picnest-video-preview", async (_event, filePath) => {
+  try {
+    if (!filePath) return { ok: false, error: "文件不存在" };
+    const abs = path.resolve(String(filePath));
+    if (!fs.existsSync(abs)) return { ok: false, error: "文件不存在" };
+    const ext = path.extname(abs).toLowerCase();
+    const isVideo = /\.(mp4|webm|mov|mkv|avi|flv|f4v)$/i.test(ext);
+    if (!isVideo) return { ok: false, error: "不是视频" };
+    if (typeof getOrGeneratePoster === "function") {
+      const poster = await getOrGeneratePoster(abs);
+      if (poster && fs.existsSync(poster)) return { ok: true, path: poster, size: fs.statSync(poster).size };
+    }
+    const hash = crypto.createHash("md5").update(abs).digest("hex");
+    const pWebp = path.join(cacheDir, `${hash}.webp`);
+    if (fs.existsSync(pWebp)) return { ok: true, path: pWebp, size: fs.statSync(pWebp).size };
+    return { ok: false, error: "视频代表帧提取失败" };
+  } catch (e) {
+    return { ok: false, error: String(e?.message || e) };
+  }
+});
 const picnestPreviewJobs = new Map();
 electron.ipcMain.handle("picnest-view-preview", async (_event, filePath) => {
   try {
@@ -3979,12 +3999,23 @@ async function picnestCollectFetchImage(src, referer) {
     const ref = String(referer || "").trim() || (() => {
       try { return new URL(u).origin + "/"; } catch (e) { return ""; }
     })();
+    const isPinImg = /pinimg\.com/i.test(u);
     const headers = {
       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
       "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,video/*,*/*;q=0.8",
       "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+      "sec-ch-ua": "\"Chromium\";v=\"124\", \"Google Chrome\";v=\"124\", \"Not-A.Brand\";v=\"99\"",
+      "sec-ch-ua-mobile": "?0",
+      "sec-ch-ua-platform": "\"Windows\"",
+      "sec-fetch-dest": "image",
+      "sec-fetch-mode": "no-cors",
+      "sec-fetch-site": "cross-site",
     };
-    if (ref) headers.Referer = ref;
+    if (isPinImg) {
+      headers.Referer = "https://www.pinterest.com/";
+    } else if (ref) {
+      headers.Referer = ref;
+    }
     const res = await fetch(u, {
       redirect: "follow",
       signal: ctl?.signal,
@@ -4943,32 +4974,59 @@ electron.ipcMain.handle("picnest-visual-search-query", async (_event, opts) => {
         const isVideoExt = /\.(mp4|webm|mov|mkv|avi|flv|f4v)$/i.test(ext);
         if (isVideoExt) {
           try {
-            // 先查数据库 images 表中是否已有提取好的缩略图
-            const row = getDb().prepare("SELECT thumbnail_path, width, height FROM images WHERE file_path = ?").get(filePath);
-            if (row?.thumbnail_path && fs.existsSync(row.thumbnail_path)) {
-              targetFilePath = row.thumbnail_path;
-              resolvedThumbUrl = "picnest-file://" + encodeURI(row.thumbnail_path.replace(/\\/g, "/"));
-              if (row.width && row.height) { imgW = row.width; imgH = row.height; }
-            } else {
-              // 外部拖入或无缩略图视频：调用 ffmpeg 抽取第 0.5 秒代表帧
-              const ffmpegPath = (await import("@ffmpeg-installer/ffmpeg")).path;
-              const { spawn } = await import("child_process");
-              const hash = crypto.createHash("md5").update(path.resolve(filePath)).digest("hex");
-              const vPng = path.join(cacheDir, `vframe-${hash}.png`);
-              if (!fs.existsSync(vPng)) {
-                await new Promise((resolve) => {
-                  const p = spawn(ffmpegPath, ["-y", "-ss", "0.5", "-i", filePath, "-vframes", "1", "-vf", "scale='min(1920,iw)':-1", "-an", vPng], { stdio: "ignore", windowsHide: true });
-                  p.on("exit", () => resolve());
-                  p.on("error", () => resolve());
-                });
-              }
-              if (fs.existsSync(vPng)) {
-                targetFilePath = vPng;
-                resolvedThumbUrl = "picnest-file://" + encodeURI(vPng.replace(/\\/g, "/"));
+            if (typeof getOrGeneratePoster === "function") {
+              const poster = await getOrGeneratePoster(path.resolve(filePath));
+              if (poster && fs.existsSync(poster)) {
+                targetFilePath = poster;
+                resolvedThumbUrl = "picnest-file://" + encodeURI(poster.replace(/\\/g, "/"));
               }
             }
-          } catch (vErr) {
-            picnestCollectLog("visual-search video frame error:", vErr.message);
+          } catch (e) {
+            picnestCollectLog("visual-search video poster error:", e.message);
+          }
+          if (targetFilePath === filePath) {
+            try {
+              const normFp = path.resolve(filePath);
+              const row = getDb().prepare("SELECT thumbnail_path, width, height FROM images WHERE file_path = ? OR file_path = ?").get(filePath, normFp);
+              if (row?.thumbnail_path && fs.existsSync(row.thumbnail_path)) {
+                targetFilePath = row.thumbnail_path;
+                resolvedThumbUrl = "picnest-file://" + encodeURI(row.thumbnail_path.replace(/\\/g, "/"));
+                if (row.width && row.height) { imgW = row.width; imgH = row.height; }
+              } else {
+                const hash = crypto.createHash("md5").update(path.resolve(filePath)).digest("hex");
+                const pWebp = path.join(cacheDir, `${hash}.webp`);
+                if (fs.existsSync(pWebp)) {
+                  targetFilePath = pWebp;
+                  resolvedThumbUrl = "picnest-file://" + encodeURI(pWebp.replace(/\\/g, "/"));
+                } else {
+                  const bundledFfmpeg = path.join(__dirname, "../../node_modules/@ffmpeg-installer/win32-x64/ffmpeg.exe");
+                  let ffmpegBin = fs.existsSync(bundledFfmpeg) ? bundledFfmpeg : null;
+                  if (!ffmpegBin) {
+                    try {
+                      const mod = await import("@ffmpeg-installer/ffmpeg");
+                      ffmpegBin = mod?.path || mod?.default?.path;
+                    } catch (e) {}
+                  }
+                  if (ffmpegBin && fs.existsSync(ffmpegBin)) {
+                    const { spawn } = await import("child_process");
+                    const vPng = path.join(cacheDir, `vframe-${hash}.png`);
+                    if (!fs.existsSync(vPng)) {
+                      await new Promise((resolve) => {
+                        const p = spawn(ffmpegBin, ["-y", "-ss", "0.5", "-i", filePath, "-vframes", "1", "-vf", "scale='min(1920,iw)':-1", "-an", vPng], { stdio: "ignore", windowsHide: true });
+                        p.on("exit", () => resolve());
+                        p.on("error", () => resolve());
+                      });
+                    }
+                    if (fs.existsSync(vPng)) {
+                      targetFilePath = vPng;
+                      resolvedThumbUrl = "picnest-file://" + encodeURI(vPng.replace(/\\/g, "/"));
+                    }
+                  }
+                }
+              }
+            } catch (vErr) {
+              picnestCollectLog("visual-search video frame error:", vErr.message);
+            }
           }
         }
 

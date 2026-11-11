@@ -230,35 +230,58 @@
     try { return !!chrome.runtime?.id } catch { return false }
   }
   function refreshHint() { return '扩展已更新，请刷新此页面后再采集' }
-  function imgFromEvent(e) {
+  function getMediaSrc(el) {
+    if (!el) return ''
+    if (el.tagName === 'VIDEO') {
+      return (el.currentSrc || el.src || el.querySelector?.('source')?.src || el.poster || '').trim()
+    }
+    return (el.currentSrc || el.src || '').trim()
+  }
+  function mediaFromEvent(e) {
     const path = e.composedPath?.() || [e.target]
     for (const n of path) {
-      if (n && n.tagName === 'IMG') return n
+      if (!n || !n.tagName) continue
+      if (n.tagName === 'IMG' || n.tagName === 'VIDEO') return n
+      if (n.querySelector) {
+        const v = n.querySelector('video')
+        if (v && (v.currentSrc || v.src || v.querySelector('source') || v.poster)) return v
+        const im = n.querySelector('img')
+        if (im && (im.currentSrc || im.src)) return im
+      }
     }
     return null
   }
-  /* Pinterest 等站点会用覆盖层 DIV 盖住图片：事件目标不是 IMG，按坐标找底层可见图片 */
-  function imgVisibleAt(el, x, y) {
-    if (!el || el.tagName !== 'IMG') return false
+  /* Pinterest、B站等站点会用覆盖层 DIV 盖住图片或视频：按坐标找底层可见媒体 */
+  function mediaVisibleAt(el, x, y) {
+    if (!el || (el.tagName !== 'IMG' && el.tagName !== 'VIDEO')) return false
     const r = el.getBoundingClientRect()
     if (r.width < 24 || r.height < 24) return false
     if (x < r.left || x > r.right || y < r.top || y > r.bottom) return false
-    if (!el.naturalWidth || !el.naturalHeight) return false
+    if (el.tagName === 'IMG') {
+      if (!el.naturalWidth || !el.naturalHeight) return false
+    } else if (el.tagName === 'VIDEO') {
+      const src = getMediaSrc(el)
+      if (!src && !el.poster) return false
+    }
     if (el.checkVisibility && !el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) return false
     const cs = getComputedStyle(el)
     return cs.display !== 'none' && cs.visibility !== 'hidden' && Number(cs.opacity) !== 0
   }
-  function imgAtPoint(x, y) {
+  function mediaAtPoint(x, y) {
     const list = document.elementsFromPoint?.(x, y) || []
     for (const el of list) {
-      if (imgVisibleAt(el, x, y)) return el
+      if (mediaVisibleAt(el, x, y)) return el
+      const v = el.querySelector?.('video')
+      if (v && mediaVisibleAt(v, x, y)) return v
+      const im = el.querySelector?.('img')
+      if (im && mediaVisibleAt(im, x, y)) return im
     }
-    /* 2026-11 Pinterest 把 <img> 设成 pointer-events:none，elementsFromPoint 会直接跳过它；
-       退化为几何扫描：所有可见图片里取包含该点、面积最大的那张。 */
+    /* 兜底几何扫描：所有可见媒体里取包含该点、面积最大的那个 */
     let best = null
     let bestArea = 0
-    for (const el of document.images) {
-      if (!imgVisibleAt(el, x, y)) continue
+    const all = [...document.querySelectorAll('video'), ...document.images]
+    for (const el of all) {
+      if (!mediaVisibleAt(el, x, y)) continue
       const r = el.getBoundingClientRect()
       const area = r.width * r.height
       if (area > bestArea) { bestArea = area; best = el }
@@ -635,9 +658,11 @@
     s.skipClick = Date.now() + 500
     removeDup(s)
     setStatus(s, 'saving', '保存中…')
-    const src = (s.img.currentSrc || s.img.src || '').trim()
-    if (!src) { s.saving = false; setStatus(s, 'err', '没有图片地址'); return }
-    const payload = { url: location.href, title: (s.img.alt || document.title || '').trim() }
+    const src = getMediaSrc(s.img)
+    if (!src) { s.saving = false; setStatus(s, 'err', '没有媒体地址'); return }
+    const isVideo = s.img?.tagName === 'VIDEO' || /\.(mp4|webm|mov|mkv|avi|flv|f4v)(\?.*)?$/i.test(src)
+    const title = (s.img.getAttribute?.('title') || s.img.getAttribute?.('aria-label') || s.img.alt || document.title || '').trim()
+    const payload = { url: location.href, title, kind: isVideo ? 'video' : 'image' }
     if (src.startsWith('data:')) payload.dataUrl = src
     else if (src.startsWith('blob:')) {
       const dataUrl = await blobToDataUrl(src)
@@ -718,7 +743,7 @@
     if (panelAtPoint(e.clientX, e.clientY)) return
     if (session && !session.opened) return
     if (session?.opened) closePanel()
-    const img = imgFromEvent(e) || imgAtPoint(e.clientX, e.clientY)
+    const img = mediaFromEvent(e) || mediaAtPoint(e.clientX, e.clientY)
     if (!img) return
     const r = img.getBoundingClientRect()
     if (r.width < 24 || r.height < 24) return
@@ -768,11 +793,11 @@
   function onCtx(e) {
     if (session && !inHost(e)) e.preventDefault()
     try {
-      const img = imgFromEvent(e) || imgAtPoint(e.clientX, e.clientY) || (e.target?.closest ? e.target.closest('a')?.querySelector('img') : null)
-      if (img) {
+      const media = mediaFromEvent(e) || mediaAtPoint(e.clientX, e.clientY) || (e.target?.closest ? e.target.closest('a')?.querySelector('img, video') : null)
+      if (media) {
         lastContextMenuTarget = {
-          src: (img.currentSrc || img.src || '').trim(),
-          title: (img.alt || img.title || document.title || '').trim(),
+          src: getMediaSrc(media),
+          title: (media.getAttribute?.('title') || media.alt || media.title || document.title || '').trim(),
           time: Date.now(),
         }
       }
@@ -791,12 +816,12 @@
           const pathname = urlObj.pathname
           const links = Array.from(document.querySelectorAll('a'))
           const a = links.find((el) => el.href === req.linkUrl || (pathname.length > 2 && el.href && el.href.includes(pathname)))
-          const img = a?.querySelector('img') || a?.parentElement?.querySelector('img') || a?.closest('[data-test-id="pin"]')?.querySelector('img')
-          if (img) {
+          const media = a?.querySelector('img, video') || a?.parentElement?.querySelector('img, video') || a?.closest('[data-test-id="pin"]')?.querySelector('img, video')
+          if (media) {
             sendResponse({
               ok: true,
-              src: (img.currentSrc || img.src || '').trim(),
-              title: (img.alt || img.title || document.title || '').trim(),
+              src: getMediaSrc(media),
+              title: (media.getAttribute?.('title') || media.alt || media.title || document.title || '').trim(),
             })
             return true
           }

@@ -984,7 +984,7 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
           </div>
           <!-- 左上角格式小标 (PSD / GIF / MP4 / WEBP 等特殊格式，对齐 Eagle 设计) -->
           <span v-if="img.formatBadge && !img.isText" class="format-badge">{{ img.formatBadge }}</span>
-          <img v-else-if="img.src" :src="img.src" loading="lazy" decoding="async" draggable="false" @error="onCellImgError(img)" />
+          <img v-if="img.src" :src="img.src" loading="lazy" decoding="async" draggable="false" @error="onCellImgError(img)" />
           <div v-else-if="img.isText" class="docph">
             <b>{{ img.extLabel }}</b>
             <span>{{ lib.dispName(img.file_name) }}</span>
