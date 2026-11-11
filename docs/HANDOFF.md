@@ -398,3 +398,20 @@ PicNest 图巢：**GPL-3.0 fork 自 PicRand 2.77.0**，日常替代 Eagle。**�
 - **环境**：主 Chrome Default 已 0.1.4→0.1.5；Profile 1 仍 0.1.0（如果使用需重载）；测试窗口 profile `C:\Users\feb\.zcode\picnest-e2e-profile`（调试端口 9335，书签「(6) Pinterest」）。
 - **已知**：监听器被清空的具体触发源未锁定（bfcache / Eagle / 扩展权限均已排除）；自愈机制覆盖，任意 `document.open()`/页面重建都能在 1.2–2.5s 内恢复。
 - **工作区**：dev 干净；Public 仅保留 Gemini 的未提交更新文件（`apply.mjs` / `picnest-handlers.js` / `App.vue` / `api.js` / `HelpDialog.vue` / `UpdateDialog.vue`），`extension/` 与 dev 完全一致。
+
+## 十、2026-11-11 以图找图（Visual Search）架构纯化与灯箱重构收官
+
+- **架构与协议**（提交 `7ca6ae0` → `d7e1653` → `8996e3b` → `40225bb` → `749d1e4`，Public 同步 `2a4025a`）：
+  - **单引擎聚焦**：砍掉低质花瓣网与聚合标，聚焦 Pinterest Lens 官方逆向协议，通过 Node.js 原生 CONNECT 隧道建立双向代理通信，彻底根除 `net::ERR_INVALID_ARGUMENT`；
+  - **三栏布局与自适应裁剪**：左栏多图排队队列（QueueSidebar）、中栏原图自适应 ROI 框选（消除四周黑边，支持 350ms 防抖局部搜索）、右栏 CSS 连续瀑布流（无撕裂空白、浮岛卡片落影）；
+  - **灯箱（Lightbox）与人体工学重构**：
+    - 大图退出按钻取心智模型重构为左上角 `[← 返回]` 按钮（关联呈现分辨率、缩放比与序号），右上角为纯单色线框置顶图钉；
+    - 左右切图居中收拢到底部悬浮工具坞，消除光标剧烈横移；
+    - 底部工具坞放大至 `38×42px`（图标 `19px`），卡片操作坞放大至 `34×36px`（图标 `17px`），移除固有杂色，采用高透薄雾毛玻璃并靠近 100px 自动展开；
+    - 瀑布流支持向下无限滚动加载，切图至倒数第 5 张静默预取，消除末尾取模跑马灯 bug 与按键连击卡顿；
+    - 剔除外层遮罩点击误关机制，顶栏显式接入 `-webkit-app-region: drag` 原生窗口拖拽移动循环；
+    - 图片一键保存直存库根散图（「未分类」），规避路径漂移与 `syncCurrentDir` 异常。
+- **验证与分发产物**：
+  - `node tools/test-visual-search.mjs` 6 项自动化端到端测试 100% 通过；
+  - 最新免安装便携分发包：`dist-portable/PicNest-v0.1.0-windows-x64.zip`（219,358,794 字节，SHA-256: `EA09D8CD5E821794522BEBE7699B1807E6DE897A5837E366A336A44816C94B6C`）。
+- **架构专著**：详见大脑持久化归档 `visual_search_architecture.md`。
