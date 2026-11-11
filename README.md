@@ -81,6 +81,7 @@
 > 5. 在picnest的窗口和个性化里**复制采集扩展配对密钥**，并打开浏览器在任意图片长按左键激活面板中输入密钥即可激活成功！
 >  <img width="1416" height="400" alt="image" src="https://github.com/user-attachments/assets/cb282074-401c-4739-8afe-c81c8f829478" />
 >  <img width="631" height="360" alt="image" src="https://github.com/user-attachments/assets/816092d3-f116-4f5b-bde0-bfc0b99436dd" />
+
 > 6. *(推荐)* 点击浏览器地址栏右侧的拼图小图标 🧩，将「PicNest 图巢采集」固定在工具栏，点开可以随时预设保存文件夹。
 > 
 > **第二步：画师专属 3 种神仙采集姿势**
