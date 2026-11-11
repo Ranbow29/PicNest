@@ -19,18 +19,17 @@ const scale = computed({
   set: (val) => { vs.value.scale = Math.max(160, Math.min(420, Number(val))) }
 })
 
-// 检索引擎选择
-const engine = computed({
-  get: () => vs.value.engine || 'pinterest',
-  set: (val) => {
-    vs.value.engine = val
-    if (currentTask.value) {
-      currentTask.value.results = []
-      currentTask.value.bookmark = null
-      triggerSearch(currentTask.value)
-    }
+// 专精 Pinterest Lens 视觉检索 (已移除效果不佳的花瓣网与聚合切换)
+const engine = 'pinterest'
+
+// 图片加载完成后提取真实分辨率
+function onImageLoaded(e) {
+  const img = e.target
+  if (img && img.naturalWidth && img.naturalHeight && currentTask.value) {
+    if (!currentTask.value.width) currentTask.value.width = img.naturalWidth
+    if (!currentTask.value.height) currentTask.value.height = img.naturalHeight
   }
-})
+}
 
 // 窗口置顶状态
 const isAlwaysOnTop = ref(false)
@@ -209,7 +208,7 @@ async function triggerSearch(task, continueSearch = false) {
       dataUrl: String(task.dataUrl || ''),
       bbox: cleanBbox,
       bookmark: continueSearch && task.bookmark ? String(task.bookmark) : null,
-      engine: String(engine.value || 'pinterest'),
+      engine: 'pinterest',
       pageSize: 50
     }
 
@@ -375,32 +374,7 @@ onBeforeUnmount(() => {
         <header class="vs-topbar">
           <div class="topbar-left">
             <span class="app-icon">📌</span>
-            <span class="app-title">以图找图</span>
-
-            <!-- 检索引擎小标 -->
-            <div class="engine-tabs">
-              <button
-                class="tab-btn"
-                :class="{ active: engine === 'pinterest' }"
-                @click="engine = 'pinterest'"
-              >
-                📌 Pinterest Lens
-              </button>
-              <button
-                class="tab-btn"
-                :class="{ active: engine === 'huaban' }"
-                @click="engine = 'huaban'"
-              >
-                🌸 花瓣网
-              </button>
-              <button
-                class="tab-btn"
-                :class="{ active: engine === 'hybrid' }"
-                @click="engine = 'hybrid'"
-              >
-                🔀 聚合视图
-              </button>
-            </div>
+            <span class="app-title">Pinterest 以图找图</span>
           </div>
 
           <div class="topbar-right">
@@ -473,15 +447,16 @@ onBeforeUnmount(() => {
             </div>
           </aside>
 
-          <!-- 中栏：原图与局部框选 (CropViewport, ~350px) -->
+          <!-- 中栏：原图与局部框选 (CropViewport, 自适应图片尺寸，杜绝黑边干扰) -->
           <section class="crop-viewport">
             <div class="viewport-card">
-              <div class="crop-container" ref="cropContainerRef">
-                <template v-if="currentTask">
+              <div class="crop-stage-wrapper">
+                <div v-if="currentTask" class="crop-container" ref="cropContainerRef">
                   <img
                     ref="cropImgRef"
                     :src="currentTask.thumbUrl || currentTask.dataUrl"
                     class="query-img"
+                    @load="onImageLoaded"
                     @dragstart.prevent
                   />
 
@@ -522,7 +497,7 @@ onBeforeUnmount(() => {
                     <span class="handle w" @mousedown="startDrag('w', $event)" />
                     <span class="handle e" @mousedown="startDrag('e', $event)" />
                   </div>
-                </template>
+                </div>
 
                 <div v-else class="empty-query">
                   从左侧选择或拖入图片
@@ -575,7 +550,7 @@ onBeforeUnmount(() => {
               <div class="empty-msg">未找到相似结果，请尝试调整框选区域或换张图片</div>
             </div>
 
-            <!-- 结果瀑布流 -->
+            <!-- 结果瀑布流 (真 CSS Masonry) -->
             <div v-else class="waterfall-grid" :style="{ '--col-w': scale + 'px' }">
               <div
                 v-for="item in currentTask?.results"
@@ -587,18 +562,13 @@ onBeforeUnmount(() => {
               >
                 <div class="card-media">
                   <img :src="item.thumbUrl" class="card-img" loading="lazy" />
-                  
-                  <!-- 引擎标记 -->
-                  <span class="engine-badge" :class="item.engine">
-                    {{ item.engine === 'pinterest' ? 'Pinterest' : '花瓣' }}
-                  </span>
 
                   <!-- 已保存徽标 -->
                   <span v-if="item.saved" class="saved-badge">
                     ✓ 已入库
                   </span>
 
-                  <!-- 悬停操作浮层 -->
+                  <!-- 悬停操作浮层（对齐 PicNest 极简玻璃） -->
                   <div class="card-overlay">
                     <div class="action-dock">
                       <!-- 衍生递归搜索 (F) -->
@@ -637,7 +607,7 @@ onBeforeUnmount(() => {
                   </div>
                 </div>
 
-                <!-- 简要说明 -->
+                <!-- 简要说明（标题） -->
                 <div class="card-meta" v-if="item.title">
                   <div class="card-title">{{ item.title }}</div>
                 </div>
@@ -738,37 +708,6 @@ onBeforeUnmount(() => {
   letter-spacing: 0.5px;
 }
 
-.engine-tabs {
-  display: flex;
-  background: rgba(0, 0, 0, 0.25);
-  padding: 3px;
-  border-radius: 8px;
-  gap: 2px;
-  border: 1px solid rgba(255, 255, 255, 0.05);
-}
-
-.tab-btn {
-  background: transparent;
-  border: none;
-  color: var(--text-muted, #9ca3af);
-  font-size: 12.5px;
-  padding: 5px 12px;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-
-.tab-btn:hover {
-  color: #fff;
-  background: rgba(255, 255, 255, 0.06);
-}
-
-.tab-btn.active {
-  color: #fff;
-  background: var(--color-primary, #3b82f6);
-  font-weight: 500;
-  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.35);
-}
 
 .topbar-right {
   display: flex;
@@ -958,40 +897,57 @@ onBeforeUnmount(() => {
   background: rgba(59, 130, 246, 0.08);
 }
 
-/* 中栏：原图与框选 (CropViewport, ~360px) */
+/* 中栏：原图与框选 (CropViewport, 弹性宽度与自适应尺寸) */
 .crop-viewport {
-  width: 360px;
+  width: 380px;
+  min-width: 300px;
+  max-width: 480px;
   border-right: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
-  background: rgba(0, 0, 0, 0.08);
+  background: rgba(0, 0, 0, 0.1);
   display: flex;
   flex-direction: column;
   padding: 14px;
+  flex-shrink: 0;
 }
 
 .viewport-card {
   display: flex;
   flex-direction: column;
   height: 100%;
+  min-height: 0;
+}
+
+.crop-stage-wrapper {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  user-select: none;
+  background: transparent;
 }
 
 .crop-container {
   position: relative;
-  flex: 1;
-  max-height: 560px;
-  background: rgba(0, 0, 0, 0.35);
-  border-radius: 10px;
+  display: inline-block;
+  line-height: 0;
+  border-radius: 8px;
   overflow: hidden;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  user-select: none;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
+  max-width: 100%;
+  max-height: 100%;
 }
 
 .query-img {
-  max-width: 100%;
-  max-height: 100%;
-  object-fit: contain;
   display: block;
+  max-width: 100%;
+  max-height: calc(88vh - 160px);
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  border-radius: 8px;
+  pointer-events: none;
 }
 
 /* 裁剪遮罩与矩形框 */
@@ -1070,61 +1026,58 @@ onBeforeUnmount(() => {
   text-overflow: ellipsis;
 }
 
-/* 右栏：结果瀑布流 (ResultWaterfall) */
+/* 右栏：结果瀑布流 (真 CSS Masonry，无撕裂空白) */
 .waterfall-container {
   flex: 1;
   overflow-y: auto;
   padding: 16px;
+  scroll-behavior: smooth;
 }
 
 .waterfall-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(var(--col-w, 240px), 1fr));
-  grid-auto-flow: dense;
-  gap: 14px;
+  column-width: var(--col-w, 240px);
+  column-gap: 14px;
+  width: 100%;
 }
 
 .waterfall-card {
-  background: rgba(255, 255, 255, 0.03);
+  break-inside: avoid;
+  margin-bottom: 14px;
+  display: inline-block;
+  width: 100%;
+  background: var(--bg-2, rgba(255, 255, 255, 0.04));
   border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
-  border-radius: 10px;
+  border-radius: 12px;
   overflow: hidden;
   cursor: pointer;
-  transition: transform 0.18s ease, box-shadow 0.18s ease;
-  display: flex;
-  flex-direction: column;
+  box-shadow: var(--shadow-tile, 0 4px 16px rgba(0, 0, 0, 0.25));
+  transition: transform 0.22s cubic-bezier(0.2, 0.9, 0.3, 1), box-shadow 0.22s ease, border-color 0.18s;
+  vertical-align: top;
+  position: relative;
 }
 
 .waterfall-card:hover {
-  transform: translateY(-3px);
-  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.4);
-  border-color: rgba(255, 255, 255, 0.2);
+  transform: translateY(-4px);
+  box-shadow: var(--shadow-tile-hover, 0 12px 32px rgba(0, 0, 0, 0.5));
+  border-color: rgba(255, 255, 255, 0.22);
 }
 
 .card-media {
   position: relative;
   width: 100%;
-  background: #111;
   overflow: hidden;
+  background: #141416;
 }
 
 .card-img {
   width: 100%;
   height: auto;
   display: block;
+  transition: transform 0.3s ease;
 }
 
-.engine-badge {
-  position: absolute;
-  top: 8px;
-  left: 8px;
-  font-size: 10.5px;
-  padding: 2px 6px;
-  border-radius: 4px;
-  background: rgba(0, 0, 0, 0.65);
-  backdrop-filter: blur(4px);
-  color: #fff;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+.waterfall-card:hover .card-img {
+  transform: scale(1.02);
 }
 
 .saved-badge {
@@ -1132,25 +1085,28 @@ onBeforeUnmount(() => {
   top: 8px;
   right: 8px;
   font-size: 10.5px;
-  padding: 2px 6px;
-  border-radius: 4px;
-  background: rgba(16, 185, 129, 0.9);
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgba(16, 185, 129, 0.92);
   color: #fff;
   font-weight: 500;
-  box-shadow: 0 2px 6px rgba(16, 185, 129, 0.4);
+  box-shadow: 0 2px 8px rgba(16, 185, 129, 0.4);
+  backdrop-filter: blur(4px);
+  z-index: 2;
 }
 
-/* 悬停浮层 */
+/* 悬停浮层（对齐 PicNest 极简玻璃） */
 .card-overlay {
   position: absolute;
   inset: 0;
-  background: linear-gradient(180deg, rgba(0,0,0,0.1) 40%, rgba(0,0,0,0.85) 100%);
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.06) 20%, rgba(0, 0, 0, 0.8) 100%);
   opacity: 0;
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
   padding: 10px;
-  transition: opacity 0.15s ease;
+  transition: opacity 0.2s ease;
+  backdrop-filter: blur(2px);
 }
 
 .waterfall-card:hover .card-overlay {
@@ -1169,44 +1125,50 @@ onBeforeUnmount(() => {
 }
 
 .dock-btn {
-  background: rgba(255, 255, 255, 0.2);
-  backdrop-filter: blur(8px);
-  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.18);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
   color: #fff;
-  border-radius: 6px;
+  border-radius: 7px;
   padding: 6px 10px;
   font-size: 12px;
   cursor: pointer;
   transition: all 0.15s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
   text-align: center;
 }
 
 .dock-btn:hover {
-  background: rgba(255, 255, 255, 0.35);
+  background: rgba(255, 255, 255, 0.3);
 }
 
 .dock-btn.search-f {
-  background: rgba(59, 130, 246, 0.7);
-  border-color: rgba(59, 130, 246, 0.8);
+  background: rgba(59, 130, 246, 0.85);
+  border-color: rgba(59, 130, 246, 0.95);
   font-weight: 500;
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.35);
 }
 
 .dock-btn.search-f:hover {
-  background: rgba(59, 130, 246, 0.9);
+  background: #2563eb;
 }
 
 .dock-btn.save-s {
   flex: 1;
-  background: rgba(16, 185, 129, 0.7);
-  border-color: rgba(16, 185, 129, 0.8);
+  background: rgba(16, 185, 129, 0.8);
+  border-color: rgba(16, 185, 129, 0.9);
 }
 
 .dock-btn.save-s:hover {
-  background: rgba(16, 185, 129, 0.9);
+  background: #059669;
 }
 
 .dock-btn.save-s.saved {
-  background: rgba(16, 185, 129, 0.4);
+  background: rgba(16, 185, 129, 0.35);
+  color: #a7f3d0;
   cursor: default;
 }
 
@@ -1216,26 +1178,32 @@ onBeforeUnmount(() => {
 
 .card-meta {
   padding: 8px 10px;
-  font-size: 12px;
-  color: #d1d5db;
+  background: rgba(0, 0, 0, 0.2);
 }
 
 .card-title {
-  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text-2, #d1d5db);
+  line-height: 1.4;
   overflow: hidden;
-  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 
 /* 骨架屏 */
 .skeleton-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(var(--col-w, 240px), 1fr));
-  gap: 14px;
+  column-width: var(--col-w, 240px);
+  column-gap: 14px;
 }
 
 .skeleton-card {
+  break-inside: avoid;
+  margin-bottom: 14px;
+  display: inline-block;
+  width: 100%;
   background: rgba(255, 255, 255, 0.05);
-  border-radius: 10px;
+  border-radius: 12px;
   position: relative;
   overflow: hidden;
 }

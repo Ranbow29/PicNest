@@ -4881,246 +4881,179 @@ electron.ipcMain.handle("picnest-visual-search-query", async (_event, opts) => {
       return { ok: false, error: "无法解析或读取待检索图片" };
     }
 
-    // 3. Pinterest Lens 检索
-    if (engine === "pinterest" || engine === "hybrid") {
-      const crypto = require("crypto");
-      const boundary = "----WebKitFormBoundary" + crypto.randomBytes(16).toString("hex");
-      const crlf = "\r\n";
+    // 3. Pinterest Lens 视觉检索 (专精高精度以图找图)
+    const crypto = require("crypto");
+    const boundary = "----WebKitFormBoundary" + crypto.randomBytes(16).toString("hex");
+    const crlf = "\r\n";
 
-      const bx = Math.max(0, Math.min(1, Number(bbox?.[0] ?? 0)));
-      const by = Math.max(0, Math.min(1, Number(bbox?.[1] ?? 0)));
-      const bw = Math.max(0.01, Math.min(1 - bx, Number(bbox?.[2] ?? 1)));
-      const bh = Math.max(0.01, Math.min(1 - by, Number(bbox?.[3] ?? 1)));
+    const bx = Math.max(0, Math.min(1, Number(bbox?.[0] ?? 0)));
+    const by = Math.max(0, Math.min(1, Number(bbox?.[1] ?? 0)));
+    const bw = Math.max(0.01, Math.min(1 - bx, Number(bbox?.[2] ?? 1)));
+    const bh = Math.max(0.01, Math.min(1 - by, Number(bbox?.[3] ?? 1)));
 
-      const parts = [
-        Buffer.from(`--${boundary}${crlf}Content-Disposition: form-data; name="x"${crlf}${crlf}${bx}`),
-        Buffer.from(`${crlf}--${boundary}${crlf}Content-Disposition: form-data; name="y"${crlf}${crlf}${by}`),
-        Buffer.from(`${crlf}--${boundary}${crlf}Content-Disposition: form-data; name="w"${crlf}${crlf}${bw}`),
-        Buffer.from(`${crlf}--${boundary}${crlf}Content-Disposition: form-data; name="h"${crlf}${crlf}${bh}`),
-        Buffer.from(`${crlf}--${boundary}${crlf}Content-Disposition: form-data; name="page_size"${crlf}${crlf}${pageSize || 50}`),
-        Buffer.from(`${crlf}--${boundary}${crlf}Content-Disposition: form-data; name="image"; filename="query.jpg"${crlf}Content-Type: image/jpeg${crlf}${crlf}`),
-        jpegBuf,
-        Buffer.from(`${crlf}--${boundary}--${crlf}`)
-      ];
+    const parts = [
+      Buffer.from(`--${boundary}${crlf}Content-Disposition: form-data; name="x"${crlf}${crlf}${bx}`),
+      Buffer.from(`${crlf}--${boundary}${crlf}Content-Disposition: form-data; name="y"${crlf}${crlf}${by}`),
+      Buffer.from(`${crlf}--${boundary}${crlf}Content-Disposition: form-data; name="w"${crlf}${crlf}${bw}`),
+      Buffer.from(`${crlf}--${boundary}${crlf}Content-Disposition: form-data; name="h"${crlf}${crlf}${bh}`),
+      Buffer.from(`${crlf}--${boundary}${crlf}Content-Disposition: form-data; name="page_size"${crlf}${crlf}${pageSize || 50}`),
+      Buffer.from(`${crlf}--${boundary}${crlf}Content-Disposition: form-data; name="image"; filename="query.jpg"${crlf}Content-Type: image/jpeg${crlf}${crlf}`),
+      jpegBuf,
+      Buffer.from(`${crlf}--${boundary}--${crlf}`)
+    ];
 
-      const multipartBody = Buffer.concat(parts);
+    const multipartBody = Buffer.concat(parts);
 
-      let apiURL = "https://api.pinterest.com/v3/visual_search/extension/image/";
-      if (bookmark) {
-        apiURL += `?bookmark=${encodeURIComponent(bookmark)}`;
-      }
+    let apiURL = "https://api.pinterest.com/v3/visual_search/extension/image/";
+    if (bookmark) {
+      apiURL += `?bookmark=${encodeURIComponent(bookmark)}`;
+    }
 
-      // 获取当前代理配置 (优先读取环境变量，其次探测系统注册表/本地端口 7897/10809/10808)
-      const getProxyInfo = () => {
-        const envProxy = process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy || process.env.ALL_PROXY;
-        if (envProxy) return envProxy;
-        try {
-          const cp = require("child_process");
-          const reg = cp.execSync('reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyServer', { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
-          const m = reg.match(/ProxyServer\s+REG_SZ\s+([^\r\n]+)/i);
-          if (m && m[1]) {
-            const server = m[1].trim();
-            return server.startsWith("http") ? server : "http://" + server;
-          }
-        } catch (e) {}
-        return "http://127.0.0.1:7897";
-      };
-
-      // 双保险请求封装：优先 Chromium 原生 net.fetch；若遇到 ERR_INVALID_ARGUMENT 或网络异常则平滑回退至 Node CONNECT 隧道
-      let res = null;
+    // 获取当前代理配置 (优先读取环境变量，其次探测系统注册表/本地端口 7897/10809/10808)
+    const getProxyInfo = () => {
+      const envProxy = process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy || process.env.ALL_PROXY;
+      if (envProxy) return envProxy;
       try {
-        // 注意：Chromium URLRequest 规约禁止在 fetch headers 中显式指定 Content-Length，否则触发 net::ERR_INVALID_ARGUMENT
-        res = await electron.net.fetch(apiURL, {
-          method: "PUT",
-          headers: {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Referer": "https://www.pinterest.com/",
-            "Accept": "application/json, text/plain, */*",
-            "Content-Type": `multipart/form-data; boundary=${boundary}`
-          },
-          body: new Uint8Array(multipartBody)
-        });
-      } catch (fetchErr) {
-        picnestCollectLog("visual-search net.fetch fallback due to:", fetchErr?.message || fetchErr);
-        // 回退至 Node 原生 HTTP CONNECT 代理隧道
-        res = await new Promise((resolve, reject) => {
-          const http = require("http");
-          const https = require("https");
-          const targetUrl = new URL(apiURL);
-          let proxyUrlObj = null;
-          try { proxyUrlObj = new URL(getProxyInfo()); } catch (e) { proxyUrlObj = new URL("http://127.0.0.1:7897"); }
+        const cp = require("child_process");
+        const reg = cp.execSync('reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyServer', { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+        const m = reg.match(/ProxyServer\s+REG_SZ\s+([^\r\n]+)/i);
+        if (m && m[1]) {
+          const server = m[1].trim();
+          return server.startsWith("http") ? server : "http://" + server;
+        }
+      } catch (e) {}
+      return "http://127.0.0.1:7897";
+    };
 
-          const proxyReq = http.request({
-            host: proxyUrlObj.hostname,
-            port: Number(proxyUrlObj.port) || 7897,
-            method: "CONNECT",
-            path: `${targetUrl.hostname}:443`,
-            timeout: 10000
-          });
-
-          proxyReq.on("connect", (cRes, socket, _head) => {
-            if (cRes.statusCode !== 200) {
-              socket.destroy();
-              return reject(new Error(`代理 CONNECT 隧道失败: HTTP ${cRes.statusCode}`));
-            }
-
-            const httpsReq = https.request({
-              host: targetUrl.hostname,
-              port: 443,
-              path: targetUrl.pathname + targetUrl.search,
-              method: "PUT",
-              socket: socket,
-              agent: false,
-              headers: {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Referer": "https://www.pinterest.com/",
-                "Accept": "application/json, text/plain, */*",
-                "Content-Type": `multipart/form-data; boundary=${boundary}`,
-                "Content-Length": multipartBody.length
-              },
-              timeout: 25000
-            }, (httpsRes) => {
-              const chunks = [];
-              httpsRes.on("data", (chunk) => chunks.push(chunk));
-              httpsRes.on("end", () => {
-                const bodyText = Buffer.concat(chunks).toString("utf8");
-                try {
-                  const dataJson = JSON.parse(bodyText);
-                  resolve({
-                    ok: httpsRes.statusCode >= 200 && httpsRes.statusCode < 300,
-                    status: httpsRes.statusCode,
-                    statusText: httpsRes.statusMessage || "",
-                    json: async () => dataJson,
-                    text: async () => bodyText
-                  });
-                } catch (parseErr) {
-                  reject(new Error("Pinterest 响应非合法 JSON: " + bodyText.slice(0, 100)));
-                }
-              });
-            });
-
-            httpsReq.on("error", reject);
-            httpsReq.on("timeout", () => {
-              httpsReq.destroy(new Error("Pinterest 请求超时"));
-            });
-
-            httpsReq.write(multipartBody);
-            httpsReq.end();
-          });
-
-          proxyReq.on("error", reject);
-          proxyReq.on("timeout", () => {
-            proxyReq.destroy(new Error("连接代理服务器超时"));
-          });
-          proxyReq.end();
-        });
-      }
-
-      if (res.status === 401) {
-        return { ok: false, authRequired: true, error: "Pinterest 会话已过期或需登录 (401)" };
-      }
-      if (!res.ok) {
-        return { ok: false, error: `Pinterest 视觉检索异常 (HTTP ${res.status} ${res.statusText})` };
-      }
-
-      const result = await res.json();
-      if (result.status !== "success") {
-        return { ok: false, error: result.message || "Pinterest 响应非成功状态" };
-      }
-
-      const items = (result.data || []).map((item) => {
-        const w = item.image_medium_size_pixels?.width || 474;
-        const h = item.image_medium_size_pixels?.height || 600;
-        const med = item.image_medium_url || item.image_square_url || "";
-        const lrg = item.image_large_url || med;
-        const orig = lrg ? lrg.replace(/[0-9]+x/g, "originals") : med;
-        return {
-          id: String(item.id || crypto.randomUUID()),
-          engine: "pinterest",
-          title: item.title || item.grid_title || "",
-          thumbUrl: med,
-          largeUrl: lrg,
-          origUrl: orig,
-          width: w,
-          height: h,
-          aspectRatio: w / (h || 1),
-          sourceUrl: item.id ? `https://www.pinterest.com/pin/${item.id}/` : "",
-          saved: false
-        };
+    // 双保险请求封装：优先 Chromium 原生 net.fetch；若遇到 ERR_INVALID_ARGUMENT 或网络异常则平滑回退至 Node CONNECT 隧道
+    let res = null;
+    try {
+      // 注意：Chromium URLRequest 规约禁止在 fetch headers 中显式指定 Content-Length，否则触发 net::ERR_INVALID_ARGUMENT
+      res = await electron.net.fetch(apiURL, {
+        method: "PUT",
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          "Referer": "https://www.pinterest.com/",
+          "Accept": "application/json, text/plain, */*",
+          "Content-Type": `multipart/form-data; boundary=${boundary}`
+        },
+        body: new Uint8Array(multipartBody)
       });
+    } catch (fetchErr) {
+      picnestCollectLog("visual-search net.fetch fallback due to:", fetchErr?.message || fetchErr);
+      // 回退至 Node 原生 HTTP CONNECT 代理隧道
+      res = await new Promise((resolve, reject) => {
+        const http = require("http");
+        const https = require("https");
+        const targetUrl = new URL(apiURL);
+        let proxyUrlObj = null;
+        try { proxyUrlObj = new URL(getProxyInfo()); } catch (e) { proxyUrlObj = new URL("http://127.0.0.1:7897"); }
 
-      return {
-        ok: true,
-        items,
-        bookmark: result.bookmark || null,
-        queryMeta: { width: imgW, height: imgH }
-      };
-    }
+        const proxyReq = http.request({
+          host: proxyUrlObj.hostname,
+          port: Number(proxyUrlObj.port) || 7897,
+          method: "CONNECT",
+          path: `${targetUrl.hostname}:443`,
+          timeout: 10000
+        });
 
-    // 4. 花瓣网多源发现推荐流
-    if (engine === "huaban") {
-      try {
-        const endpoints = [
-          `https://api.huaban.com/discovery/illustrations?limit=${pageSize || 40}`,
-          `https://api.huaban.com/explore/illustration?limit=${pageSize || 40}`,
-          `https://api.huaban.com/popular?limit=${pageSize || 40}`,
-          `https://api.huaban.com/search/file?text=%E6%8F%92%E7%94%BB&sort=all&limit=${pageSize || 40}`
-        ];
-        let hbData = null;
-        for (const u of endpoints) {
-          try {
-            const res = await electron.net.fetch(u, {
-              headers: {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Referer": "https://huaban.com/",
-                "Accept": "application/json, text/plain, */*",
-                "X-Requested-With": "XMLHttpRequest"
+        proxyReq.on("connect", (cRes, socket, _head) => {
+          if (cRes.statusCode !== 200) {
+            socket.destroy();
+            return reject(new Error(`代理 CONNECT 隧道失败: HTTP ${cRes.statusCode}`));
+          }
+
+          const httpsReq = https.request({
+            host: targetUrl.hostname,
+            port: 443,
+            path: targetUrl.pathname + targetUrl.search,
+            method: "PUT",
+            socket: socket,
+            agent: false,
+            headers: {
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+              "Referer": "https://www.pinterest.com/",
+              "Accept": "application/json, text/plain, */*",
+              "Content-Type": `multipart/form-data; boundary=${boundary}`,
+              "Content-Length": multipartBody.length
+            },
+            timeout: 25000
+          }, (httpsRes) => {
+            const chunks = [];
+            httpsRes.on("data", (chunk) => chunks.push(chunk));
+            httpsRes.on("end", () => {
+              const bodyText = Buffer.concat(chunks).toString("utf8");
+              try {
+                const dataJson = JSON.parse(bodyText);
+                resolve({
+                  ok: httpsRes.statusCode >= 200 && httpsRes.statusCode < 300,
+                  status: httpsRes.statusCode,
+                  statusText: httpsRes.statusMessage || "",
+                  json: async () => dataJson,
+                  text: async () => bodyText
+                });
+              } catch (parseErr) {
+                reject(new Error("Pinterest 响应非合法 JSON: " + bodyText.slice(0, 100)));
               }
             });
-            if (res.ok) {
-              const d = await res.json();
-              if (d && (d.pins?.length || d.data?.pins?.length || d.data?.length || (Array.isArray(d) && d.length))) {
-                hbData = d;
-                break;
-              }
-            }
-          } catch (e) {}
-        }
+          });
 
-        const rawPins = hbData?.pins || hbData?.data?.pins || hbData?.data || (Array.isArray(hbData) ? hbData : []) || [];
-        const items = rawPins.map((p) => {
-          const fileKey = p.file?.key || p.key || "";
-          const w = p.file?.width || p.width || 400;
-          const h = p.file?.height || p.height || 600;
-          const thumb = fileKey ? `https://gd-hbimg.huaban.com/${fileKey}_fw240` : "";
-          const large = fileKey ? `https://gd-hbimg.huaban.com/${fileKey}_fw658` : "";
-          const orig = fileKey ? `https://gd-hbimg.huaban.com/${fileKey}` : "";
-          return {
-            id: String(p.pin_id || p.id || crypto.randomUUID()),
-            engine: "huaban",
-            title: p.raw_text || p.title || "花瓣采集",
-            thumbUrl: thumb,
-            largeUrl: large,
-            origUrl: orig,
-            width: w,
-            height: h,
-            aspectRatio: w / (h || 1),
-            sourceUrl: p.pin_id ? `https://huaban.com/pins/${p.pin_id}/` : "https://huaban.com/",
-            saved: false
-          };
-        }).filter((item) => item.thumbUrl);
+          httpsReq.on("error", reject);
+          httpsReq.on("timeout", () => {
+            httpsReq.destroy(new Error("Pinterest 请求超时"));
+          });
 
-        if (items.length === 0) {
-          return { ok: false, error: "花瓣网未返回公开推荐数据（可能需登录态或接口风控）" };
-        }
+          httpsReq.write(multipartBody);
+          httpsReq.end();
+        });
 
-        return { ok: true, items, bookmark: null, queryMeta: { width: imgW, height: imgH } };
-      } catch (hbErr) {
-        return { ok: false, error: "花瓣网网络请求失败: " + String(hbErr?.message || hbErr) };
-      }
+        proxyReq.on("error", reject);
+        proxyReq.on("timeout", () => {
+          proxyReq.destroy(new Error("连接代理服务器超时"));
+        });
+        proxyReq.end();
+      });
     }
 
-    return { ok: false, error: "未知的检索引擎: " + engine };
+    if (res.status === 401) {
+      return { ok: false, authRequired: true, error: "Pinterest 会话已过期或需登录 (401)" };
+    }
+    if (!res.ok) {
+      return { ok: false, error: `Pinterest 视觉检索异常 (HTTP ${res.status} ${res.statusText})` };
+    }
+
+    const result = await res.json();
+    if (result.status !== "success") {
+      return { ok: false, error: result.message || "Pinterest 响应非成功状态" };
+    }
+
+    const items = (result.data || []).map((item) => {
+      const w = item.image_medium_size_pixels?.width || 474;
+      const h = item.image_medium_size_pixels?.height || 600;
+      const med = item.image_medium_url || item.image_square_url || "";
+      const lrg = item.image_large_url || med;
+      const orig = lrg ? lrg.replace(/[0-9]+x/g, "originals") : med;
+      return {
+        id: String(item.id || crypto.randomUUID()),
+        engine: "pinterest",
+        title: item.title || item.grid_title || "",
+        thumbUrl: med,
+        largeUrl: lrg,
+        origUrl: orig,
+        width: w,
+        height: h,
+        aspectRatio: w / (h || 1),
+        sourceUrl: item.id ? `https://www.pinterest.com/pin/${item.id}/` : "",
+        saved: false
+      };
+    });
+
+    return {
+      ok: true,
+      items,
+      bookmark: result.bookmark || null,
+      queryMeta: { width: imgW, height: imgH }
+    };
   } catch (err) {
     return { ok: false, error: String(err?.message || err) };
   }
