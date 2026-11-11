@@ -2,7 +2,7 @@
 // 在网页图片上左键按住 → 光标处环形进度 → 弹出双栏面板（左：未分类/库根；右：全部文件夹）
 // 拖到目标松开即保存；松开在面板空白处则面板停留，可点击/滚动选择；Esc / 点外部取消。
 (() => {
-  const VERSION = '0.1.7'
+  const VERSION = '0.1.8'
   const prevLoaded = !!window.__picnestHoldCollectLoaded
   const prevVersion = String(window.__picnestHoldCollectVersion || '')
   /* 同版本重复注入：幂等返回。旧版本实例：0.1.4 起会挂 __picnestHoldCollectCleanup，
@@ -237,28 +237,35 @@
     }
     return (el.currentSrc || el.src || '').trim()
   }
-  function mediaFromEvent(e) {
-    const path = e.composedPath?.() || [e.target]
-    for (const n of path) {
-      if (!n || !n.tagName) continue
-      if (n.tagName === 'IMG' || n.tagName === 'VIDEO') return n
-      if (n.querySelector) {
-        const v = n.querySelector('video')
-        if (v && (v.currentSrc || v.src || v.querySelector('source') || v.poster)) return v
-        const im = n.querySelector('img')
-        if (im && (im.currentSrc || im.src)) return im
-      }
+
+  function isInteractiveOrTextTarget(target) {
+    if (!target) return false
+    // 忽略输入框、富文本、按钮、选择器、超链接等交互元素
+    if (target.closest?.('input, textarea, [contenteditable], button, select, option, label, a[href]:not([data-test-id="pin"])')) return true
+    // 忽略播放器控制面板（进度条、音量条、清晰度面板、弹幕栏等）
+    if (target.closest?.('[class*="control"], [class*="progress"], [class*="volume"], [class*="danmaku"], [class*="player-toolbar"], [class*="bottom-left"], [class*="bottom-right"]')) return true
+    // 评论区（B站、YouTube等）：评论文本、楼层、回复框等绝不触发采集；除非直接点在评论附带的大图上（>80px）
+    const commentBox = target.closest?.('[class*="comment"], [class*="reply"], [id*="comment"], [id*="reply"]')
+    if (commentBox) {
+      if (target.tagName !== 'IMG') return true
+      const r = target.getBoundingClientRect()
+      if (r.width < 80 || r.height < 80) return true
+      if (target.closest?.('[class*="avatar"], [class*="face"], [class*="head"], [class*="emoji"]')) return true
     }
-    return null
+    return false
   }
-  /* Pinterest、B站等站点会用覆盖层 DIV 盖住图片或视频：按坐标找底层可见媒体 */
+
+  /* 验证某个媒体元素是否确实位于 (x, y) 坐标处且可见 */
   function mediaVisibleAt(el, x, y) {
     if (!el || (el.tagName !== 'IMG' && el.tagName !== 'VIDEO')) return false
     const r = el.getBoundingClientRect()
-    if (r.width < 24 || r.height < 24) return false
+    if (r.width < 32 || r.height < 32) return false
+    // 坐标必须物理落在该元素的可视矩形边界内
     if (x < r.left || x > r.right || y < r.top || y > r.bottom) return false
     if (el.tagName === 'IMG') {
       if (!el.naturalWidth || !el.naturalHeight) return false
+      // 过滤评论头像、小表情等干扰项
+      if (el.closest?.('[class*="avatar"], [class*="face"], [class*="emoji"], [class*="head"]') && (r.width < 80 || r.height < 80)) return false
     } else if (el.tagName === 'VIDEO') {
       const src = getMediaSrc(el)
       if (!src && !el.poster && !el.videoWidth && el.readyState === 0) return false
@@ -267,26 +274,43 @@
     const cs = getComputedStyle(el)
     return cs.display !== 'none' && cs.visibility !== 'hidden' && Number(cs.opacity) !== 0
   }
+
+  function mediaFromEvent(e) {
+    if (isInteractiveOrTextTarget(e.target)) return null
+    const x = e.clientX
+    const y = e.clientY
+    const path = e.composedPath?.() || [e.target]
+    for (const n of path) {
+      if (!n || !n.tagName) continue
+      // 本身就是图片或视频，且鼠标确实在其边界内
+      if (n.tagName === 'IMG' || n.tagName === 'VIDEO') {
+        if (mediaVisibleAt(n, x, y)) return n
+      }
+      // 包装层容器（如 Pinterest 的遮罩层 DIV）：必须是紧凑容器且坐标在内
+      if (n.querySelector && n !== document.body && n !== document.documentElement) {
+        const nr = n.getBoundingClientRect?.()
+        if (nr && x >= nr.left && x <= nr.right && y >= nr.top && y <= nr.bottom && nr.width < 2500 && nr.height < 2500) {
+          const v = n.querySelector('video')
+          if (v && mediaVisibleAt(v, x, y)) return v
+          const im = n.querySelector('img')
+          if (im && mediaVisibleAt(im, x, y)) return im
+        }
+      }
+    }
+    return null
+  }
+
   function mediaAtPoint(x, y) {
     const list = document.elementsFromPoint?.(x, y) || []
     for (const el of list) {
+      if (isInteractiveOrTextTarget(el)) return null
       if (mediaVisibleAt(el, x, y)) return el
       const v = el.querySelector?.('video')
       if (v && mediaVisibleAt(v, x, y)) return v
       const im = el.querySelector?.('img')
       if (im && mediaVisibleAt(im, x, y)) return im
     }
-    /* 兜底几何扫描：所有可见媒体里取包含该点、面积最大的那个 */
-    let best = null
-    let bestArea = 0
-    const all = [...document.querySelectorAll('video'), ...document.images]
-    for (const el of all) {
-      if (!mediaVisibleAt(el, x, y)) continue
-      const r = el.getBoundingClientRect()
-      const area = r.width * r.height
-      if (area > bestArea) { bestArea = area; best = el }
-    }
-    return best
+    return null
   }
   function panelAtPoint(x, y) {
     const p = session?.panel
@@ -869,12 +893,13 @@
     if (e.pointerType === 'touch') return // 触屏长按留给系统/页面滚动
     if (inHost(e)) return
     if (panelAtPoint(e.clientX, e.clientY)) return
+    if (isInteractiveOrTextTarget(e.target)) return
     if (session && !session.opened) return
     if (session?.opened) closePanel()
     const img = mediaFromEvent(e) || mediaAtPoint(e.clientX, e.clientY)
     if (!img) return
     const r = img.getBoundingClientRect()
-    if (r.width < 24 || r.height < 24) return
+    if (r.width < 32 || r.height < 32) return
     startSession(e, img)
   }
 
