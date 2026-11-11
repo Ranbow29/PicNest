@@ -27,7 +27,7 @@ chrome.runtime.onStartup.addListener(setupMenus)
    - 更老的脚本（无 cleanup）/ 扩展更新后失去 runtime 的孤立脚本 / document 监听器失效
      → 只在 Pinterest 标签自动刷新一次（chrome.storage.session 记标记防循环），其它站点走 popup「修复本页」。
    content.js 在监听器全部注册完成之后才置 Loaded，并提供健康事件，部分初始化也能被发现。 */
-const CONTENT_VERSION = '0.2.5'
+const CONTENT_VERSION = '0.2.6'
 const RELOAD_KEY = 'picnestCollectReloads'
 const INJECTABLE_RE = /^(https?|file):\/\//i
 const PINTEREST_HOST_RE = /(^|\.)pinterest\.[a-z.]+$/i
@@ -374,7 +374,7 @@ async function downloadMediaViaTab(tabId, url) {
       target: { tabId },
       func: async (mediaUrl) => {
         try {
-          const res = await fetch(mediaUrl, { credentials: 'include' })
+          const res = await fetch(mediaUrl, { credentials: 'omit' })
           if (!res.ok) return { ok: false, status: res.status }
           const blob = await res.blob()
           const dataUrl = await new Promise((resolve, reject) => {
@@ -539,11 +539,12 @@ async function resolveVideoSource({ src, pinUrl, url, tabId }) {
   const pinId = pinMatch ? pinMatch[1] : ''
   if (pinId) {
     try {
-      const apiUrl = `https://www.pinterest.com/resource/PinResource/get/?data=%7B%22options%22%3A%7B%22id%22%3A%22${pinId}%22%2C%22field_set_key%22%3A%22detailed%22%7D%7D`
+      const apiUrl = `https://www.pinterest.com/resource/PinResource/get/?source_url=%2Fpin%2F${pinId}%2F&data=%7B%22options%22%3A%7B%22isPrefetch%22%3Afalse%2C%22id%22%3A%22${pinId}%22%2C%22field_set_key%22%3A%22auth_web_main_pin%22%2C%22is_landing_page%22%3Afalse%2C%22allowStale%22%3Afalse%2C%22no_fetch_context_on_resource%22%3Afalse%7D%2C%22context%22%3A%7B%7D%7D`
       const r = await fetch(apiUrl, {
         headers: {
           'X-Requested-With': 'XMLHttpRequest',
           'Accept': 'application/json',
+          'x-pinterest-pws-handler': 'www/pin/[id].js',
         },
         signal: AbortSignal.timeout(8000),
       })
@@ -551,31 +552,24 @@ async function resolveVideoSource({ src, pinUrl, url, tabId }) {
         const j = await r.json()
         const data = j?.resource_response?.data
         if (data) {
-          const scanObj = (obj, depth = 0) => {
-            if (!obj || typeof obj !== 'object' || depth > 8) return ''
-            if (obj.video_list && typeof obj.video_list === 'object') {
-              const vl = obj.video_list
-              for (const k of ['V_720P', 'V_1080P', 'V_EXP720P', 'V_EXPMP4']) {
-                if (vl[k]?.url && /\.mp4(\?.*)?$/i.test(vl[k].url)) return vl[k].url
-              }
-              for (const v of Object.values(vl)) {
-                if (v?.url && /\.mp4(\?.*)?$/i.test(v.url)) return v.url
-              }
+          const vl = data.videos?.video_list
+          if (vl) {
+            for (const k of ['V_720P', 'V_1080P', 'V_EXP720P', 'V_EXPMP4']) {
+              if (vl[k]?.url && /\.mp4(\?.*)?$/i.test(vl[k].url)) return { ok: true, src: vl[k].url, pinId }
             }
-            if (typeof obj.url === 'string' && obj.url.includes('pinimg.com/videos/') && /\.mp4(\?.*)?$/i.test(obj.url)) {
-              return obj.url
+            for (const v of Object.values(vl)) {
+              if (v?.url && /\.mp4(\?.*)?$/i.test(v.url)) return { ok: true, src: v.url, pinId }
             }
-            for (const k of Object.keys(obj)) {
-              if (typeof obj[k] === 'object') {
-                const res = scanObj(obj[k], depth + 1)
-                if (res) return res
-              }
-            }
-            return ''
           }
-          const found = scanObj(data)
-          if (found && /\.mp4(\?.*)?$/i.test(found)) {
-            return { ok: true, src: found, pinId }
+          const hlsUrl = data.story_pin_data?.pages?.[0]?.blocks?.[0]?.video?.video_list?.V_HLSV3_MOBILE?.url ||
+                         vl?.V_HLS?.url || vl?.V_HLSV4?.url || ''
+          if (hlsUrl) {
+            if (hlsUrl.includes('iht/hls')) {
+              const cand = hlsUrl.replace('iht/hls', 'iht/expMp4').replace('.m3u8', '_720w.mp4')
+              return { ok: true, src: cand, pinId }
+            }
+            const cand = hlsUrl.replace('hls', '720p').replace('.m3u8', '.mp4')
+            return { ok: true, src: cand, pinId }
           }
         }
       }

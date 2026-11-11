@@ -2,7 +2,7 @@
 // 在网页图片上左键按住 → 光标处环形进度 → 弹出双栏面板（左：未分类/库根；右：全部文件夹）
 // 拖到目标松开即保存；松开在面板空白处则面板停留，可点击/滚动选择；Esc / 点外部取消。
 (() => {
-  const VERSION = '0.2.5'
+  const VERSION = '0.2.6'
   const prevLoaded = !!window.__picnestHoldCollectLoaded
   const prevVersion = String(window.__picnestHoldCollectVersion || '')
   /* 同版本重复注入：幂等返回。旧版本实例：0.1.4 起会挂 __picnestHoldCollectCleanup，
@@ -977,15 +977,51 @@
   async function fetchPinterestVideoByPinId(pinId) {
     if (!pinId) return ''
     try {
-      const apiUrl = `/resource/PinResource/get/?data=%7B%22options%22%3A%7B%22id%22%3A%22${pinId}%22%2C%22field_set_key%22%3A%22detailed%22%7D%7D`
+      const host = window.location.hostname || 'www.pinterest.com'
+      const apiUrl = `https://${host}/resource/PinResource/get/?source_url=%2Fpin%2F${pinId}%2F&data=%7B%22options%22%3A%7B%22isPrefetch%22%3Afalse%2C%22id%22%3A%22${pinId}%22%2C%22field_set_key%22%3A%22auth_web_main_pin%22%2C%22is_landing_page%22%3Afalse%2C%22allowStale%22%3Afalse%2C%22no_fetch_context_on_resource%22%3Afalse%7D%2C%22context%22%3A%7B%7D%7D`
       const res = await fetch(apiUrl, {
-        headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json' },
-        credentials: 'include',
+        headers: {
+          'X-Requested-With': 'XMLHttpRequest',
+          'Accept': 'application/json',
+          'x-pinterest-pws-handler': 'www/pin/[id].js',
+        },
+        credentials: 'same-origin',
       })
       if (!res.ok) return ''
       const j = await res.json()
-      const found = scanObjectForPinterestVideo(j?.resource_response?.data)
-      if (found) return found
+      const data = j?.resource_response?.data
+      if (!data) return ''
+
+      // 1. 优先提取官方直出 720p/1080p MP4
+      const vl = data.videos?.video_list
+      if (vl) {
+        if (vl.V_720P?.url && /\.mp4(\?.*)?$/i.test(vl.V_720P.url)) return vl.V_720P.url
+        if (vl.V_1080P?.url && /\.mp4(\?.*)?$/i.test(vl.V_1080P.url)) return vl.V_1080P.url
+        if (vl.V_EXPMP4?.url && /\.mp4(\?.*)?$/i.test(vl.V_EXPMP4.url)) return vl.V_EXPMP4.url
+        for (const v of Object.values(vl)) {
+          if (v?.url && /\.mp4(\?.*)?$/i.test(v.url)) return v.url
+        }
+      }
+
+      // 2. Story Pin / 切片流精准路径映射（对齐 Eagle 核心算法）
+      const hlsUrl = data.story_pin_data?.pages?.[0]?.blocks?.[0]?.video?.video_list?.V_HLSV3_MOBILE?.url ||
+                     vl?.V_HLS?.url || vl?.V_HLSV4?.url || ''
+      if (hlsUrl) {
+        if (hlsUrl.includes('iht/hls')) {
+          const cand = hlsUrl.replace('iht/hls', 'iht/expMp4').replace('.m3u8', '_720w.mp4')
+          try {
+            const probe = await fetch(cand, { method: 'HEAD', credentials: 'omit' })
+            if (probe.ok) return cand
+          } catch {}
+          return cand
+        }
+        const cand = hlsUrl.replace('hls', '720p').replace('.m3u8', '.mp4')
+        try {
+          const probe = await fetch(cand, { method: 'HEAD', credentials: 'omit' })
+          if (probe.ok) return cand
+        } catch {}
+        return cand
+      }
     } catch {}
     return ''
   }
