@@ -36,6 +36,8 @@ function commitPan() {
   if (pan.raf) { cancelAnimationFrame(pan.raf); pan.raf = 0 }
   pan.active = false
   dragging.value = false
+  window.removeEventListener('mousemove', onMove)
+  window.removeEventListener('mouseup', onUp)
   lib.viewer.tx = pan.curTx
   lib.viewer.ty = pan.curTy
 }
@@ -338,7 +340,12 @@ watch(() => [lib.viewer.scale, lib.viewer.tx, lib.viewer.ty, lib.viewer.showInsp
 })
 watch(() => lib.lightbox.path, () => { lib.viewer.rot = 0; lib.viewer.flopX = false; nextTick(fitToWindow) })
 onMounted(() => { nextTick(() => fitToWindow(true)); window.addEventListener('keydown', onKey) })
-onBeforeUnmount(() => { if (flipRaf) cancelAnimationFrame(flipRaf); window.removeEventListener('keydown', onKey) })
+onBeforeUnmount(() => {
+  if (flipRaf) cancelAnimationFrame(flipRaf)
+  window.removeEventListener('keydown', onKey)
+  window.removeEventListener('mousemove', onMove)
+  window.removeEventListener('mouseup', onUp)
+})
 
 function onWheel(e) {
   if (kind.value === 'text') return // 文本编辑器里滚轮 = 滚动正文
@@ -388,6 +395,8 @@ function onDown(e) {
   pan.baseTx = lib.viewer.tx; pan.baseTy = lib.viewer.ty
   pan.curTx = lib.viewer.tx; pan.curTy = lib.viewer.ty
   dragging.value = true
+  window.addEventListener('mousemove', onMove)
+  window.addEventListener('mouseup', onUp)
 }
 function onMove(e) {
   if (lib.viewer.cropMode && cropAction.value) return // 裁剪框拖拽由 window 级监听独占
@@ -1180,7 +1189,7 @@ function onKey(e) {
 .note { font-size: 11.5px; color: var(--accent); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---- 视频：自绘控制条 ---- */
-.stage.video { max-width: none; background: #000; cursor: pointer; }
+.stage.video { max-width: none; background: #000; }
 .stage.gray { filter: grayscale(1); }
 .viewer :deep(.canvas-stage.gray) { filter: grayscale(1); }
 .video-dock { gap: 6px; }

@@ -2,7 +2,7 @@
 // 在网页图片上左键按住 → 光标处环形进度 → 弹出双栏面板（左：未分类/库根；右：全部文件夹）
 // 拖到目标松开即保存；松开在面板空白处则面板停留，可点击/滚动选择；Esc / 点外部取消。
 (() => {
-  const VERSION = '0.2.8'
+  const VERSION = '0.2.9'
   const prevLoaded = !!window.__picnestHoldCollectLoaded
   const prevVersion = String(window.__picnestHoldCollectVersion || '')
   /* 同版本重复注入：幂等返回。旧版本实例：0.1.4 起会挂 __picnestHoldCollectCleanup，
@@ -759,12 +759,18 @@
 
   function findPinUrl(el) {
     if (!el) return ''
-    // 优先：如果元素落在详情页主展示容器（Closeup / Story / 主舞台），100% 绑定当前页面的主 Pin ID！
-    if (el.closest?.('[data-test-id*="closeup"], [data-test-id*="story"], div[role="main"]')) {
-      if (/\/pin\/\d+/.test(location.href)) return location.href
+    // 1. 若元素落在列表项或网格卡片内部（右侧推荐流、瀑布流），100% 优先取卡片自身的 Pin ID！
+    const card = el.closest?.('div[role="listitem"], div[data-grid-item], [data-test-id="pin"]')
+    if (card) {
+      const a = card.querySelector?.('a[href*="/pin/"]') || card.closest?.('a[href*="/pin/"]')
+      if (a?.href && /\/pin\/\d+/.test(a.href)) return a.href
+      const pId = card.getAttribute?.('data-test-pin-id')
+      if (pId) return `https://www.pinterest.com/pin/${pId}/`
     }
+    // 2. 若直接点击在独立 a 标签上
     const pinA = el.closest?.('a[href*="/pin/"]')
     if (pinA?.href && /\/pin\/\d+/.test(pinA.href)) return pinA.href
+    // 3. 向上逐级探测带 data-test-pin-id 的容器
     let cur = el
     while (cur && cur !== document.body) {
       if (cur.getAttribute?.('data-test-pin-id')) {
@@ -774,7 +780,11 @@
       if (a?.href && /\/pin\/\d+/.test(a.href)) return a.href
       cur = cur.parentElement
     }
-    if (/\/pin\/\d+/.test(location.href)) return location.href
+    // 4. 只有当明确落在详情页主舞台容器（closeup / story）且绝不在任何推荐卡片内时，才绑定当前主页面 URL
+    if (el.closest?.('[data-test-id*="closeup"], [data-test-id*="story"]') && !card) {
+      if (/\/pin\/\d+/.test(location.href)) return location.href
+    }
+    if (/\/pin\/\d+/.test(location.href) && !card) return location.href
     return ''
   }
 
@@ -976,18 +986,15 @@
       const apiUrl = `https://${host}/resource/PinResource/get/?source_url=%2Fpin%2F${pinId}%2F&data=%7B%22options%22%3A%7B%22isPrefetch%22%3Afalse%2C%22id%22%3A%22${pinId}%22%2C%22field_set_key%22%3A%22auth_web_main_pin%22%2C%22is_landing_page%22%3Afalse%2C%22allowStale%22%3Afalse%2C%22no_fetch_context_on_resource%22%3Afalse%7D%2C%22context%22%3A%7B%7D%7D`
       const res = await fetch(apiUrl, {
         headers: {
-          'X-Requested-With': 'XMLHttpRequest',
-          'Accept': 'application/json',
           'x-pinterest-pws-handler': 'www/pin/[id].js',
         },
-        credentials: 'same-origin',
       })
       if (!res.ok) return ''
       const j = await res.json()
       const data = j?.resource_response?.data
       if (!data) return ''
 
-      // 1. 优先提取官方直出 720p/1080p MP4
+      // 1. 优先提取标准 720p / 1080p MP4 直链
       const vl = data.videos?.video_list
       if (vl) {
         if (vl.V_720P?.url && /\.mp4(\?.*)?$/i.test(vl.V_720P.url)) return vl.V_720P.url
@@ -1002,20 +1009,21 @@
       const hlsUrl = data.story_pin_data?.pages?.[0]?.blocks?.[0]?.video?.video_list?.V_HLSV3_MOBILE?.url ||
                      vl?.V_HLS?.url || vl?.V_HLSV4?.url || ''
       if (hlsUrl) {
-        if (hlsUrl.includes('iht/hls')) {
-          const cand = hlsUrl.replace('iht/hls', 'iht/expMp4').replace('.m3u8', '_720w.mp4')
-          try {
+        try {
+          if (hlsUrl.includes('iht/hls')) {
+            const cand = hlsUrl.replace('iht/hls', 'iht/expMp4').replace('.m3u8', '_720w.mp4')
             const probe = await fetch(cand, { method: 'HEAD', credentials: 'omit' })
             if (probe.ok) return cand
-          } catch {}
-          return cand
-        }
-        const cand = hlsUrl.replace('hls', '720p').replace('.m3u8', '.mp4')
-        try {
+            return cand
+          }
+          const cand = hlsUrl.replace('hls', '720p').replace('.m3u8', '.mp4').replace('m3u8', 'mp4')
           const probe = await fetch(cand, { method: 'HEAD', credentials: 'omit' })
           if (probe.ok) return cand
+          return cand
         } catch {}
-        return cand
+        return hlsUrl.includes('iht/hls')
+          ? hlsUrl.replace('iht/hls', 'iht/expMp4').replace('.m3u8', '_720w.mp4')
+          : hlsUrl.replace('hls', '720p').replace('.m3u8', '.mp4')
       }
     } catch {}
     return ''

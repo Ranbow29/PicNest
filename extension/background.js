@@ -6,19 +6,20 @@ const MENU_IMAGE = 'picnest-save-image'
 const MENU_PAGE = 'picnest-save-page'
 
 function setupMenus() {
-  chrome.contextMenus.removeAll(() => {
-    void chrome.runtime.lastError
-    chrome.contextMenus.create({ id: MENU_IMAGE, title: '保存至图巢', contexts: ['image', 'video', 'link'] }, () => {
-      void chrome.runtime.lastError
+  try {
+    chrome.contextMenus.removeAll(() => {
+      if (chrome.runtime.lastError) {}
+      chrome.contextMenus.create({ id: MENU_IMAGE, title: '保存至图巢', contexts: ['image', 'video', 'link'] }, () => {
+        if (chrome.runtime.lastError) {}
+      })
+      chrome.contextMenus.create({ id: MENU_PAGE, title: '保存页面截图到图巢', contexts: ['page'] }, () => {
+        if (chrome.runtime.lastError) {}
+      })
     })
-    chrome.contextMenus.create({ id: MENU_PAGE, title: '保存页面截图到图巢', contexts: ['page'] }, () => {
-      void chrome.runtime.lastError
-    })
-  })
+  } catch {}
 }
 
 chrome.runtime.onInstalled.addListener(setupMenus)
-chrome.runtime.onStartup.addListener(setupMenus)
 
 /* 标签页恢复（Edge 睡眠标签 / bfcache / 扩展重载）时浏览器不会自动重新注入 content script。
    这里在标签激活、URL 更新、窗口聚焦、扩展启动时主动探测：
@@ -27,7 +28,7 @@ chrome.runtime.onStartup.addListener(setupMenus)
    - 更老的脚本（无 cleanup）/ 扩展更新后失去 runtime 的孤立脚本 / document 监听器失效
      → 只在 Pinterest 标签自动刷新一次（chrome.storage.session 记标记防循环），其它站点走 popup「修复本页」。
    content.js 在监听器全部注册完成之后才置 Loaded，并提供健康事件，部分初始化也能被发现。 */
-const CONTENT_VERSION = '0.2.8'
+const CONTENT_VERSION = '0.2.9'
 const RELOAD_KEY = 'picnestCollectReloads'
 const INJECTABLE_RE = /^(https?|file):\/\//i
 const PINTEREST_HOST_RE = /(^|\.)pinterest\.[a-z.]+$/i
