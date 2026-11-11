@@ -4805,10 +4805,10 @@ electron.ipcMain.handle("picnest-visual-search-save", async (_event, item) => {
     const savePayload = {
       src: item.origUrl || item.largeUrl || item.thumbUrl,
       title: item.title || "灵感采集",
-      url: item.sourceUrl || (item.engine === "pinterest" ? "https://www.pinterest.com/" : "https://huaban.com/"),
-      referer: item.engine === "huaban" ? "https://huaban.com/" : "https://www.pinterest.com/",
+      url: item.sourceUrl || "https://www.pinterest.com/",
+      referer: "https://www.pinterest.com/",
       rootId: rootId,
-      rel: item.rel || ""
+      rel: "" // 直接存入未分类（库根散图）
     };
     const res = await picnestCollectSaveOne(savePayload);
     return { ok: true, data: res };

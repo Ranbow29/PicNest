@@ -240,7 +240,7 @@ function loadMore() {
   }
 }
 
-/* ================== 卡片动作 (F: 递归搜索 / S: 一键存库 / O: 原网) ================== */
+/* ================== 卡片动作 (F: 递归搜索 / S: 存入未分类 / O: 原网) ================== */
 // F: 递归搜索
 function researchItem(item, e) {
   e?.stopPropagation()
@@ -255,7 +255,7 @@ function researchItem(item, e) {
   triggerSearch(newTask)
 }
 
-// S: 保存到图巢
+// S: 保存到未分类（直接存入库根 loose 散图，杜绝丢失与报错）
 const savingMap = ref({})
 async function saveItem(item, e) {
   e?.stopPropagation()
@@ -264,22 +264,24 @@ async function saveItem(item, e) {
 
   try {
     const rootId = lib.activeRootId
-    const rel = lib.currentDirRel || ''
     const res = await api.visualSearchSave({
-      src: item.origUrl || item.largeUrl,
+      src: item.origUrl || item.largeUrl || item.thumbUrl,
       origUrl: item.origUrl,
       largeUrl: item.largeUrl,
       thumbUrl: item.thumbUrl,
       title: item.title || '灵感采集',
       sourceUrl: item.sourceUrl,
-      engine: item.engine,
+      engine: 'pinterest',
       rootId,
-      rel
+      rel: '' // 强制保存至未分类
     })
 
     if (res?.ok) {
       item.saved = true
-      lib.syncCurrentDir() // 刷新当前网格
+      // 安全刷新当前网格视图（修复此前不存在 syncCurrentDir 的函数未定义异常）
+      if (typeof lib.loadImages === 'function') {
+        lib.loadImages()
+      }
     } else {
       alert(res?.error || '保存失败')
     }
@@ -298,6 +300,101 @@ function openSource(item, e) {
   }
 }
 
+/* ================== 灯箱大图交互 (平移缩放、滚轮缩放、左右切图、快捷键) ================== */
+const previewZoom = ref(1)
+const previewTx = ref(0)
+const previewTy = ref(0)
+const isPreviewPanning = ref(false)
+const previewNatW = ref(0)
+const previewNatH = ref(0)
+let previewPanStart = { x: 0, y: 0, tx: 0, ty: 0 }
+
+function resetPreviewTransform() {
+  previewZoom.value = 1
+  previewTx.value = 0
+  previewTy.value = 0
+}
+
+function openPreview(item) {
+  if (!item) return
+  previewItem.value = item
+  previewNatW.value = item.width || 0
+  previewNatH.value = item.height || 0
+  resetPreviewTransform()
+}
+
+function closePreview() {
+  previewItem.value = null
+  resetPreviewTransform()
+}
+
+function onPreviewImgLoad(e) {
+  const img = e?.target
+  if (img && img.naturalWidth && img.naturalHeight) {
+    previewNatW.value = img.naturalWidth
+    previewNatH.value = img.naturalHeight
+  }
+}
+
+function onPreviewWheel(e) {
+  e.preventDefault()
+  const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15
+  const nextZoom = Math.min(10, Math.max(0.1, previewZoom.value * factor))
+  previewZoom.value = Number(nextZoom.toFixed(2))
+}
+
+function onPreviewMouseDown(e) {
+  if (e.button !== 0 || e.target.closest('button')) return
+  e.preventDefault()
+  isPreviewPanning.value = true
+  previewPanStart = { x: e.clientX, y: e.clientY, tx: previewTx.value, ty: previewTy.value }
+  window.addEventListener('mousemove', onPreviewMouseMove)
+  window.addEventListener('mouseup', onPreviewMouseUp)
+}
+
+function onPreviewMouseMove(e) {
+  if (!isPreviewPanning.value) return
+  previewTx.value = previewPanStart.tx + (e.clientX - previewPanStart.x)
+  previewTy.value = previewPanStart.ty + (e.clientY - previewPanStart.y)
+}
+
+function onPreviewMouseUp() {
+  isPreviewPanning.value = false
+  window.removeEventListener('mousemove', onPreviewMouseMove)
+  window.removeEventListener('mouseup', onPreviewMouseUp)
+}
+
+function togglePreviewZoom() {
+  if (previewZoom.value === 1) {
+    previewZoom.value = 2.0
+  } else {
+    resetPreviewTransform()
+  }
+}
+
+const previewIndex = computed(() => {
+  if (!previewItem.value || !currentTask.value?.results?.length) return -1
+  return currentTask.value.results.findIndex((i) => i.id === previewItem.value.id)
+})
+
+function prevPreviewItem(e) {
+  e?.stopPropagation()
+  const list = currentTask.value?.results || []
+  if (list.length <= 1) return
+  const cur = previewIndex.value
+  const prevIdx = (cur - 1 + list.length) % list.length
+  openPreview(list[prevIdx])
+}
+
+function nextPreviewItem(e) {
+  e?.stopPropagation()
+  const list = currentTask.value?.results || []
+  if (list.length <= 1) return
+  const cur = previewIndex.value
+  const nextIdx = (cur + 1) % list.length
+  openPreview(list[nextIdx])
+}
+
 /* ================== 键盘快捷键 (F / S / O / Esc / 方向键) ================== */
 function onGlobalKeyDown(e) {
   if (!isOpen.value) return
@@ -306,13 +403,45 @@ function onGlobalKeyDown(e) {
 
   const k = e.key.toUpperCase()
 
+  // 1. 灯箱大图预览态快捷键
+  if (previewItem.value) {
+    if (k === 'ESCAPE' || k === ' ') {
+      e.preventDefault()
+      closePreview()
+      return
+    }
+    if (e.key === 'ArrowLeft' || k === 'A') {
+      e.preventDefault()
+      prevPreviewItem()
+      return
+    }
+    if (e.key === 'ArrowRight' || k === 'D') {
+      e.preventDefault()
+      nextPreviewItem()
+      return
+    }
+    if (k === 'F') {
+      e.preventDefault()
+      researchItem(previewItem.value)
+      return
+    }
+    if (k === 'S') {
+      e.preventDefault()
+      saveItem(previewItem.value)
+      return
+    }
+    if (k === 'O') {
+      e.preventDefault()
+      openSource(previewItem.value)
+      return
+    }
+    return
+  }
+
+  // 2. 主视窗快捷键
   if (k === 'ESCAPE') {
     e.preventDefault()
-    if (previewItem.value) {
-      previewItem.value = null
-    } else {
-      lib.closeVisualSearch()
-    }
+    lib.closeVisualSearch()
     return
   }
 
@@ -335,7 +464,7 @@ function onGlobalKeyDown(e) {
     }
     if (k === ' ') {
       e.preventDefault()
-      previewItem.value = hoveredItem.value
+      openPreview(hoveredItem.value)
       return
     }
   }
@@ -558,7 +687,7 @@ onBeforeUnmount(() => {
                 class="waterfall-card"
                 @mouseenter="hoveredItem = item"
                 @mouseleave="hoveredItem = null"
-                @click="previewItem = item"
+                @click="openPreview(item)"
               >
                 <div class="card-media">
                   <img :src="item.thumbUrl" class="card-img" loading="lazy" />
@@ -586,7 +715,7 @@ onBeforeUnmount(() => {
                           class="dock-btn save-s"
                           :class="{ saved: item.saved }"
                           :disabled="item.saved || savingMap[item.id]"
-                          :title="item.saved ? '已存入图巢' : '保存到图巢当前文件夹 (S)'"
+                          :title="item.saved ? '已存入图巢' : '保存到未分类 (S)'"
                           @click="saveItem(item, $event)"
                         >
                           <span v-if="savingMap[item.id]">⌛ 保存中…</span>
@@ -624,21 +753,93 @@ onBeforeUnmount(() => {
           </main>
         </div>
 
-        <!-- 高清原图快速放大预览弹层 -->
-        <div v-if="previewItem" class="preview-layer" @click.self="previewItem = null">
-          <div class="preview-box">
-            <img :src="previewItem.largeUrl || previewItem.thumbUrl" class="preview-img" />
-            <div class="preview-bar">
-              <span class="preview-title">{{ previewItem.title || '灵感预览' }}</span>
-              <div class="preview-actions">
-                <button class="dock-btn" @click="researchItem(previewItem)">🔍 图片搜索 F</button>
-                <button class="dock-btn" :disabled="previewItem.saved" @click="saveItem(previewItem)">
-                  {{ previewItem.saved ? '✓ 已保存' : '💾 保存到图巢 S' }}
-                </button>
-                <button class="dock-btn" @click="openSource(previewItem)">↗ 原网查看 O</button>
-                <button class="dock-btn close" @click="previewItem = null">✕</button>
-              </div>
+        <!-- 灯箱大图预览层 (去旋转翻转裁剪，保留纯粹平移缩放、切图、搜图与存库) -->
+        <div
+          v-if="previewItem"
+          class="preview-lightbox-layer"
+          @wheel.prevent="onPreviewWheel"
+          @click.self="closePreview"
+        >
+          <!-- 顶栏信息与关闭条 -->
+          <div class="lightbox-topbar">
+            <div class="topbar-info">
+              <span class="index-pill" v-if="previewIndex >= 0">
+                {{ previewIndex + 1 }} / {{ currentTask?.results?.length || 0 }}
+              </span>
+              <span class="res-pill" v-if="previewNatW && previewNatH">
+                {{ previewNatW }} × {{ previewNatH }}
+              </span>
+              <span class="title-text" :title="previewItem.title">{{ previewItem.title || '灵感预览' }}</span>
             </div>
+            <div class="topbar-actions">
+              <button class="topbar-close-btn" title="退出预览 (Esc / 空格)" @click="closePreview">✕</button>
+            </div>
+          </div>
+
+          <!-- 左右切图浮动箭头 (队列结果大于 1 张时展示) -->
+          <button
+            v-if="(currentTask?.results?.length || 0) > 1"
+            class="lightbox-nav-btn prev"
+            title="上一张 (← / A)"
+            @click.stop="prevPreviewItem"
+          >
+            ‹
+          </button>
+          <button
+            v-if="(currentTask?.results?.length || 0) > 1"
+            class="lightbox-nav-btn next"
+            title="下一张 (→ / D)"
+            @click.stop="nextPreviewItem"
+          >
+            ›
+          </button>
+
+          <!-- 视图中心平移与缩放舞台 -->
+          <div
+            class="lightbox-stage"
+            :class="{ panning: isPreviewPanning }"
+            @mousedown="onPreviewMouseDown"
+            @dblclick="togglePreviewZoom"
+          >
+            <img
+              ref="previewImgRef"
+              :src="previewItem.largeUrl || previewItem.thumbUrl"
+              class="lightbox-img"
+              :style="{
+                transform: `translate3d(${previewTx}px, ${previewTy}px, 0) scale(${previewZoom})`
+              }"
+              @load="onPreviewImgLoad"
+              @dragstart.prevent
+            />
+          </div>
+
+          <!-- 底部悬浮药丸工具坞 (ZCode 极简磨砂风) -->
+          <div class="lightbox-dock">
+            <button class="dock-pill primary" title="以此图发起新搜索 (F)" @click="researchItem(previewItem)">
+              🔍 图片搜索 F
+            </button>
+            <button
+              class="dock-pill success"
+              :class="{ saved: previewItem.saved }"
+              :disabled="previewItem.saved || savingMap[previewItem.id]"
+              title="保存至未分类 (S)"
+              @click="saveItem(previewItem)"
+            >
+              <span v-if="savingMap[previewItem.id]">⌛ 保存中…</span>
+              <span v-else-if="previewItem.saved">✓ 已存入未分类</span>
+              <span v-else>💾 保存到未分类 S</span>
+            </button>
+            <button
+              v-if="previewItem.sourceUrl"
+              class="dock-pill"
+              title="浏览器打开原网页 (O)"
+              @click="openSource(previewItem)"
+            >
+              ↗ 来源 O
+            </button>
+            <button class="dock-pill zoom-reset" title="双击图片或点击此处重置缩放" @click="resetPreviewTransform">
+              {{ Math.round(previewZoom * 100) }}%
+            </button>
           </div>
         </div>
 
@@ -652,8 +853,8 @@ onBeforeUnmount(() => {
   position: fixed;
   inset: 0;
   z-index: 9999;
-  background: rgba(0, 0, 0, 0.72);
-  backdrop-filter: blur(16px);
+  background: rgba(0, 0, 0, 0.68);
+  backdrop-filter: blur(14px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -670,14 +871,14 @@ onBeforeUnmount(() => {
   max-width: 1560px;
   height: 88vh;
   min-height: 640px;
-  background: var(--bg-card, #1c1c24);
-  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.1));
+  background: var(--panel-strong);
+  border: 1px solid var(--border);
   border-radius: 16px;
-  box-shadow: 0 32px 80px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow-float);
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  color: var(--text-normal, #f3f4f6);
+  color: var(--text);
 }
 
 /* 顶栏控制区 */
@@ -687,15 +888,15 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  border-bottom: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
-  background: rgba(255, 255, 255, 0.02);
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
   user-select: none;
 }
 
 .topbar-left {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 12px;
 }
 
 .app-icon {
@@ -705,9 +906,9 @@ onBeforeUnmount(() => {
 .app-title {
   font-size: 15px;
   font-weight: 600;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.3px;
+  color: var(--text);
 }
-
 
 .topbar-right {
   display: flex;
@@ -718,58 +919,65 @@ onBeforeUnmount(() => {
 .scale-box {
   display: flex;
   align-items: center;
-  background: rgba(0, 0, 0, 0.25);
+  background: var(--bg-2);
   border-radius: 6px;
   padding: 2px 6px;
   gap: 6px;
-  border: 1px solid rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border);
 }
 
 .scale-btn {
   background: transparent;
   border: none;
-  color: #9ca3af;
+  color: var(--text-2);
   cursor: pointer;
   padding: 0 4px;
   font-size: 14px;
+  line-height: 1;
 }
 
 .scale-slider {
   width: 90px;
   height: 4px;
-  accent-color: var(--color-primary, #3b82f6);
+  accent-color: var(--accent);
   cursor: pointer;
 }
 
 .icon-btn {
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--panel);
+  border: 1px solid var(--border);
   border-radius: 6px;
   padding: 6px 10px;
-  color: #9ca3af;
+  color: var(--text-2);
   cursor: pointer;
   font-size: 13px;
   transition: all 0.15s;
 }
 
+.icon-btn:hover {
+  background: var(--accent-weak);
+  color: var(--accent);
+}
+
 .icon-btn.active {
-  background: rgba(59, 130, 246, 0.2);
-  color: #60a5fa;
-  border-color: rgba(59, 130, 246, 0.4);
+  background: var(--accent-weak);
+  color: var(--accent);
+  border-color: var(--accent);
 }
 
 .queue-counter {
   font-size: 12px;
-  color: #9ca3af;
-  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-2);
+  background: var(--bg-2);
   padding: 3px 8px;
   border-radius: 12px;
+  border: 1px solid var(--border);
 }
 
 .close-btn {
   background: transparent;
   border: none;
-  color: #9ca3af;
+  color: var(--text-2);
   font-size: 16px;
   padding: 6px 10px;
   border-radius: 6px;
@@ -778,8 +986,8 @@ onBeforeUnmount(() => {
 }
 
 .close-btn:hover {
-  background: rgba(239, 68, 68, 0.2);
-  color: #f87171;
+  background: rgba(239, 68, 68, 0.18);
+  color: #ef4444;
 }
 
 /* 主体三栏布局 */
@@ -792,15 +1000,15 @@ onBeforeUnmount(() => {
 /* 左栏：队列 (QueueSidebar, ~72px) */
 .queue-sidebar {
   width: 72px;
-  border-right: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
-  background: rgba(0, 0, 0, 0.15);
+  border-right: 1px solid var(--border);
+  background: var(--bg);
   overflow-y: auto;
   padding: 10px 8px;
   transition: background 0.15s;
 }
 
 .queue-sidebar.drop-active {
-  background: rgba(59, 130, 246, 0.15);
+  background: var(--accent-weak);
 }
 
 .queue-list {
@@ -819,7 +1027,8 @@ onBeforeUnmount(() => {
   cursor: pointer;
   border: 2px solid transparent;
   transition: all 0.15s ease;
-  background: #111;
+  background: var(--bg-2);
+  box-shadow: var(--shadow-tile);
 }
 
 .queue-thumb {
@@ -833,8 +1042,8 @@ onBeforeUnmount(() => {
 }
 
 .queue-item.active {
-  border-color: #3b82f6;
-  box-shadow: 0 0 12px rgba(59, 130, 246, 0.6);
+  border-color: var(--accent);
+  box-shadow: 0 0 10px var(--accent-weak);
 }
 
 .queue-del-btn {
@@ -865,8 +1074,8 @@ onBeforeUnmount(() => {
 .queue-spinner {
   position: absolute;
   inset: 0;
-  background: rgba(0, 0, 0, 0.55);
-  border: 2px solid #3b82f6;
+  background: rgba(0, 0, 0, 0.45);
+  border: 2px solid var(--accent);
   border-top-color: transparent;
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
@@ -880,9 +1089,9 @@ onBeforeUnmount(() => {
   width: 52px;
   height: 52px;
   border-radius: 8px;
-  border: 1px dashed rgba(255, 255, 255, 0.2);
+  border: 1px dashed var(--border);
   background: transparent;
-  color: #9ca3af;
+  color: var(--text-2);
   font-size: 20px;
   display: flex;
   align-items: center;
@@ -892,9 +1101,9 @@ onBeforeUnmount(() => {
 }
 
 .queue-add-btn:hover {
-  border-color: #3b82f6;
-  color: #3b82f6;
-  background: rgba(59, 130, 246, 0.08);
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-weak);
 }
 
 /* 中栏：原图与框选 (CropViewport, 弹性宽度与自适应尺寸) */
@@ -902,8 +1111,8 @@ onBeforeUnmount(() => {
   width: 380px;
   min-width: 300px;
   max-width: 480px;
-  border-right: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
-  background: rgba(0, 0, 0, 0.1);
+  border-right: 1px solid var(--border);
+  background: var(--bg-2);
   display: flex;
   flex-direction: column;
   padding: 14px;
@@ -934,7 +1143,7 @@ onBeforeUnmount(() => {
   line-height: 0;
   border-radius: 8px;
   overflow: hidden;
-  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--shadow-float);
   max-width: 100%;
   max-height: 100%;
 }
@@ -954,7 +1163,7 @@ onBeforeUnmount(() => {
 .crop-mask {
   position: absolute;
   inset: 0;
-  background: rgba(0, 0, 0, 0.6);
+  background: rgba(0, 0, 0, 0.62);
   pointer-events: none;
 }
 
@@ -992,13 +1201,13 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   margin-top: 10px;
   font-size: 12px;
-  color: #9ca3af;
+  color: var(--text-2);
 }
 
 .action-pill {
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  color: #d1d5db;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text-2);
   border-radius: 6px;
   padding: 4px 10px;
   font-size: 12px;
@@ -1008,9 +1217,9 @@ onBeforeUnmount(() => {
 
 .action-pill:hover,
 .action-pill.active {
-  background: rgba(59, 130, 246, 0.2);
-  color: #60a5fa;
-  border-color: rgba(59, 130, 246, 0.4);
+  background: var(--accent-weak);
+  color: var(--accent);
+  border-color: var(--accent);
 }
 
 .res-text {
@@ -1020,7 +1229,7 @@ onBeforeUnmount(() => {
 .task-info {
   margin-top: 8px;
   font-size: 12px;
-  color: #9ca3af;
+  color: var(--text-2);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1032,6 +1241,7 @@ onBeforeUnmount(() => {
   overflow-y: auto;
   padding: 16px;
   scroll-behavior: smooth;
+  background: var(--panel-strong);
 }
 
 .waterfall-grid {
@@ -1045,12 +1255,12 @@ onBeforeUnmount(() => {
   margin-bottom: 14px;
   display: inline-block;
   width: 100%;
-  background: var(--bg-2, rgba(255, 255, 255, 0.04));
-  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  background: var(--bg-2);
+  border: 1px solid var(--border);
   border-radius: 12px;
   overflow: hidden;
   cursor: pointer;
-  box-shadow: var(--shadow-tile, 0 4px 16px rgba(0, 0, 0, 0.25));
+  box-shadow: var(--shadow-tile);
   transition: transform 0.22s cubic-bezier(0.2, 0.9, 0.3, 1), box-shadow 0.22s ease, border-color 0.18s;
   vertical-align: top;
   position: relative;
@@ -1058,15 +1268,15 @@ onBeforeUnmount(() => {
 
 .waterfall-card:hover {
   transform: translateY(-4px);
-  box-shadow: var(--shadow-tile-hover, 0 12px 32px rgba(0, 0, 0, 0.5));
-  border-color: rgba(255, 255, 255, 0.22);
+  box-shadow: var(--shadow-tile-hover);
+  border-color: var(--accent);
 }
 
 .card-media {
   position: relative;
   width: 100%;
   overflow: hidden;
-  background: #141416;
+  background: rgba(0, 0, 0, 0.2);
 }
 
 .card-img {
@@ -1099,7 +1309,7 @@ onBeforeUnmount(() => {
 .card-overlay {
   position: absolute;
   inset: 0;
-  background: linear-gradient(180deg, rgba(0, 0, 0, 0.06) 20%, rgba(0, 0, 0, 0.8) 100%);
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.04) 20%, rgba(0, 0, 0, 0.8) 100%);
   opacity: 0;
   display: flex;
   flex-direction: column;
@@ -1178,12 +1388,12 @@ onBeforeUnmount(() => {
 
 .card-meta {
   padding: 8px 10px;
-  background: rgba(0, 0, 0, 0.2);
+  background: var(--panel);
 }
 
 .card-title {
   font-size: 12px;
-  color: var(--text-2, #d1d5db);
+  color: var(--text);
   line-height: 1.4;
   overflow: hidden;
   display: -webkit-box;
@@ -1202,7 +1412,7 @@ onBeforeUnmount(() => {
   margin-bottom: 14px;
   display: inline-block;
   width: 100%;
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--panel);
   border-radius: 12px;
   position: relative;
   overflow: hidden;
@@ -1213,7 +1423,7 @@ onBeforeUnmount(() => {
   position: absolute;
   inset: 0;
   transform: translateX(-100%);
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.06), transparent);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.08), transparent);
   animation: shimmer 1.4s infinite;
 }
 
@@ -1229,7 +1439,7 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: center;
   height: 60%;
-  color: #9ca3af;
+  color: var(--text-2);
   gap: 10px;
 }
 
@@ -1239,13 +1449,18 @@ onBeforeUnmount(() => {
 }
 
 .retry-btn {
-  background: #3b82f6;
+  background: var(--accent);
   border: none;
   color: #fff;
   border-radius: 6px;
   padding: 6px 14px;
   font-size: 13px;
   cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.retry-btn:hover {
+  opacity: 0.9;
 }
 
 .load-more-box {
@@ -1256,9 +1471,9 @@ onBeforeUnmount(() => {
 }
 
 .load-more-btn {
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  color: #e5e7eb;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text);
   padding: 8px 20px;
   border-radius: 20px;
   cursor: pointer;
@@ -1267,71 +1482,245 @@ onBeforeUnmount(() => {
 }
 
 .load-more-btn:hover {
-  background: rgba(59, 130, 246, 0.2);
-  border-color: #3b82f6;
-  color: #60a5fa;
+  background: var(--accent-weak);
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .loading-more-hint {
   text-align: center;
-  color: #9ca3af;
+  color: var(--text-2);
   font-size: 13px;
   margin-top: 16px;
 }
 
-/* 放大预览层 */
-.preview-layer {
+/* ================== 灯箱大图预览层 (去旋转翻转裁剪，沉浸平移缩放、切图、搜图与存库) ================== */
+.preview-lightbox-layer {
   position: fixed;
   inset: 0;
   z-index: 10000;
-  background: rgba(0, 0, 0, 0.85);
-  backdrop-filter: blur(12px);
+  background: rgba(0, 0, 0, 0.82);
+  backdrop-filter: blur(20px);
   display: flex;
   align-items: center;
   justify-content: center;
-  animation: fadeIn 0.12s ease-out;
-}
-
-.preview-box {
-  max-width: 85vw;
-  max-height: 85vh;
-  display: flex;
-  flex-direction: column;
-  background: #181820;
-  border-radius: 12px;
   overflow: hidden;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  user-select: none;
+  animation: fadeIn 0.14s ease-out;
 }
 
-.preview-img {
-  max-width: 80vw;
-  max-height: 75vh;
-  object-fit: contain;
-  display: block;
-  background: #0d0d12;
+/* 顶栏信息与关闭条 */
+.lightbox-topbar {
+  position: absolute;
+  top: 16px;
+  left: 20px;
+  right: 20px;
+  z-index: 10;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  pointer-events: none;
 }
 
-.preview-bar {
+.topbar-info {
+  pointer-events: auto;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 10px 16px;
-  background: rgba(255, 255, 255, 0.03);
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  gap: 10px;
+  background: rgba(18, 18, 24, 0.65);
+  backdrop-filter: blur(14px);
+  padding: 6px 14px;
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #f3f4f6;
+  font-size: 13px;
 }
 
-.preview-title {
-  font-size: 13px;
-  color: #e5e7eb;
-  max-width: 400px;
+.index-pill {
+  font-weight: 600;
+  color: #fff;
+}
+
+.res-pill {
+  font-family: monospace;
+  opacity: 0.75;
+  font-size: 12px;
+}
+
+.title-text {
+  max-width: 480px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  opacity: 0.9;
 }
 
-.preview-actions {
+.topbar-actions {
+  pointer-events: auto;
+}
+
+.topbar-close-btn {
+  background: rgba(18, 18, 24, 0.65);
+  backdrop-filter: blur(14px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #fff;
+  border-radius: 50%;
+  width: 36px;
+  height: 36px;
   display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.topbar-close-btn:hover {
+  background: rgba(239, 68, 68, 0.85);
+  transform: scale(1.06);
+}
+
+/* 左右切图浮动箭头 */
+.lightbox-nav-btn {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 10;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: rgba(18, 18, 24, 0.55);
+  backdrop-filter: blur(14px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font-size: 28px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.18s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+
+.lightbox-nav-btn.prev {
+  left: 20px;
+}
+
+.lightbox-nav-btn.next {
+  right: 20px;
+}
+
+.lightbox-nav-btn:hover {
+  background: rgba(255, 255, 255, 0.22);
+  transform: translateY(-50%) scale(1.08);
+}
+
+/* 舞台与大图 */
+.lightbox-stage {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  cursor: grab;
+}
+
+.lightbox-stage.panning {
+  cursor: grabbing;
+}
+
+.lightbox-img {
+  max-width: 90vw;
+  max-height: 86vh;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  pointer-events: none;
+  border-radius: 8px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.65);
+  transform-origin: center center;
+  transition: transform 0.15s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+
+.lightbox-stage.panning .lightbox-img {
+  transition: none !important;
+}
+
+/* 底部悬浮药丸工具坞 */
+.lightbox-dock {
+  position: absolute;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  display: flex;
+  align-items: center;
   gap: 8px;
+  background: rgba(18, 18, 24, 0.82);
+  backdrop-filter: blur(20px);
+  padding: 8px 16px;
+  border-radius: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+}
+
+.dock-pill {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #f3f4f6;
+  border-radius: 18px;
+  padding: 7px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.dock-pill:hover {
+  background: rgba(255, 255, 255, 0.18);
+  transform: translateY(-1px);
+}
+
+.dock-pill.primary {
+  background: rgba(59, 130, 246, 0.85);
+  border-color: rgba(59, 130, 246, 0.95);
+  color: #fff;
+  box-shadow: 0 4px 14px rgba(59, 130, 246, 0.35);
+}
+
+.dock-pill.primary:hover {
+  background: #2563eb;
+}
+
+.dock-pill.success {
+  background: rgba(16, 185, 129, 0.85);
+  border-color: rgba(16, 185, 129, 0.95);
+  color: #fff;
+  box-shadow: 0 4px 14px rgba(16, 185, 129, 0.35);
+}
+
+.dock-pill.success:hover {
+  background: #059669;
+}
+
+.dock-pill.success.saved {
+  background: rgba(16, 185, 129, 0.3);
+  border-color: rgba(16, 185, 129, 0.4);
+  color: #a7f3d0;
+  cursor: default;
+  transform: none;
+  box-shadow: none;
+}
+
+.dock-pill.zoom-reset {
+  font-family: monospace;
+  min-width: 52px;
+  justify-content: center;
+  opacity: 0.85;
 }
 </style>
