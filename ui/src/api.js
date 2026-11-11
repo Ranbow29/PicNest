@@ -58,6 +58,10 @@ export const api = {
   dragEnd: () => invoke('picnestDragEnd'),
   psdPreview: (filePath) => invoke('picnestPsdPreview', filePath),
   viewPreview: (filePath) => invoke('picnestViewPreview', filePath),
+  // 视觉搜索（以图找图）
+  visualSearchQuery: (opts) => invoke('picnestVisualSearchQuery', opts),
+  visualSearchSave: (opts) => invoke('picnestVisualSearchSave', opts),
+  setAlwaysOnTop: (flag) => invoke('picnestSetAlwaysOnTop', flag),
   // 自动更新
   appVersion: () => invoke('picnestAppVersion'),
   openExternal: (url) => invoke('picnestOpenExternal', url),

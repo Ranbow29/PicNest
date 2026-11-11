@@ -18,6 +18,7 @@ import TaskProgress from './components/TaskProgress.vue'
 import PluginManager from './components/PluginManager.vue'
 import HelpDialog from './components/HelpDialog.vue'
 import UpdateDialog from './components/UpdateDialog.vue'
+import VisualSearchDialog from './components/VisualSearchDialog.vue'
 import { api } from './api.js'
 import { refreshPluginThemes } from './lib/plugins'
 import ResizeHandle from './components/ResizeHandle.vue'
@@ -85,6 +86,7 @@ function onKeydown(e) {
     /* 分层退出：输入框/灯箱/弹窗/右键菜单各有其主，都没有才清空选中 */
     if (isTypingTarget(e.target)) return
     if (updateDialogRef.value?.isOpen?.()) { e.preventDefault(); updateDialogRef.value.close(); return }
+    if (lib.visualSearch?.open) { e.preventDefault(); lib.closeVisualSearch(); return }
     if (lib.helpOpen) { e.preventDefault(); lib.closeHelp(); return }
     if (lib.pluginsOpen) { e.preventDefault(); lib.closePlugins(); return }
     if (lib.lightbox.open) return // Lightbox 自己处理（含裁剪态）
@@ -96,6 +98,14 @@ function onKeydown(e) {
     if (lib.filterBarOpen) return
     lib.clearSelections()
     return
+  }
+  if (e.shiftKey && (e.key === 'S' || e.code === 'KeyS') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    if (isTypingTarget(e.target)) return
+    if (lib.selectedPaths?.length || lib.activeImage?.file_path) {
+      e.preventDefault()
+      lib.openVisualSearchForSelected()
+      return
+    }
   }
   if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return
   if (isTypingTarget(e.target)) return
@@ -246,6 +256,7 @@ const chipStyle = computed(() => {
   <PluginManager />
   <HelpDialog />
   <UpdateDialog ref="updateDialogRef" />
+  <VisualSearchDialog />
 </template>
 
 <style scoped>

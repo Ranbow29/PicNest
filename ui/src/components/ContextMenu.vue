@@ -73,6 +73,7 @@ const items = computed(() => {
       label: (folderHasCover ? '✓ ' : '') + '设为文件夹封面',
       run: () => (folderHasCover ? lib.clearFolderCover(relInfo.rel) : setAsFolderCover()),
     }] : []),
+    { key: 'visualSearch', label: nSel > 1 ? `以图找图（${nSel} 张排队，Shift+S）` : '以图找图（Shift+S）', run: () => lib.openVisualSearchForSelected() },
     { key: 'dupes', label: '查找重复…', run: dupForImage },
     { key: 'uncat', label: nSel > 1 ? `移入未分类（${nSel} 张）` : '移入未分类', run: () => {
       const path = menu.value.image.file_path

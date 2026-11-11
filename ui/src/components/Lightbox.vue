@@ -1012,6 +1012,7 @@ function onKey(e) {
       <button class="dock-btn" :class="{ on: lib.viewer.cropMode }" :disabled="lib.viewer.rot % 180 !== 0 || lib.viewer.flopX"
               :title="lib.viewer.cropMode ? '退出裁切' : '裁切（旋转/翻转时不可用）'"
               @click="toggleCrop">⛶</button>
+      <button class="dock-btn" title="以图找图（Shift+S）" @click="lib.openVisualSearch([lib.lightbox.path])">🔍</button>
       <i class="vsep" />
       <button class="dock-btn wide" :class="{ on: hasTransform }" :disabled="!hasTransform || saveBusy"
               title="保存旋转/翻转（写回原图，原件自动备份）" @click="saveTransform">{{ saveBusy ? '保存中…' : '保存' }}</button>

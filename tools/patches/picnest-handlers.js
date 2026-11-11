@@ -4782,5 +4782,226 @@ electron.ipcMain.handle("picnest-quit-and-install", async (event, { zipPath, tar
 });
 /* ==== /M8 自动更新模块 ==== */
 
+/* ==== M9 视觉搜索模块（以图找图 Visual Search & Lens Pipeline）==== */
+
+electron.ipcMain.handle("picnest-set-always-on-top", (_event, flag) => {
+  try {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.setAlwaysOnTop(!!flag);
+      return { ok: true, alwaysOnTop: !!flag };
+    }
+  } catch (e) {}
+  return { ok: false };
+});
+
+electron.ipcMain.handle("picnest-visual-search-save", async (_event, item) => {
+  try {
+    if (!item) return { ok: false, error: "未传入保存项目" };
+    let rootId = item.rootId || picnestCollectRootId;
+    if (!rootId) {
+      const roots = picnestCollectRoots();
+      if (roots.length > 0) rootId = roots[0].id;
+    }
+    const savePayload = {
+      src: item.origUrl || item.largeUrl || item.thumbUrl,
+      title: item.title || "灵感采集",
+      url: item.sourceUrl || (item.engine === "pinterest" ? "https://www.pinterest.com/" : "https://huaban.com/"),
+      referer: item.engine === "huaban" ? "https://huaban.com/" : "https://www.pinterest.com/",
+      rootId: rootId,
+      rel: item.rel || ""
+    };
+    const res = await picnestCollectSaveOne(savePayload);
+    return { ok: true, data: res };
+  } catch (err) {
+    picnestCollectLog("visual-search-save error", String(err?.message || err));
+    return { ok: false, error: String(err?.message || err) };
+  }
+});
+
+electron.ipcMain.handle("picnest-visual-search-query", async (_event, opts) => {
+  const { filePath, dataUrl, bbox, bookmark, engine = "pinterest", pageSize = 50 } = opts || {};
+  try {
+    let jpegBuf = null;
+    let imgW = 0, imgH = 0;
+
+    // 1. 处理本地文件输入
+    if (filePath && fs.existsSync(filePath)) {
+      try {
+        let nativeImg = electron.nativeImage.createFromPath(filePath);
+        if (nativeImg.isEmpty()) {
+          const ext = path.extname(filePath).toLowerCase();
+          if (ext === ".psd") {
+            const cacheThumb = path.join(dataDir, "cache", `psd-${crypto.createHash("md5").update(filePath).digest("hex")}.png`);
+            if (fs.existsSync(cacheThumb)) nativeImg = electron.nativeImage.createFromPath(cacheThumb);
+          }
+        }
+        if (!nativeImg.isEmpty()) {
+          const sz = nativeImg.getSize();
+          imgW = sz.width;
+          imgH = sz.height;
+          const maxDim = 1200;
+          let resized = nativeImg;
+          if (sz.width > maxDim || sz.height > maxDim) {
+            if (sz.width >= sz.height) {
+              resized = nativeImg.resize({ width: maxDim });
+            } else {
+              resized = nativeImg.resize({ height: maxDim });
+            }
+          }
+          jpegBuf = resized.toJPEG(85);
+        }
+      } catch (e) {
+        picnestCollectLog("visual-search nativeImage error:", e.message);
+      }
+    }
+
+    // 2. 处理 DataURL 输入
+    if (!jpegBuf && dataUrl) {
+      try {
+        const nativeImg = electron.nativeImage.createFromDataURL(dataUrl);
+        if (!nativeImg.isEmpty()) {
+          const sz = nativeImg.getSize();
+          imgW = sz.width;
+          imgH = sz.height;
+          const maxDim = 1200;
+          let resized = nativeImg;
+          if (sz.width > maxDim || sz.height > maxDim) {
+            if (sz.width >= sz.height) {
+              resized = nativeImg.resize({ width: maxDim });
+            } else {
+              resized = nativeImg.resize({ height: maxDim });
+            }
+          }
+          jpegBuf = resized.toJPEG(85);
+        }
+      } catch (e) {}
+    }
+
+    if (!jpegBuf) {
+      return { ok: false, error: "无法解析或读取待检索图片" };
+    }
+
+    // 3. Pinterest Lens 检索
+    if (engine === "pinterest" || engine === "hybrid") {
+      const formData = new FormData();
+      const blob = new Blob([jpegBuf], { type: "image/jpeg" });
+      formData.append("image", blob, "query.jpg");
+
+      const bx = Math.max(0, Math.min(1, Number(bbox?.[0] ?? 0)));
+      const by = Math.max(0, Math.min(1, Number(bbox?.[1] ?? 0)));
+      const bw = Math.max(0.01, Math.min(1 - bx, Number(bbox?.[2] ?? 1)));
+      const bh = Math.max(0.01, Math.min(1 - by, Number(bbox?.[3] ?? 1)));
+
+      formData.append("x", String(bx));
+      formData.append("y", String(by));
+      formData.append("w", String(bw));
+      formData.append("h", String(bh));
+      formData.append("page_size", String(pageSize || 50));
+
+      let apiURL = "https://api.pinterest.com/v3/visual_search/extension/image/";
+      if (bookmark) {
+        apiURL += `?bookmark=${encodeURIComponent(bookmark)}`;
+      }
+
+      const res = await electron.net.fetch(apiURL, {
+        method: "PUT",
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          "Referer": "https://www.pinterest.com/",
+          "Accept": "application/json, text/plain, */*"
+        },
+        body: formData
+      });
+
+      if (res.status === 401) {
+        return { ok: false, authRequired: true, error: "Pinterest 会话已过期或需登录 (401)" };
+      }
+      if (!res.ok) {
+        return { ok: false, error: `Pinterest 视觉检索异常 (HTTP ${res.status} ${res.statusText})` };
+      }
+
+      const result = await res.json();
+      if (result.status !== "success") {
+        return { ok: false, error: result.message || "Pinterest 响应非成功状态" };
+      }
+
+      const items = (result.data || []).map((item) => {
+        const w = item.image_medium_size_pixels?.width || 474;
+        const h = item.image_medium_size_pixels?.height || 600;
+        const med = item.image_medium_url || item.image_square_url || "";
+        const lrg = item.image_large_url || med;
+        const orig = lrg ? lrg.replace(/[0-9]+x/g, "originals") : med;
+        return {
+          id: String(item.id || crypto.randomUUID()),
+          engine: "pinterest",
+          title: item.title || item.grid_title || "",
+          thumbUrl: med,
+          largeUrl: lrg,
+          origUrl: orig,
+          width: w,
+          height: h,
+          aspectRatio: w / (h || 1),
+          sourceUrl: item.id ? `https://www.pinterest.com/pin/${item.id}/` : "",
+          saved: false
+        };
+      });
+
+      return {
+        ok: true,
+        items,
+        bookmark: result.bookmark || null,
+        queryMeta: { width: imgW, height: imgH }
+      };
+    }
+
+    // 4. 花瓣网发现推荐流
+    if (engine === "huaban") {
+      try {
+        const huabanUrl = `https://api.huaban.com/discovery/illustrations?limit=${pageSize || 40}`;
+        const res = await electron.net.fetch(huabanUrl, {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Referer": "https://huaban.com/",
+            "Accept": "application/json"
+          }
+        });
+        if (res.ok) {
+          const hbData = await res.json();
+          const pins = hbData.pins || [];
+          const items = pins.map((p) => {
+            const fileKey = p.file?.key || "";
+            const w = p.file?.width || 400;
+            const h = p.file?.height || 600;
+            const thumb = fileKey ? `https://gd-hbimg.huaban.com/${fileKey}_fw240` : "";
+            const large = fileKey ? `https://gd-hbimg.huaban.com/${fileKey}_fw658` : "";
+            const orig = fileKey ? `https://gd-hbimg.huaban.com/${fileKey}` : "";
+            return {
+              id: String(p.pin_id || crypto.randomUUID()),
+              engine: "huaban",
+              title: p.raw_text || "花瓣采集",
+              thumbUrl: thumb,
+              largeUrl: large,
+              origUrl: orig,
+              width: w,
+              height: h,
+              aspectRatio: w / (h || 1),
+              sourceUrl: `https://huaban.com/pins/${p.pin_id}/`,
+              saved: false
+            };
+          });
+          return { ok: true, items, bookmark: null, queryMeta: { width: imgW, height: imgH } };
+        }
+      } catch (hbErr) {
+        return { ok: false, error: "花瓣网网络请求失败: " + String(hbErr?.message || hbErr) };
+      }
+    }
+
+    return { ok: false, error: "未知的检索引擎: " + engine };
+  } catch (err) {
+    return { ok: false, error: String(err?.message || err) };
+  }
+});
+/* ==== /M9 视觉搜索模块 ==== */
+
 
 /* ==== /PicNest:P4 ==== */

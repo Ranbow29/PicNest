@@ -3,7 +3,7 @@ import { deltaE76, deltaE2000, isGrayPalettes } from '../lib/eagleColor'
 import { collectiveShake } from '../lib/iconMotion'
 import { emitPluginEvent } from '../lib/plugins'
 import { isTextPath } from '../lib/fileKinds'
-import { api } from '../api'
+import { api, fileUrl } from '../api'
 
 // 图巢核心状态：根文件夹（物理目录）→ 派生目录树 → 子目录图片
 // 从拖拽数据里提取图片 URL（浏览器拖图入库，Eagle 同款细节）
@@ -137,6 +137,14 @@ export const useLibrary = defineStore('library', {
     filterBarOpen: false,
     pluginsOpen: false,          // 插件库面板
     helpOpen: false,             // 帮助 / 使用说明
+    visualSearch: {
+      open: false,
+      tasks: [],
+      activeTaskId: null,
+      engine: 'pinterest',       // 'pinterest' | 'huaban' | 'hybrid'
+      scale: 240,                // 瀑布流卡片宽度 160 ~ 420
+      alwaysOnTop: false,
+    },
     filters: {
       shapes: [],            // ['landscape','portrait','square','panoramaL','panoramaP','43','34','169','916','custom']
       customW: 4, customH: 3,
@@ -2668,6 +2676,81 @@ export const useLibrary = defineStore('library', {
     closePlugins() { this.pluginsOpen = false },
     openHelp() { this.helpOpen = true },
     closeHelp() { this.helpOpen = false },
+    openVisualSearch(items = []) {
+      const tasks = (items || []).map((it) => {
+        const isStr = typeof it === 'string'
+        const fp = isStr ? it : it.filePath
+        const name = isStr ? it.split(/[\\/]/).pop() : (it.name || it.title || 'query')
+        return {
+          id: crypto.randomUUID(),
+          name,
+          filePath: fp || '',
+          dataUrl: !isStr ? (it.dataUrl || '') : '',
+          thumbUrl: fp ? fileUrl(fp) : (it.thumbUrl || it.dataUrl || ''),
+          width: it.width || null,
+          height: it.height || null,
+          bbox: [0, 0, 1, 1],
+          results: [],
+          bookmark: null,
+          loading: false,
+          error: null,
+        }
+      })
+      if (!this.visualSearch.open) {
+        this.visualSearch.tasks = tasks
+        this.visualSearch.activeTaskId = tasks[0]?.id || null
+        this.visualSearch.open = true
+      } else {
+        if (tasks.length) {
+          const firstNewId = tasks[0].id
+          this.visualSearch.tasks.push(...tasks)
+          this.visualSearch.activeTaskId = firstNewId
+        }
+      }
+    },
+    openVisualSearchForSelected() {
+      if (this.selectedPaths.length > 0) {
+        this.openVisualSearch(this.selectedPaths)
+      } else if (this.activeImage?.file_path) {
+        this.openVisualSearch([this.activeImage.file_path])
+      }
+    },
+    closeVisualSearch() {
+      this.visualSearch.open = false
+    },
+    pushVisualSearchTask(taskOpts) {
+      const newTask = {
+        id: crypto.randomUUID(),
+        name: taskOpts.name || taskOpts.title || 'query',
+        filePath: taskOpts.filePath || '',
+        dataUrl: taskOpts.dataUrl || '',
+        thumbUrl: taskOpts.thumbUrl || taskOpts.dataUrl || (taskOpts.filePath ? fileUrl(taskOpts.filePath) : ''),
+        width: taskOpts.width || null,
+        height: taskOpts.height || null,
+        bbox: [0, 0, 1, 1],
+        results: [],
+        bookmark: null,
+        loading: false,
+        error: null,
+      }
+      this.visualSearch.tasks.push(newTask)
+      this.visualSearch.activeTaskId = newTask.id
+      this.visualSearch.open = true
+      return newTask
+    },
+    removeVisualSearchTask(taskId) {
+      const idx = this.visualSearch.tasks.findIndex((t) => t.id === taskId)
+      if (idx === -1) return
+      this.visualSearch.tasks.splice(idx, 1)
+      if (this.visualSearch.activeTaskId === taskId) {
+        if (this.visualSearch.tasks.length > 0) {
+          const nextIdx = Math.min(idx, this.visualSearch.tasks.length - 1)
+          this.visualSearch.activeTaskId = this.visualSearch.tasks[nextIdx].id
+        } else {
+          this.visualSearch.activeTaskId = null
+        }
+      }
+    },
     toggleSidebar() {
       this.sidebarCollapsed = !this.sidebarCollapsed
       localStorage.setItem('picnest.sidebarCollapsed', this.sidebarCollapsed ? '1' : '0')
