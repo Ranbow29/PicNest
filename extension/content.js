@@ -2,7 +2,7 @@
 // 在网页图片上左键按住 → 光标处环形进度 → 弹出双栏面板（左：未分类/库根；右：全部文件夹）
 // 拖到目标松开即保存；松开在面板空白处则面板停留，可点击/滚动选择；Esc / 点外部取消。
 (() => {
-  const VERSION = '0.3.1'
+  const VERSION = '0.3.2'
   const prevLoaded = !!window.__picnestHoldCollectLoaded
   const prevVersion = String(window.__picnestHoldCollectVersion || '')
   /* 同版本重复注入：幂等返回。旧版本实例：0.1.4 起会挂 __picnestHoldCollectCleanup，
@@ -757,6 +757,21 @@
     }
   }
 
+  function findPinIdFromReact(obj, depth = 0) {
+    if (!obj || depth > 5) return ''
+    if (typeof obj !== 'object') return ''
+    if (typeof obj.pinId === 'string' && /^\d{10,25}$/.test(obj.pinId)) return obj.pinId
+    if (obj.pin && typeof obj.pin.id === 'string' && /^\d{10,25}$/.test(obj.pin.id)) return obj.pin.id
+    if (obj.id && typeof obj.id === 'string' && /^\d{10,25}$/.test(obj.id)) return obj.id
+    for (const k of ['memoizedProps', 'pendingProps', 'props', 'pin']) {
+      if (obj[k]) {
+        const found = findPinIdFromReact(obj[k], depth + 1)
+        if (found) return found
+      }
+    }
+    return ''
+  }
+
   function findPinUrl(el) {
     if (!el) return ''
 
@@ -766,31 +781,46 @@
       if (/\/pin\/\d+/.test(location.href)) return location.href
     }
 
-    // 2. 优先直接匹配自身或最近的 Pin 链接（右侧推荐卡片的核心标识）
-    const pinA = el.closest?.('a[href*="/pin/"]')
-    if (pinA?.href && /\/pin\/\d+/.test(pinA.href)) return pinA.href
-
-    // 3. 匹配推荐卡片容器（网格项、列表项）
-    const card = el.closest?.('div[role="listitem"], div[data-grid-item]')
-    if (card) {
-      const a = card.querySelector?.('a[href*="/pin/"]') || card.closest?.('a[href*="/pin/"]')
-      if (a?.href && /\/pin\/\d+/.test(a.href)) return a.href
-      const pId = card.getAttribute?.('data-test-pin-id')
-      if (pId) return `https://www.pinterest.com/pin/${pId}/`
-    }
-
-    // 4. 向上逐级探测带 data-test-pin-id 的独立卡片元素（排除主视觉容器）
+    // 2. 向上逐级探测专属本卡片的 Pin 标识（最高向上检索 12 层）
     let cur = el
-    while (cur && cur !== document.body) {
-      const pId = cur.getAttribute?.('data-test-pin-id')
-      if (pId && !cur.closest?.('[data-test-id="closeup-visual-container"], [data-test-id="story-pin-closeup-page"]')) {
+    let depth = 0
+    while (cur && cur !== document.body && depth < 12) {
+      // 2.1 节点自身即为带有 Pin 链接的 <a> 标签
+      if (cur.tagName === 'A') {
+        const href = cur.getAttribute('href') || cur.href || ''
+        const m = href.match(/\/pin\/(\d+)/)
+        if (m) return `https://www.pinterest.com/pin/${m[1]}/`
+      }
+
+      // 2.2 节点自身带有 pin 数据属性
+      const pId = cur.getAttribute?.('data-test-pin-id') ||
+                  cur.getAttribute?.('data-pin-id') ||
+                  cur.getAttribute?.('data-id')
+      if (pId && /^\d{10,25}$/.test(pId)) {
         return `https://www.pinterest.com/pin/${pId}/`
       }
+
+      // 2.3 容器内部包含子链接 a[href*="/pin/"]
+      const childA = cur.querySelector?.('a[href*="/pin/"]')
+      if (childA) {
+        const href = childA.getAttribute('href') || childA.href || ''
+        const m = href.match(/\/pin\/(\d+)/)
+        if (m) return `https://www.pinterest.com/pin/${m[1]}/`
+      }
+
+      // 2.4 从 React Fiber / Props 中探测组件绑定的 pin.id
+      for (const key of Object.keys(cur)) {
+        if (key.startsWith('__reactFiber$') || key.startsWith('__reactProps$')) {
+          const fiberPinId = findPinIdFromReact(cur[key], 0)
+          if (fiberPinId) return `https://www.pinterest.com/pin/${fiberPinId}/`
+        }
+      }
+
       cur = cur.parentElement
+      depth++
     }
 
-    // 5. 最终兜底：只有确实没有匹配到任何独立 Pin 链接且不在任何推荐卡片内部时，才绑定主页面 URL
-    if (/\/pin\/\d+/.test(location.href) && !card && !pinA) return location.href
+    // 3. 绝不跨域偷用当前主页面的 location.href！非主舞台元素若解析不到 Pin ID，直接返回空，避免偷换为主页面视频
     return ''
   }
 
@@ -943,7 +973,8 @@
 
     const poster = (video.poster || video.getAttribute('poster') || '').trim()
     const pinUrl = findPinUrl(video)
-    const pinMatch = pinUrl.match(/\/pin\/(\d+)/) || (typeof location !== 'undefined' ? location.pathname.match(/\/pin\/(\d+)/) : null)
+    const isVisualCloseup = !!video.closest?.('[data-test-id="closeup-visual-container"], [data-test-id="closeup-video-with-visibility"], [data-test-id="story-pin-closeup-page"]')
+    const pinMatch = pinUrl ? pinUrl.match(/\/pin\/(\d+)/) : (isVisualCloseup && typeof location !== 'undefined' ? location.pathname.match(/\/pin\/(\d+)/) : null)
     const pinId = pinMatch ? pinMatch[1] : ''
 
     if (isPinterestSite()) {
@@ -951,8 +982,8 @@
         src = findPinterestVideoFromFiber(video) ||
               findPinterestVideoFromCard(video) ||
               findPinterestVideoFromPoster(poster) ||
-              findPinterestVideoFromPws(pinId) ||
-              scanHtmlForPinterestVideo() || ''
+              (pinId ? findPinterestVideoFromPws(pinId) : '') ||
+              (isVisualCloseup ? scanHtmlForPinterestVideo() : '') || ''
       }
       if (src && src.includes('/hls/')) {
         src = '' // 严禁将切片流地址作为最终 src 返回
@@ -1157,12 +1188,13 @@
 
     async function executeSave(forceFlag, overwriteFlag) {
       let payload = null
+      const isVisualCloseup = !!img.closest?.('[data-test-id="closeup-visual-container"], [data-test-id="closeup-video-with-visibility"], [data-test-id="story-pin-closeup-page"]')
       if (isVideo) {
         toast.updateStatus('正在探测视频画面与直链…')
         let vInfo = extractVideoInfo(img)
         if (isPinterestSite() && (!vInfo?.src || vInfo.src.startsWith('blob:'))) {
           toast.updateStatus('正在解析视频原片…')
-          const pId = vInfo?.pinId || (typeof location !== 'undefined' ? location.pathname.match(/\/pin\/(\d+)/)?.[1] : '')
+          const pId = vInfo?.pinId || (isVisualCloseup && typeof location !== 'undefined' ? location.pathname.match(/\/pin\/(\d+)/)?.[1] : '')
           if (pId) {
             const apiSrc = await fetchPinterestVideoByPinId(pId)
             if (apiSrc) {
@@ -1171,7 +1203,7 @@
             }
           }
           if (!vInfo?.src) {
-            vInfo.src = findPinterestVideoFromCard(img) || scanHtmlForPinterestVideo() || ''
+            vInfo.src = findPinterestVideoFromCard(img) || (isVisualCloseup ? scanHtmlForPinterestVideo() : '') || ''
           }
         }
         if (vInfo?.frameDataUrl && !thumb) {
@@ -1197,8 +1229,9 @@
 
           payload = {
             kind: vDataUrl ? 'video' : 'image',
-            url: vInfo.pinUrl || location.href,
-            pinUrl: vInfo.pinUrl,
+            url: vInfo.pinUrl || (isVisualCloseup ? location.href : ''),
+            pinUrl: vInfo.pinUrl || (isVisualCloseup ? location.href : ''),
+            isVisualCloseup,
             title: vInfo.title || title,
             src: '',
             dataUrl: vDataUrl || vInfo.frameDataUrl || vInfo.poster,
@@ -1208,8 +1241,9 @@
           // Pinterest 视频若未取到独立 MP4，无缝保存全分辨率原画帧，绝不抛 403 阻断
           payload = {
             kind: 'image',
-            url: vInfo?.pinUrl || location.href,
-            pinUrl: vInfo?.pinUrl,
+            url: vInfo?.pinUrl || (isVisualCloseup ? location.href : ''),
+            pinUrl: vInfo?.pinUrl || (isVisualCloseup ? location.href : ''),
+            isVisualCloseup,
             title: vInfo?.title || title,
             src: '',
             dataUrl: vInfo?.frameDataUrl || vInfo?.poster,
@@ -1231,13 +1265,24 @@
       } else {
         const src = getMediaSrc(img)
         if (!src) { toast.error('没有图片地址'); return }
-        payload = { url: location.href, title, kind: 'image' }
-        if (src.startsWith('data:')) payload.dataUrl = src
-        else if (src.startsWith('blob:')) {
-          const dataUrl = await blobToDataUrl(src)
+        const pinUrl = findPinUrl(img)
+        let finalSrc = src
+        if (isPinterestSite() && finalSrc.includes('pinimg.com')) {
+          finalSrc = finalSrc.replace(/\/(236x|474x|564x|736x)\//, '/originals/')
+        }
+        payload = {
+          url: pinUrl || (isVisualCloseup ? location.href : ''),
+          pinUrl: pinUrl || (isVisualCloseup ? location.href : ''),
+          isVisualCloseup,
+          title,
+          kind: 'image',
+        }
+        if (finalSrc.startsWith('data:')) payload.dataUrl = finalSrc
+        else if (finalSrc.startsWith('blob:')) {
+          const dataUrl = await blobToDataUrl(finalSrc)
           if (!dataUrl) { toast.error('blob 读取失败'); return }
           payload.dataUrl = dataUrl
-        } else payload.src = src
+        } else payload.src = finalSrc
       }
 
       if (!runtimeAlive()) {

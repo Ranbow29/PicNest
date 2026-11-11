@@ -28,7 +28,7 @@ chrome.runtime.onInstalled.addListener(setupMenus)
    - 更老的脚本（无 cleanup）/ 扩展更新后失去 runtime 的孤立脚本 / document 监听器失效
      → 只在 Pinterest 标签自动刷新一次（chrome.storage.session 记标记防循环），其它站点走 popup「修复本页」。
    content.js 在监听器全部注册完成之后才置 Loaded，并提供健康事件，部分初始化也能被发现。 */
-const CONTENT_VERSION = '0.3.1'
+const CONTENT_VERSION = '0.3.2'
 const RELOAD_KEY = 'picnestCollectReloads'
 const INJECTABLE_RE = /^(https?|file):\/\//i
 const PINTEREST_HOST_RE = /(^|\.)pinterest\.[a-z.]+$/i
@@ -647,18 +647,22 @@ async function saveImage(info, tab, toast) {
     } catch { /* 静默 */ }
   }
 
-  if (isVideo || (src && src.startsWith('blob:')) || isPinterestUrl(tab?.url)) {
+  const isExplicitVideo = isVideo || (src && (src.includes('/videos/') || src.startsWith('blob:') || src.includes('.m3u8') || /\.mp4(\?.*)?$/i.test(src)))
+  if (isExplicitVideo) {
     toast?.updateStatus('正在解析视频原片…')
+    const targetPin = pinUrl || (info.linkUrl && /\/pin\/\d+/.test(info.linkUrl) ? info.linkUrl : '')
     const res = await resolveVideoSource({
       src,
-      pinUrl: pinUrl || info.linkUrl || info.pageUrl || tab?.url || '',
-      url: info.pageUrl || tab?.url || '',
+      pinUrl: targetPin,
+      url: targetPin,
       tabId: tab?.id,
     })
     if (res?.ok && res.src) {
       src = res.src
       isVideo = true
     }
+  } else if (isPinterestUrl(tab?.url) && src && src.includes('pinimg.com')) {
+    src = src.replace(/\/(236x|474x|564x|736x)\//, '/originals/')
   }
 
   if (!src && !dataUrl) throw new Error(isVideo ? '未能解析视频地址' : '未能识别图片地址')
@@ -837,17 +841,22 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         let kind = msg.kind || 'image'
 
         // 针对视频，利用多级逆向解析器换取真实的 MP4 原始直链并下载完整流
-        if (kind === 'video' || isPinterestUrl(msg.url || sender?.tab?.url)) {
+        // 严禁对普通图片（kind === 'image'）因页面位于 Pinterest 而强制走视频逆向，避免误将当前页面的大视频替换掉用户选中的推荐卡片图片！
+        const isExplicitVideo = kind === 'video' || (src && (src.includes('/videos/') || src.startsWith('blob:') || src.includes('.m3u8') || /\.mp4(\?.*)?$/i.test(src)))
+        if (isExplicitVideo) {
           let videoSrc = src
           let dl = null
           if (!videoSrc || !/\.mp4(\?.*)?$/i.test(videoSrc)) {
-            const res = await resolveVideoSource({
-              src: videoSrc,
-              pinUrl: msg.pinUrl || msg.url || '',
-              url: msg.url || '',
-              tabId: sender?.tab?.id,
-            })
-            if (res?.ok && res.src) videoSrc = res.src
+            const targetPin = msg.pinUrl || (msg.isVisualCloseup ? msg.url : '')
+            if (targetPin) {
+              const res = await resolveVideoSource({
+                src: videoSrc,
+                pinUrl: targetPin,
+                url: targetPin,
+                tabId: sender?.tab?.id,
+              })
+              if (res?.ok && res.src) videoSrc = res.src
+            }
           }
           if (videoSrc && /^https?:\/\//i.test(videoSrc) && /\.mp4(\?.*)?$/i.test(videoSrc)) {
             kind = 'video'
