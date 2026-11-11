@@ -311,10 +311,10 @@ function onKey(e) {
             </div>
             <button class="set-switch" :class="{ on: lib.cardTilt3D }" type="button"><i /></button>
           </div>
-                    <div class="set-row">
-            <div class="set-meta">
+          <div class="set-row">
+            <div class="set-meta" style="cursor: pointer;" @click.stop="copyCollectToken" title="点击一键复制完整 32 位配对密钥">
               <div class="set-title">采集扩展配对密钥</div>
-              <div class="set-desc">{{ collectTokenDesc }}</div>
+              <div class="set-desc" style="user-select: none;">{{ collectTokenDesc }}</div>
             </div>
             <div style="display:flex;gap:6px">
               <button class="set-copy-btn" type="button" @click.stop="copyCollectToken">{{ copyTokenText }}</button>

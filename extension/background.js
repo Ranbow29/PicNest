@@ -251,11 +251,22 @@ chrome.runtime.onInstalled.addListener(ensurePinterestSoon)
 /* service worker 启动即补一次：扩展重载/休眠唤醒不依赖 onInstalled */
 ensurePinterestSoon()
 
+function sanitizeToken(token) {
+  if (!token || typeof token !== 'string') return ''
+  return token.replace(/[^a-fA-F0-9]/g, '').trim()
+}
+
 async function apiRaw(path, body, method) {
   const init = { method: method || (body ? 'POST' : 'GET'), headers: {} }
   try {
     const s = await chrome.storage.local.get(['picnestToken'])
-    if (s.picnestToken) init.headers['X-PicNest-Token'] = s.picnestToken
+    const token = sanitizeToken(s.picnestToken)
+    if (token && token.length === 32) {
+      init.headers['X-PicNest-Token'] = token
+    } else if (s.picnestToken) {
+      // 存储了不合法的脏数据（如包含非 ISO-8859-1 的遮罩圆点 • 或截断字符），清除存储防死锁
+      await chrome.storage.local.remove(['picnestToken'])
+    }
   } catch (e) {}
   if (body) {
     init.headers['Content-Type'] = 'application/json'
@@ -464,8 +475,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const data = await api('/api/v1/folders?rootId=' + encodeURIComponent(rootId))
         sendResponse({ ok: true, root: data.root, folders: data.folders, context: ctx })
       } else if (msg?.type === 'save-token') {
-        const token = String(msg.token || '').trim()
-        if (!token) throw new Error('Token 不能为空')
+        const token = sanitizeToken(msg.token)
+        if (!token || token.length !== 32) throw new Error('密钥格式错误：请输入有效的 32 位十六进制密钥（请点击图巢顶栏设置中的「复制密钥」按钮，切勿手工划选中间带圆点的遮罩文本）')
         await chrome.storage.local.set({ picnestToken: token })
         sendResponse({ ok: true })
       } else if (msg?.type === 'create-folder') {

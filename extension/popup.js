@@ -60,10 +60,20 @@ function msg(text, err) {
   elMsg.textContent = text || ''
   elMsg.className = 'msg' + (err ? ' err' : '')
 }
+function sanitizeToken(token) {
+  if (!token || typeof token !== 'string') return ''
+  return token.replace(/[^a-fA-F0-9]/g, '').trim()
+}
+
 async function api(path) {
   const s = await chrome.storage.local.get(['picnestToken'])
   const headers = {}
-  if (s.picnestToken) headers['X-PicNest-Token'] = s.picnestToken
+  const token = sanitizeToken(s.picnestToken)
+  if (token && token.length === 32) {
+    headers['X-PicNest-Token'] = token
+  } else if (s.picnestToken) {
+    await chrome.storage.local.remove(['picnestToken'])
+  }
   const res = await fetch(API + path, { headers })
   if (res.status === 401) throw new Error('TOKEN_REQUIRED')
   const data = await res.json().catch(() => ({}))
@@ -138,9 +148,10 @@ async function init() {
 }
 
 elTokenSave?.addEventListener('click', async () => {
-  const token = (elTokenInput?.value || '').trim()
-  if (!token) {
-    msg('请输入配对密钥', true)
+  const raw = elTokenInput?.value || ''
+  const token = sanitizeToken(raw)
+  if (!token || token.length !== 32) {
+    msg('请输入有效的 32 位十六进制密钥（请点击图巢顶栏设置中的「复制密钥」按钮，切勿手工划选中间带圆点的遮罩文本）', true)
     return
   }
   msg('正在配对…')

@@ -473,7 +473,12 @@
 
     const list = panel.querySelector('.list')
     if (error) {
-      if (typeof error === 'string' && (error.includes('未授权') || error.includes('Token') || error.includes('401'))) {
+      const isAuthErr = typeof error === 'string' && (
+        error.includes('未授权') || error.includes('Token') || error.includes('401') ||
+        error.includes('ISO-8859-1') || error.includes('headers') || error.includes('code point') || error.includes('WorkerGlobalScope')
+      )
+      if (isAuthErr) {
+        try { chrome.storage?.local?.remove?.(['picnestToken']) } catch {}
         const box = document.createElement('div')
         box.className = 'auth-box'
         box.innerHTML = `
@@ -489,9 +494,10 @@
         const btn = box.querySelector('.auth-btn')
         const errEl = box.querySelector('.auth-err')
         const doPair = () => {
-          const val = inp.value.trim()
-          if (!val) {
-            errEl.textContent = '密钥不能为空'
+          const raw = inp.value.trim()
+          const val = raw.replace(/[^a-fA-F0-9]/g, '')
+          if (!val || val.length !== 32) {
+            errEl.textContent = '请输入有效的 32 位密钥（请点击图巢顶栏设置中的「复制密钥」按钮，切勿手工划选中间带圆点的遮罩文本）'
             errEl.style.display = 'block'
             return
           }
