@@ -4819,9 +4819,9 @@ electron.ipcMain.handle("picnest-visual-search-save", async (_event, item) => {
 });
 
 electron.ipcMain.handle("picnest-visual-search-query", async (_event, opts) => {
-  const { filePath, dataUrl, bbox, bookmark, engine = "pinterest", pageSize = 50 } = opts || {};
+  const { filePath, dataUrl, bbox, bookmark, engine = "pinterest", pageSize = 200 } = opts || {};
   try {
-    let jpegBuf = null;
+    let baseImg = null;
     let imgW = 0, imgH = 0;
 
     // 1. 处理本地文件输入
@@ -4836,19 +4836,7 @@ electron.ipcMain.handle("picnest-visual-search-query", async (_event, opts) => {
           }
         }
         if (!nativeImg.isEmpty()) {
-          const sz = nativeImg.getSize();
-          imgW = sz.width;
-          imgH = sz.height;
-          const maxDim = 1200;
-          let resized = nativeImg;
-          if (sz.width > maxDim || sz.height > maxDim) {
-            if (sz.width >= sz.height) {
-              resized = nativeImg.resize({ width: maxDim });
-            } else {
-              resized = nativeImg.resize({ height: maxDim });
-            }
-          }
-          jpegBuf = resized.toJPEG(85);
+          baseImg = nativeImg;
         }
       } catch (e) {
         picnestCollectLog("visual-search nativeImage error:", e.message);
@@ -4856,47 +4844,63 @@ electron.ipcMain.handle("picnest-visual-search-query", async (_event, opts) => {
     }
 
     // 2. 处理 DataURL 输入
-    if (!jpegBuf && dataUrl) {
+    if (!baseImg && dataUrl) {
       try {
         const nativeImg = electron.nativeImage.createFromDataURL(dataUrl);
         if (!nativeImg.isEmpty()) {
-          const sz = nativeImg.getSize();
-          imgW = sz.width;
-          imgH = sz.height;
-          const maxDim = 1200;
-          let resized = nativeImg;
-          if (sz.width > maxDim || sz.height > maxDim) {
-            if (sz.width >= sz.height) {
-              resized = nativeImg.resize({ width: maxDim });
-            } else {
-              resized = nativeImg.resize({ height: maxDim });
-            }
-          }
-          jpegBuf = resized.toJPEG(85);
+          baseImg = nativeImg;
         }
       } catch (e) {}
     }
 
-    if (!jpegBuf) {
+    if (!baseImg) {
       return { ok: false, error: "无法解析或读取待检索图片" };
     }
 
-    // 3. Pinterest Lens 视觉检索 (专精高精度以图找图)
-    const crypto = require("crypto");
-    const boundary = "----WebKitFormBoundary" + crypto.randomBytes(16).toString("hex");
-    const crlf = "\r\n";
+    const sz = baseImg.getSize();
+    imgW = sz.width;
+    imgH = sz.height;
 
+    // 关键优化：物理像素裁切 (对齐 Eagle 客户端 Canvas 裁切逻辑)
+    // Pinterest Lens 接口要求上传的二进制为纯净的选区图像，若传全图会因大面积背景噪音导致搜图严重偏离
     const bx = Math.max(0, Math.min(1, Number(bbox?.[0] ?? 0)));
     const by = Math.max(0, Math.min(1, Number(bbox?.[1] ?? 0)));
     const bw = Math.max(0.01, Math.min(1 - bx, Number(bbox?.[2] ?? 1)));
     const bh = Math.max(0.01, Math.min(1 - by, Number(bbox?.[3] ?? 1)));
 
+    let targetImg = baseImg;
+    const isSubCrop = (bx > 0.005 || by > 0.005 || bw < 0.99 || bh < 0.99);
+    if (isSubCrop && imgW > 10 && imgH > 10) {
+      const cropX = Math.max(0, Math.min(imgW - 1, Math.round(bx * imgW)));
+      const cropY = Math.max(0, Math.min(imgH - 1, Math.round(by * imgH)));
+      const cropW = Math.max(16, Math.min(imgW - cropX, Math.round(bw * imgW)));
+      const cropH = Math.max(16, Math.min(imgH - cropY, Math.round(bh * imgH)));
+      targetImg = baseImg.crop({ x: cropX, y: cropY, width: cropW, height: cropH });
+    }
+
+    const targetSz = targetImg.getSize();
+    const maxDim = 1200;
+    let resized = targetImg;
+    if (targetSz.width > maxDim || targetSz.height > maxDim) {
+      if (targetSz.width >= targetSz.height) {
+        resized = targetImg.resize({ width: maxDim });
+      } else {
+        resized = targetImg.resize({ height: maxDim });
+      }
+    }
+    const jpegBuf = resized.toJPEG(92);
+
+    // 3. Pinterest Lens 视觉检索 (专精高精度以图找图，page_size 提升至 200)
+    const crypto = require("crypto");
+    const boundary = "----WebKitFormBoundary" + crypto.randomBytes(16).toString("hex");
+    const crlf = "\r\n";
+
     const parts = [
-      Buffer.from(`--${boundary}${crlf}Content-Disposition: form-data; name="x"${crlf}${crlf}${bx}`),
-      Buffer.from(`${crlf}--${boundary}${crlf}Content-Disposition: form-data; name="y"${crlf}${crlf}${by}`),
-      Buffer.from(`${crlf}--${boundary}${crlf}Content-Disposition: form-data; name="w"${crlf}${crlf}${bw}`),
-      Buffer.from(`${crlf}--${boundary}${crlf}Content-Disposition: form-data; name="h"${crlf}${crlf}${bh}`),
-      Buffer.from(`${crlf}--${boundary}${crlf}Content-Disposition: form-data; name="page_size"${crlf}${crlf}${pageSize || 50}`),
+      Buffer.from(`--${boundary}${crlf}Content-Disposition: form-data; name="x"${crlf}${crlf}0`),
+      Buffer.from(`${crlf}--${boundary}${crlf}Content-Disposition: form-data; name="y"${crlf}${crlf}0`),
+      Buffer.from(`${crlf}--${boundary}${crlf}Content-Disposition: form-data; name="w"${crlf}${crlf}1`),
+      Buffer.from(`${crlf}--${boundary}${crlf}Content-Disposition: form-data; name="h"${crlf}${crlf}1`),
+      Buffer.from(`${crlf}--${boundary}${crlf}Content-Disposition: form-data; name="page_size"${crlf}${crlf}${pageSize || 200}`),
       Buffer.from(`${crlf}--${boundary}${crlf}Content-Disposition: form-data; name="image"; filename="query.jpg"${crlf}Content-Type: image/jpeg${crlf}${crlf}`),
       jpegBuf,
       Buffer.from(`${crlf}--${boundary}--${crlf}`)
