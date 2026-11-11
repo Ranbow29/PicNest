@@ -2,7 +2,7 @@
 // 在网页图片上左键按住 → 光标处环形进度 → 弹出双栏面板（左：未分类/库根；右：全部文件夹）
 // 拖到目标松开即保存；松开在面板空白处则面板停留，可点击/滚动选择；Esc / 点外部取消。
 (() => {
-  const VERSION = '0.2.7'
+  const VERSION = '0.2.8'
   const prevLoaded = !!window.__picnestHoldCollectLoaded
   const prevVersion = String(window.__picnestHoldCollectVersion || '')
   /* 同版本重复注入：幂等返回。旧版本实例：0.1.4 起会挂 __picnestHoldCollectCleanup，
@@ -44,6 +44,14 @@
   }
   var isPinterest = isPinterestSite
   try { if (typeof window !== 'undefined') window.isPinterest = isPinterestSite } catch {}
+
+  // 阻止 Pinterest 原生轮播手势（彻底防止在主视频长按采集时被页面判定为翻页滑动到第二张）
+  window.addEventListener('dragstart', (e) => {
+    if (session && !session.canceled) {
+      e.preventDefault?.()
+      e.stopImmediatePropagation?.()
+    }
+  }, true)
 
   const HOLD_MS = 380
   const RING_DELAY = 120
@@ -751,6 +759,10 @@
 
   function findPinUrl(el) {
     if (!el) return ''
+    // 优先：如果元素落在详情页主展示容器（Closeup / Story / 主舞台），100% 绑定当前页面的主 Pin ID！
+    if (el.closest?.('[data-test-id*="closeup"], [data-test-id*="story"], div[role="main"]')) {
+      if (/\/pin\/\d+/.test(location.href)) return location.href
+    }
     const pinA = el.closest?.('a[href*="/pin/"]')
     if (pinA?.href && /\/pin\/\d+/.test(pinA.href)) return pinA.href
     let cur = el
@@ -772,18 +784,15 @@
     if (!u.includes('pinimg.com')) return u
     // 若已是明确的 .mp4 静态直链，原样返回（严禁拼入不存在的 /mc/）
     if (/\.mp4(\?.*)?$/i.test(u)) return u
-    // 若包含视频目录且为切片/manifest，尝试移除切片后缀
-    if (u.includes('/videos/')) {
-      return u.replace(/(_\d+[wp]|_\d+p)?\.(cmfv|cmfa|m3u8|ts|mpd).*$/i, '.mp4')
-    }
-    return u
+    // 严禁把未转换的 /hls/ 切片当作合法 mp4 返回
+    return ''
   }
 
   function isValidVideoUrl(u) {
     if (!u || typeof u !== 'string') return false
     if (/\.(html?|php|jsp|asp)(\?.*)?$/i.test(u)) return false
     if (/blackboard|mobileplayer|player\.html/i.test(u)) return false
-    return /\.(mp4|webm|mov|mkv|avi|flv|f4v)(\?.*)?$/i.test(u) || /pinimg\.com\/videos/i.test(u)
+    return /\.(mp4|webm|mov|mkv|avi|flv|f4v)(\?.*)?$/i.test(u)
   }
 
   function scanObjectForPinterestVideo(obj, depth = 0) {
@@ -807,19 +816,6 @@
         if (res) return res
       }
     }
-    return ''
-  }
-
-  function findPinterestVideoFromPerformance() {
-    try {
-      const entries = performance.getEntriesByType('resource') || []
-      for (let i = entries.length - 1; i >= 0; i--) {
-        const u = entries[i].name || ''
-        if (!u.includes('pinimg.com')) continue
-        const norm = normalizePinterestVideoUrl(u)
-        if (norm && /\.mp4(\?.*)?$/i.test(norm)) return norm
-      }
-    } catch {}
     return ''
   }
 
@@ -936,15 +932,14 @@
 
     if (isPinterestSite()) {
       if (!src || src.startsWith('blob:') || src.includes('/hls/')) {
-        src = findPinterestVideoFromPerformance() ||
-              findPinterestVideoFromFiber(video) ||
+        src = findPinterestVideoFromFiber(video) ||
               findPinterestVideoFromCard(video) ||
               findPinterestVideoFromPoster(poster) ||
               findPinterestVideoFromPws(pinId) ||
               scanHtmlForPinterestVideo() || ''
       }
-      if (src.includes('v.pinimg.com') && src.includes('/hls/')) {
-        src = src.replace('/hls/', '/720p/').replace(/(_\d+p)?\.(m3u8|ts).*$/i, '.mp4')
+      if (src && src.includes('/hls/')) {
+        src = '' // 严禁将切片流地址作为最终 src 返回
       }
     }
 
@@ -1162,13 +1157,13 @@
             }
           }
           if (!vInfo?.src) {
-            vInfo.src = findPinterestVideoFromPerformance() || findPinterestVideoFromCard(img) || scanHtmlForPinterestVideo() || ''
+            vInfo.src = findPinterestVideoFromCard(img) || scanHtmlForPinterestVideo() || ''
           }
         }
         if (vInfo?.frameDataUrl && !thumb) {
           toast.setThumb(vInfo.frameDataUrl)
         }
-        if (vInfo?.src) {
+        if (vInfo?.src && /\.mp4(\?.*)?$/i.test(vInfo.src) && !vInfo.src.includes('/hls/')) {
           toast.updateStatus('正在高速读取视频流…')
           let vDataUrl = ''
           try {
@@ -1183,7 +1178,7 @@
               })
             }
           } catch (e) {
-            console.warn('Page fetch mp4 failed, fallback to canvas frame:', e)
+            // 静默降级，绝不向控制台抛出 403 异常
           }
 
           payload = {
