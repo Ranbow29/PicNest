@@ -39,6 +39,7 @@
 - **六套定制主题**：暖砂（温暖米金）、靛夜（深邃蓝紫）、灰白（中性低饱和）、炭黑（深沉微灰）、墨黑（纯粹极夜）、跟随系统。
 - **Wenku8 灵动微动效**：文件夹展开与交互配备丝滑弹簧回弹手势，兼具高级感与灵动生命力。
 - **有界虚拟网格**：网格采用 1024px 有界缩略图缓存降级链，即使浏览十万张大图也不会击穿 Chromium 解码内存预算，彻底告别裂图与卡死。
+<img width="1750" height="1125" alt="image" src="https://github.com/user-attachments/assets/70093c79-469b-4d87-b770-6827d7c4a3ae" />
 
 ### 📂 灵活排序与物理改名双轨制
 - **默认手动排序**：支持鼠标任意拖动自由调序，新图入库自动置顶（`sort_order=0`）。
@@ -51,6 +52,7 @@
 - **视觉 AI 查重**：
   - 本地流水线：**dHash 候选初筛 → 32×32 色块比对 + 64-bit pHash 二次筛选**，在本地斩断 97.5% 无效计算。
   - 云端大模型视觉判断：仅将高度疑似的候选缩略图（绝不上传原图）交给 OpenAI 兼容的视觉 API 判定，支持费用预估与本地密钥安全加密存储。
+<img width="1450" height="980" alt="image" src="https://github.com/user-attachments/assets/b77ec82f-6c6c-4249-b61c-5e863a02ed9e" />
 
 ### 🧩 画师零门槛插件系统 (Plugin Sandbox)
 无需配置任何编程环境，画师和创作者也能轻松打造属于自己的扩展：
@@ -62,6 +64,8 @@
 - 支持 Edge 与 Chrome（开发者模式一键加载，便携包内已自带）。
 - **按住采集手势**：网页图片上按住 0.4 秒弹出环形分类面板，支持拖拽保存到指定文件夹或库根，支持覆盖/跳过查重。
 - 本地专用接口 `127.0.0.1:41600`，图片由主进程下载并自动附带页面 Referer 防盗链头。
+  <img width="1393" height="1116" alt="image" src="https://github.com/user-attachments/assets/59eec8c4-1758-40e1-b3aa-1fa7a838f0dc" />
+
 
 > #### 💡 浏览器采集扩展极速上手指南（画师专属保姆级教程）
 > 
@@ -73,7 +77,7 @@
 > 3. 点击左上方出现的 **「加载解压缩的扩展 / 加载已解压的扩展程序」** 按钮；
 > 4. 选中解压出来的 **`浏览器采集扩展 (extension)`** 文件夹，点击“选择文件夹”即可安装完成。
 >  <img width="1416" height="400" alt="image" src="https://github.com/user-attachments/assets/cb282074-401c-4739-8afe-c81c8f829478" />
-   <img width="631" height="360" alt="image" src="https://github.com/user-attachments/assets/816092d3-f116-4f5b-bde0-bfc0b99436dd" />
+>  <img width="631" height="360" alt="image" src="https://github.com/user-attachments/assets/816092d3-f116-4f5b-bde0-bfc0b99436dd" />
 
 > 5. 在picnest的窗口和个性化里**复制采集扩展配对密钥**，并打开浏览器在任意图片长按左键激活面板中输入密钥即可激活成功！
 > 6. *(推荐)* 点击浏览器地址栏右侧的拼图小图标 🧩，将「PicNest 图巢采集」固定在工具栏，点开可以随时预设保存文件夹。
