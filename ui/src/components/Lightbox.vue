@@ -71,7 +71,7 @@ function onViewerPointerMove(e) {
   const r = el.getBoundingClientRect()
   const fromBottom = r.bottom - e.clientY
   const fromCenter = Math.abs(e.clientX - (r.left + r.width / 2))
-  const halfW = kind.value === 'video' ? 280 : 210
+  const halfW = kind.value === 'video' ? 340 : 210
   dockHover.value = fromBottom >= 0 && fromBottom <= 64 && fromCenter <= halfW
 }
 function onViewerLeave() {
@@ -468,7 +468,18 @@ async function saveTransform() {
 
 /* ---------- 视频：自绘控制条（原生 UI 全关） ---------- */
 const videoEl = ref(null)
-const vid = ref({ time: 0, dur: 0, playing: false, vol: 0.8, muted: false, loop: false, ready: false })
+const vid = ref({
+  time: 0,
+  dur: 0,
+  playing: false,
+  vol: 0.8,
+  muted: false,
+  loop: true, // 默认开启循环播放
+  ready: false,
+  rate: 1, // 当前倍速，默认 1.0x
+})
+const showRateMenu = ref(false)
+const speedOptions = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
 const seekDrag = ref(false)
 const progressPct = computed(() => (vid.value.dur ? Math.min(100, (vid.value.time / vid.value.dur) * 100) : 0))
 function fmtTime(s) {
@@ -489,6 +500,7 @@ function onVideoMeta() {
   v.volume = vid.value.vol
   v.muted = vid.value.muted
   v.loop = vid.value.loop
+  v.playbackRate = vid.value.rate || 1
   nextTick(fitToWindow)
   v.play?.().catch(() => {}) // 双击进入已有用户手势；被策略拦截就等用户点 ▶
 }
@@ -505,6 +517,29 @@ function togglePlay() {
   if (!v) return
   if (v.paused) v.play?.().catch(() => {})
   else v.pause()
+}
+function stepTime(sec) {
+  const v = videoEl.value
+  if (!v) return
+  const cur = v.currentTime || 0
+  const dur = vid.value.dur || v.duration || 0
+  let target = cur + sec
+  if (dur > 0) target = Math.max(0, Math.min(dur, target))
+  else target = Math.max(0, target)
+  v.currentTime = target
+  vid.value.time = target
+}
+function setPlaybackRate(r) {
+  const v = videoEl.value
+  vid.value.rate = r
+  if (v) v.playbackRate = r
+  showRateMenu.value = false
+}
+function cycleRate() {
+  const cur = vid.value.rate || 1
+  const idx = speedOptions.indexOf(cur)
+  const next = speedOptions[(idx + 1) % speedOptions.length]
+  setPlaybackRate(next)
 }
 function seekTo(clientX, track) {
   const v = videoEl.value
@@ -550,12 +585,14 @@ async function toggleFullscreen() {
 }
 watch(() => [lib.lightbox.open, lib.lightbox.path], ([open]) => {
   if (!open || kind.value !== 'video') return
+  showRateMenu.value = false
   nextTick(() => {
     const v = videoEl.value
     if (!v) return
     v.volume = vid.value.vol
     v.muted = vid.value.muted
     v.loop = vid.value.loop
+    v.playbackRate = vid.value.rate || 1
     v.play?.().catch(() => {})
   })
 })
@@ -929,8 +966,30 @@ function onKey(e) {
     else lib.closeLightbox()
   }
   else if (e.key === 'Enter' && lib.viewer.cropMode && crop.value) applyCrop()
-  else if ((e.key === 'ArrowLeft' || (plain && k === 'a')) && !lib.viewer.cropMode) lib.lightboxNav(-1)
-  else if ((e.key === 'ArrowRight' || (plain && k === 'd')) && !lib.viewer.cropMode) lib.lightboxNav(1)
+  else if ((e.key === 'ArrowLeft' || (plain && k === 'a')) && !lib.viewer.cropMode) {
+    if (kind.value === 'video' && e.key === 'ArrowLeft' && !e.shiftKey) {
+      e.preventDefault()
+      stepTime(-5)
+    } else {
+      lib.lightboxNav(-1)
+    }
+  }
+  else if ((e.key === 'ArrowRight' || (plain && k === 'd')) && !lib.viewer.cropMode) {
+    if (kind.value === 'video' && e.key === 'ArrowRight' && !e.shiftKey) {
+      e.preventDefault()
+      stepTime(5)
+    } else {
+      lib.lightboxNav(1)
+    }
+  }
+  else if (plain && k === 'j' && kind.value === 'video') {
+    e.preventDefault()
+    stepTime(-5)
+  }
+  else if (plain && k === 'l' && kind.value === 'video') {
+    e.preventDefault()
+    stepTime(5)
+  }
   else if (e.key === '0' && (kind.value === 'image' || kind.value === 'video')) fitToWindow()
 }
 </script>
@@ -1057,9 +1116,11 @@ function onKey(e) {
       <button class="dock-btn wide" title="原始大小（1:1）" @click="oneToOne">1:1</button>
       <button class="dock-btn wide" title="缩放到窗口大小" @click="fitToWindow">⤢ 适应</button>
     </div>
-    <!-- 视频工具条：播放/进度/音量/循环/全屏 -->
+    <!-- 视频工具条：快退/播放/快进/进度/音量/倍速/循环/全屏/上一张/下一张 -->
     <div v-else-if="kind === 'video'" class="dock glass-pill video-dock dock-clear">
+      <button class="dock-btn step" title="后退 5 秒（J / ←）" @click="stepTime(-5)">-5s</button>
       <button class="dock-btn play" :title="vid.playing ? '暂停（空格）' : '播放（空格）'" @click="togglePlay">{{ vid.playing ? '❚❚' : '▶' }}</button>
+      <button class="dock-btn step" title="快进 5 秒（L / →）" @click="stepTime(5)">+5s</button>
       <span class="vtime">{{ fmtTime(vid.time) }}</span>
       <div class="vtrack" @pointerdown.prevent="onSeekDown" @pointermove="onSeekMove" @pointerup="onSeekUp" @pointercancel="onSeekUp">
         <i class="vfill" :style="{ width: progressPct + '%' }" />
@@ -1069,11 +1130,32 @@ function onKey(e) {
       <i class="vsep" />
       <button class="dock-btn" :class="{ on: !vid.muted && vid.vol > 0 }" :title="vid.muted ? '取消静音' : '静音'" @click="toggleMute">{{ vid.muted || !vid.vol ? '✕' : '♪' }}</button>
       <input class="vrange" type="range" min="0" max="1" step="0.01" :value="vid.muted ? 0 : vid.vol" title="音量" @input="setVolume" />
-      <button class="dock-btn" :class="{ on: vid.loop }" title="循环播放" @click="toggleLoop">↻</button>
+      <div class="rate-wrap" @mouseenter="showRateMenu = true" @mouseleave="showRateMenu = false">
+        <button
+          class="dock-btn rate-btn"
+          :class="{ on: vid.rate !== 1 }"
+          :title="'倍速：' + (vid.rate === 1 ? '1.0x' : vid.rate + 'x') + '（点击切换，悬停展开）'"
+          @click="cycleRate"
+        >
+          {{ vid.rate === 1 ? '1.0x' : vid.rate + 'x' }}
+        </button>
+        <div v-if="showRateMenu" class="rate-menu glass-card">
+          <button
+            v-for="r in [2.0, 1.5, 1.25, 1.0, 0.75, 0.5]"
+            :key="r"
+            class="rate-opt"
+            :class="{ on: vid.rate === r }"
+            @click.stop="setPlaybackRate(r)"
+          >
+            {{ r === 1.0 ? '1.0x 正常' : r + 'x' }}
+          </button>
+        </div>
+      </div>
+      <button class="dock-btn" :class="{ on: vid.loop }" :title="vid.loop ? '循环播放：已开启' : '循环播放：已关闭'" @click="toggleLoop">↻</button>
       <button class="dock-btn" title="全屏" @click="toggleFullscreen">⛶</button>
       <i class="vsep" />
-      <button class="dock-btn" title="上一张（←/A）" @click="lib.lightboxNav(-1)">‹</button>
-      <button class="dock-btn" title="下一张（→/D）" @click="lib.lightboxNav(1)">›</button>
+      <button class="dock-btn" title="上一项（Shift+← / A）" @click="lib.lightboxNav(-1)">‹</button>
+      <button class="dock-btn" title="下一项（Shift+→ / D）" @click="lib.lightboxNav(1)">›</button>
     </div>
     <div v-if="!url" class="empty">图片不存在</div>
     <div v-else-if="stageDead && kind === 'image'" class="empty">图片加载失败（原图与缩略图都不可读）</div>
@@ -1194,9 +1276,47 @@ function onKey(e) {
 .viewer :deep(.canvas-stage.gray) { filter: grayscale(1); }
 .video-dock { gap: 6px; }
 .video-dock .dock-btn.play { color: var(--accent); font-size: 12px; }
+.dock-btn.step { font-family: Consolas, monospace; font-size: 11px; min-width: 30px; padding: 0 4px; letter-spacing: -0.5px; }
+.dock-btn.step:hover { background: var(--accent-weak); color: var(--accent); }
+.rate-wrap { position: relative; display: flex; align-items: center; }
+.dock-btn.rate-btn { font-family: Consolas, monospace; font-size: 11.5px; min-width: 38px; padding: 0 6px; }
+.rate-menu {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  min-width: 84px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--glass-strong) 88%, transparent);
+  backdrop-filter: blur(16px) saturate(1.2);
+  -webkit-backdrop-filter: blur(16px) saturate(1.2);
+  border: 1px solid var(--border);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  z-index: 60;
+  animation: pop 0.14s ease;
+}
+.rate-opt {
+  font-family: Consolas, monospace;
+  font-size: 11.5px;
+  padding: 4px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.12s;
+  text-align: center;
+}
+.rate-opt:hover { background: var(--accent-weak); color: var(--accent); }
+.rate-opt.on { background: var(--accent-weak); color: var(--accent); font-weight: 600; }
 .vtime { font-family: Consolas, monospace; font-size: 11px; color: var(--text); min-width: 34px; text-align: center; }
 .vtime.dim { color: var(--text-2); }
-.vtrack { position: relative; width: min(36vw, 440px); height: 20px; display: flex; align-items: center; cursor: pointer; touch-action: none; }
+.vtrack { position: relative; width: min(30vw, 360px); height: 20px; display: flex; align-items: center; cursor: pointer; touch-action: none; }
 .vtrack::before { content: none; }
 .vtrack::after { content: ''; position: absolute; left: 0; right: 0; height: 3px; border-radius: 2px; background: var(--border); }
 .vfill { position: absolute; left: 0; height: 3px; border-radius: 2px; background: var(--accent); z-index: 1; }
