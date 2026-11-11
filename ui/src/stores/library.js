@@ -2613,8 +2613,9 @@ export const useLibrary = defineStore('library', {
       localStorage.setItem('picnest.docPrivacyMode', this.docPrivacyMode ? '1' : '0')
       collectiveShake()
     },
-    openBrief(path) {
+    openBrief(path, fromLightbox = false) {
       this.closeContextMenu()
+      this._briefFromLightbox = fromLightbox || this.lightbox.open
       if (this.lightbox.open) this.closeLightbox()
       const p = path || this.selectedPath || this.images[0]?.file_path || null
       if (!p) return
@@ -2625,6 +2626,9 @@ export const useLibrary = defineStore('library', {
       } catch (e) {}
     },
     closeBrief() {
+      const returnPath = this.brief.path
+      const fromLb = this._briefFromLightbox
+      this._briefFromLightbox = false
       this.brief = { open: false, path: null, scale: 1, tx: 0, ty: 0 }
       try {
         if (document.fullscreenElement) {
@@ -2632,6 +2636,9 @@ export const useLibrary = defineStore('library', {
           if (pr?.catch) pr.catch(() => {})
         }
       } catch (e) {}
+      if (fromLb && returnPath) {
+        this.openLightbox(returnPath)
+      }
     },
     briefNav(dir) {
       const list = this.gridOrder?.length ? this.gridOrder : this.filteredImages.map((x) => x.file_path)

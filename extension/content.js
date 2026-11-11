@@ -775,52 +775,50 @@
   function findPinUrl(el) {
     if (!el) return ''
 
-    // 1. 主展示大舞台严格限定在左侧视觉容器（完全对齐 Eagle 生产选择器，严禁使用模糊的 *=closeup 导致匹配整个页面外壳吞噬右侧推荐栏）
+    // 1. 优先检查当前节点或其直系祖先是否明确属于单个推荐卡片的 <a> 链接（只向上检索，严禁向下 querySelector 吞噬同级卡片）
+    const pinA = el.closest?.('a[href*="/pin/"]')
+    if (pinA) {
+      const m = (pinA.getAttribute('href') || pinA.href || '').match(/\/pin\/(\d+)/)
+      if (m) return 'https://www.pinterest.com/pin/' + m[1] + '/'
+    }
+
+    // 2. 检查是否在带有 pin-id 数据属性的独立卡片容器内
+    const pinCard = el.closest?.('[data-test-pin-id], [data-pin-id]')
+    if (pinCard) {
+      const pId = pinCard.getAttribute('data-test-pin-id') || pinCard.getAttribute('data-pin-id')
+      if (pId && /^\d+$/.test(pId)) return 'https://www.pinterest.com/pin/' + pId + '/'
+    }
+
+    // 3. 检查主展示大舞台（只有在左侧主展示容器且非右侧/下方推荐流时才取主页面 URL）
     const isVisualCloseup = el.closest?.('[data-test-id="closeup-visual-container"], [data-test-id="closeup-video-with-visibility"], [data-test-id="story-pin-closeup-page"]')
     if (isVisualCloseup) {
       if (/\/pin\/\d+/.test(location.href)) return location.href
     }
 
-    // 2. 向上逐级探测专属本卡片的 Pin 标识（最高向上检索 12 层）
+    // 4. 向上逐级探测专属本节点的 Pin 标识（仅检查节点自身属性与 React fiber，绝不向下使用 querySelector）
     let cur = el
     let depth = 0
-    while (cur && cur !== document.body && depth < 12) {
-      // 2.1 节点自身即为带有 Pin 链接的 <a> 标签
+    while (cur && cur !== document.body && depth < 8) {
       if (cur.tagName === 'A') {
-        const href = cur.getAttribute('href') || cur.href || ''
-        const m = href.match(/\/pin\/(\d+)/)
-        if (m) return `https://www.pinterest.com/pin/${m[1]}/`
+        const m = (cur.getAttribute('href') || cur.href || '').match(/\/pin\/(\d+)/)
+        if (m) return 'https://www.pinterest.com/pin/' + m[1] + '/'
       }
-
-      // 2.2 节点自身带有 pin 数据属性
       const pId = cur.getAttribute?.('data-test-pin-id') ||
                   cur.getAttribute?.('data-pin-id') ||
                   cur.getAttribute?.('data-id')
       if (pId && /^\d{10,25}$/.test(pId)) {
-        return `https://www.pinterest.com/pin/${pId}/`
+        return 'https://www.pinterest.com/pin/' + pId + '/'
       }
-
-      // 2.3 容器内部包含子链接 a[href*="/pin/"]
-      const childA = cur.querySelector?.('a[href*="/pin/"]')
-      if (childA) {
-        const href = childA.getAttribute('href') || childA.href || ''
-        const m = href.match(/\/pin\/(\d+)/)
-        if (m) return `https://www.pinterest.com/pin/${m[1]}/`
-      }
-
-      // 2.4 从 React Fiber / Props 中探测组件绑定的 pin.id
       for (const key of Object.keys(cur)) {
         if (key.startsWith('__reactFiber$') || key.startsWith('__reactProps$')) {
           const fiberPinId = findPinIdFromReact(cur[key], 0)
-          if (fiberPinId) return `https://www.pinterest.com/pin/${fiberPinId}/`
+          if (fiberPinId) return 'https://www.pinterest.com/pin/' + fiberPinId + '/'
         }
       }
-
       cur = cur.parentElement
       depth++
     }
 
-    // 3. 绝不跨域偷用当前主页面的 location.href！非主舞台元素若解析不到 Pin ID，直接返回空，避免偷换为主页面视频
     return ''
   }
 
@@ -1042,25 +1040,14 @@
         }
       }
 
-      // 2. Story Pin / 切片流精准路径映射（对齐 Eagle 核心算法）
+      // 2. Story Pin / 切片流精准路径映射（对齐 Eagle 核心算法，严禁在页面端执行 fetch 触发 CORS 403）
       const hlsUrl = data.story_pin_data?.pages?.[0]?.blocks?.[0]?.video?.video_list?.V_HLSV3_MOBILE?.url ||
                      vl?.V_HLS?.url || vl?.V_HLSV4?.url || ''
       if (hlsUrl) {
-        try {
-          if (hlsUrl.includes('iht/hls')) {
-            const cand = hlsUrl.replace('iht/hls', 'iht/expMp4').replace('.m3u8', '_720w.mp4')
-            const probe = await fetch(cand, { method: 'HEAD', credentials: 'omit' })
-            if (probe.ok) return cand
-            return cand
-          }
-          const cand = hlsUrl.replace('hls', '720p').replace('.m3u8', '.mp4').replace('m3u8', 'mp4')
-          const probe = await fetch(cand, { method: 'HEAD', credentials: 'omit' })
-          if (probe.ok) return cand
-          return cand
-        } catch {}
-        return hlsUrl.includes('iht/hls')
-          ? hlsUrl.replace('iht/hls', 'iht/expMp4').replace('.m3u8', '_720w.mp4')
-          : hlsUrl.replace('hls', '720p').replace('.m3u8', '.mp4')
+        if (hlsUrl.includes('iht/hls')) {
+          return hlsUrl.replace('iht/hls', 'iht/expMp4').replace('.m3u8', '_720w.mp4')
+        }
+        return hlsUrl.replace('hls', '720p').replace('.m3u8', '.mp4')
       }
     } catch {}
     return ''
@@ -1210,31 +1197,13 @@
           toast.setThumb(vInfo.frameDataUrl)
         }
         if (vInfo?.src && /\.mp4(\?.*)?$/i.test(vInfo.src) && !vInfo.src.includes('/hls/')) {
-          toast.updateStatus('正在高速读取视频流…')
-          let vDataUrl = ''
-          try {
-            const vRes = await fetch(vInfo.src, { credentials: 'omit' })
-            if (vRes.ok) {
-              const vBlob = await vRes.blob()
-              vDataUrl = await new Promise((resolve, reject) => {
-                const fr = new FileReader()
-                fr.onload = () => resolve(fr.result)
-                fr.onerror = reject
-                fr.readAsDataURL(vBlob)
-              })
-            }
-          } catch (e) {
-            // 静默降级，绝不向控制台抛出 403 异常
-          }
-
           payload = {
-            kind: vDataUrl ? 'video' : 'image',
+            kind: 'video',
             url: vInfo.pinUrl || (isVisualCloseup ? location.href : ''),
             pinUrl: vInfo.pinUrl || (isVisualCloseup ? location.href : ''),
             isVisualCloseup,
             title: vInfo.title || title,
-            src: '',
-            dataUrl: vDataUrl || vInfo.frameDataUrl || vInfo.poster,
+            src: vInfo.src,
             poster: vInfo.poster || vInfo.frameDataUrl,
           }
         } else if (isPinterestSite()) {

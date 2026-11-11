@@ -1019,7 +1019,7 @@ function onKey(e) {
       }"
       @loadedmetadata="onVideoMeta" @timeupdate="onVideoTime"
       @play="vid.playing = true" @pause="vid.playing = false" @ended="vid.playing = false"
-      @click="onVideoClick" @dblclick="toggleFullscreen"
+      @click="onVideoClick" @dblclick="lib.openBrief(lib.lightbox.path)"
     />
     <!-- 文本：内置编辑器（自动保存 + Ctrl+S；超 2MB 只读预览） -->
     <div v-else-if="kind === 'text'" class="text-stage">
@@ -1108,7 +1108,12 @@ function onKey(e) {
       <button class="dock-btn" :class="{ on: lib.viewer.cropMode }" :disabled="lib.viewer.rot % 180 !== 0 || lib.viewer.flopX"
               :title="lib.viewer.cropMode ? '退出裁切' : '裁切（旋转/翻转时不可用）'"
               @click="toggleCrop">⛶</button>
-      <button class="dock-btn" title="以图找图（Shift+S）" @click="lib.openVisualSearch([lib.lightbox.path])">🔍</button>
+      <button class="dock-btn" title="以图找图（Shift+S）" @click="lib.openVisualSearch([lib.lightbox.path])">
+        <svg class="dock-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;">
+          <circle cx="10.5" cy="10.5" r="7" />
+          <line x1="21" y1="21" x2="15.8" y2="15.8" />
+        </svg>
+      </button>
       <i class="vsep" />
       <button class="dock-btn wide" :class="{ on: hasTransform }" :disabled="!hasTransform || saveBusy"
               title="保存旋转/翻转（写回原图，原件自动备份）" @click="saveTransform">{{ saveBusy ? '保存中…' : '保存' }}</button>
@@ -1152,10 +1157,7 @@ function onKey(e) {
         </div>
       </div>
       <button class="dock-btn" :class="{ on: vid.loop }" :title="vid.loop ? '循环播放：已开启' : '循环播放：已关闭'" @click="toggleLoop">↻</button>
-      <button class="dock-btn" title="全屏" @click="toggleFullscreen">⛶</button>
-      <i class="vsep" />
-      <button class="dock-btn" title="上一项（Shift+← / A）" @click="lib.lightboxNav(-1)">‹</button>
-      <button class="dock-btn" title="下一项（Shift+→ / D）" @click="lib.lightboxNav(1)">›</button>
+      <button class="dock-btn" title="简报全屏（⛶）" @click="lib.openBrief(lib.lightbox.path)">⛶</button>
     </div>
     <div v-if="!url" class="empty">图片不存在</div>
     <div v-else-if="stageDead && kind === 'image'" class="empty">图片加载失败（原图与缩略图都不可读）</div>

@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useLibrary, extractDropUrls } from './stores/library'
 import { isExternalDT, isNativeDragOutActive, markNativeDragOut, endNativeDragOut } from './lib/dnd'
+import { isVideoPath } from './lib/fileKinds'
 import TitleBar from './components/TitleBar.vue'
 import SideBar from './components/SideBar.vue'
 import ImageGrid from './components/ImageGrid.vue'
@@ -78,6 +79,7 @@ function onKeydown(e) {
     const lk = String(k || '').toLowerCase()
     if (k === 'Escape') { e.preventDefault(); lib.closeBrief(); return }
     if (k === 'ArrowLeft' || (plain && lk === 'a')) { e.preventDefault(); lib.briefNav(-1); return }
+    if (k === ' ' && isVideoPath(lib.brief.path)) return // 视频播放模式下放行空格，交由 BriefMode 切换播放/暂停
     if (k === 'ArrowRight' || k === ' ' || (plain && lk === 'd')) { e.preventDefault(); lib.briefNav(1); return }
     return
   }

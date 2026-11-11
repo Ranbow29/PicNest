@@ -370,6 +370,8 @@ function normalizePinterestVideoUrl(rawUrl) {
 /* 借由标签页环境拉取媒体流（原生携带 Pinterest 同域凭据与合规 Referer） */
 async function downloadMediaViaTab(tabId, url) {
   if (!tabId || !url || !/^https?:\/\//i.test(url)) return null
+  // pinimg.com 等 CDN 禁止浏览器跨源携带或省略凭据（CORS Access-Control-Allow-Credentials: false），绝不能在页面内拉取，直接走后台下载
+  if (url.includes('pinimg.com')) return null
   try {
     const [r] = await chrome.scripting.executeScript({
       target: { tabId },
