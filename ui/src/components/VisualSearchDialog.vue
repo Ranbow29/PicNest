@@ -548,12 +548,15 @@ onBeforeUnmount(() => {
         
         <!-- 顶栏控制区 -->
         <header class="vs-topbar">
-          <div class="topbar-left">
-            <span class="app-icon">📌</span>
+          <div class="topbar-left" data-no-drag>
+            <svg class="app-icon-svg" viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="12" y1="17" x2="12" y2="22"/>
+              <path d="M5 17h14v-2l-2-3V5a2 2 0 0 0-2-2h-6a2 2 0 0 0-2 2v7l-2 3v2z"/>
+            </svg>
             <span class="app-title">Pinterest 以图找图</span>
           </div>
 
-          <div class="topbar-right">
+          <div class="topbar-right" data-no-drag>
             <!-- 瀑布流缩放滑块 -->
             <div class="scale-box" title="调节结果卡片大小">
               <button class="scale-btn" @click="scale -= 20">-</button>
@@ -561,14 +564,17 @@ onBeforeUnmount(() => {
               <button class="scale-btn" @click="scale += 20">+</button>
             </div>
 
-            <!-- 置顶图钉 -->
+            <!-- 置顶图钉 (纯单色无固有色 SVG) -->
             <button
-              class="icon-btn"
+              class="icon-btn pin-btn"
               :class="{ active: isAlwaysOnTop }"
               :title="isAlwaysOnTop ? '取消置顶' : '置顶窗口（便于对照绘图）'"
               @click="toggleAlwaysOnTop"
             >
-              📌
+              <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="12" y1="17" x2="12" y2="22"/>
+                <path d="M5 17h14v-2l-2-3V5a2 2 0 0 0-2-2h-6a2 2 0 0 0-2 2v7l-2 3v2z"/>
+              </svg>
             </button>
 
             <!-- 队列计数 -->
@@ -811,9 +817,18 @@ onBeforeUnmount(() => {
           @wheel.prevent="onPreviewWheel"
           @click.self="closePreview"
         >
-          <!-- 顶栏信息与关闭条 (尺寸与百分比放左上角关联展示) -->
+          <!-- 顶栏信息与返回条 (退出进入左上角作为返回上一级，右上角放纯单色图钉) -->
           <div class="lightbox-topbar">
-            <div class="topbar-info">
+            <div class="topbar-info" data-no-drag>
+              <!-- 左上角返回上一级按钮 -->
+              <button class="topbar-back-btn" title="返回上一级 (Esc / 空格)" @click="closePreview">
+                <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="19" y1="12" x2="5" y2="12"/>
+                  <polyline points="12 19 5 12 12 5"/>
+                </svg>
+                <span class="back-text">返回</span>
+              </button>
+              <i class="topbar-vsep" />
               <span class="index-pill" v-if="previewIndex >= 0">
                 {{ previewIndex + 1 }} / {{ currentTask?.results?.length || 0 }}
               </span>
@@ -829,8 +844,19 @@ onBeforeUnmount(() => {
               </span>
               <span class="title-text" :title="previewItem.title">{{ previewItem.title || '灵感预览' }}</span>
             </div>
-            <div class="topbar-actions">
-              <button class="topbar-close-btn" title="退出预览 (Esc / 空格)" @click="closePreview">✕</button>
+            <div class="topbar-actions" data-no-drag>
+              <!-- 右上角不带固有色的置顶图钉 -->
+              <button
+                class="topbar-pin-btn"
+                :class="{ active: isAlwaysOnTop }"
+                :title="isAlwaysOnTop ? '取消置顶' : '置顶窗口（便于对照绘图）'"
+                @click="toggleAlwaysOnTop"
+              >
+                <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="12" y1="17" x2="12" y2="22"/>
+                  <path d="M5 17h14v-2l-2-3V5a2 2 0 0 0-2-2h-6a2 2 0 0 0-2 2v7l-2 3v2z"/>
+                </svg>
+              </button>
             </div>
           </div>
 
@@ -972,6 +998,14 @@ onBeforeUnmount(() => {
   border-bottom: 1px solid var(--border);
   background: var(--panel);
   user-select: none;
+  -webkit-app-region: drag; /* 接入 Windows 原生窗口拖拽移动循环 */
+}
+
+.vs-topbar button,
+.vs-topbar input,
+.vs-topbar .scale-box,
+.vs-topbar [data-no-drag] {
+  -webkit-app-region: no-drag;
 }
 
 .topbar-left {
@@ -980,8 +1014,8 @@ onBeforeUnmount(() => {
   gap: 12px;
 }
 
-.app-icon {
-  font-size: 18px;
+.app-icon-svg {
+  color: var(--accent);
 }
 
 .app-title {
@@ -1407,19 +1441,19 @@ onBeforeUnmount(() => {
 .card-dock {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   background: rgba(18, 18, 24, 0.78);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 999px;
-  padding: 4px 8px;
+  padding: 5px 10px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
 }
 
 .card-dock-btn {
-  height: 28px;
-  width: 30px;
+  height: 34px;
+  width: 36px;
   border: none;
   border-radius: 999px;
   background: transparent;
@@ -1451,6 +1485,11 @@ onBeforeUnmount(() => {
 
 .card-dock-btn.saved {
   color: #34d399;
+}
+
+.card-dock-btn .dock-svg {
+  width: 17px;
+  height: 17px;
 }
 
 .card-dock-btn:hover .dock-tooltip {
@@ -1645,29 +1684,86 @@ onBeforeUnmount(() => {
   opacity: 0.9;
 }
 
-.topbar-actions {
-  pointer-events: auto;
+/* 顶栏信息与返回条 (退出进入左上角作为返回上一级，右上角放纯单色图钉) */
+.lightbox-topbar {
+  position: absolute;
+  top: 16px;
+  left: 20px;
+  right: 20px;
+  z-index: 10;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  pointer-events: none;
+  -webkit-app-region: drag; /* 支持大图顶栏拖拽窗口 */
 }
 
-.topbar-close-btn {
+.lightbox-topbar .topbar-info,
+.lightbox-topbar .topbar-actions,
+.lightbox-topbar button,
+.lightbox-topbar [data-no-drag] {
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
+}
+
+.topbar-back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: transparent;
+  border: none;
+  color: #f3f4f6;
+  cursor: pointer;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  transition: all 0.15s;
+}
+
+.topbar-back-btn:hover {
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+  transform: translateX(-1px);
+}
+
+.back-text {
+  font-size: 13px;
+  line-height: 1;
+}
+
+.topbar-vsep {
+  width: 1px;
+  height: 14px;
+  background: rgba(255, 255, 255, 0.18);
+  margin: 0 2px;
+}
+
+.topbar-pin-btn {
   background: rgba(18, 18, 24, 0.65);
   backdrop-filter: blur(14px);
   border: 1px solid rgba(255, 255, 255, 0.12);
-  color: #fff;
+  color: rgba(255, 255, 255, 0.85);
   border-radius: 50%;
   width: 36px;
   height: 36px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 16px;
   cursor: pointer;
   transition: all 0.15s;
 }
 
-.topbar-close-btn:hover {
-  background: rgba(239, 68, 68, 0.85);
+.topbar-pin-btn:hover {
+  background: rgba(255, 255, 255, 0.2);
   transform: scale(1.06);
+}
+
+.topbar-pin-btn.active {
+  background: var(--accent-weak);
+  color: var(--accent);
+  border-color: var(--accent);
+  box-shadow: 0 0 10px var(--accent-weak);
 }
 
 /* 舞台与大图 */
@@ -1702,20 +1798,20 @@ onBeforeUnmount(() => {
   transition: none !important;
 }
 
-/* 底部悬浮工具坞 (对齐 PicNest 原生灯箱高透薄雾与图二极简无固有色风格；靠近展开) */
+/* 底部悬浮工具坞 (尺寸放大，纯净单色图标与快捷键气泡，靠近展开) */
 .lightbox-dock {
   position: absolute;
-  bottom: 22px;
+  bottom: 24px;
   left: 50%;
   transform: translateX(-50%) translateY(12px) scale(0.96);
   z-index: 100;
   display: flex;
   align-items: center;
-  gap: 3px;
+  gap: 5px;
   background: rgba(18, 18, 24, 0.78);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
-  padding: 5px 8px;
+  padding: 6px 12px;
   border-radius: 999px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   box-shadow: 0 10px 32px rgba(0, 0, 0, 0.5);
@@ -1733,8 +1829,8 @@ onBeforeUnmount(() => {
 }
 
 .dock-action-btn {
-  height: 32px;
-  width: 34px;
+  height: 38px;
+  width: 42px;
   border: none;
   border-radius: 999px;
   background: transparent;
@@ -1769,8 +1865,8 @@ onBeforeUnmount(() => {
 }
 
 .dock-svg {
-  width: 16px;
-  height: 16px;
+  width: 19px;
+  height: 19px;
   display: block;
 }
 
@@ -1784,7 +1880,7 @@ onBeforeUnmount(() => {
 
 .dock-vsep {
   width: 1px;
-  height: 16px;
+  height: 18px;
   background: rgba(255, 255, 255, 0.14);
   margin: 0 4px;
 }
