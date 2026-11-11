@@ -2718,7 +2718,7 @@ export const useLibrary = defineStore('library', {
     closeVisualSearch() {
       this.visualSearch.open = false
     },
-    pushVisualSearchTask(taskOpts) {
+    pushVisualSearchTask(taskOpts, insertAfterId = null) {
       const newTask = {
         id: crypto.randomUUID(),
         name: taskOpts.name || taskOpts.title || 'query',
@@ -2732,8 +2732,18 @@ export const useLibrary = defineStore('library', {
         bookmark: null,
         loading: false,
         error: null,
+        scrollTop: 0,
       }
-      this.visualSearch.tasks.push(newTask)
+      if (insertAfterId) {
+        const idx = this.visualSearch.tasks.findIndex((t) => t.id === insertAfterId)
+        if (idx !== -1) {
+          this.visualSearch.tasks.splice(idx + 1, 0, newTask)
+        } else {
+          this.visualSearch.tasks.push(newTask)
+        }
+      } else {
+        this.visualSearch.tasks.push(newTask)
+      }
       this.visualSearch.activeTaskId = newTask.id
       this.visualSearch.open = true
       return newTask

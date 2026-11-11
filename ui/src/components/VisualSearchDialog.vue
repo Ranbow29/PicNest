@@ -44,10 +44,19 @@ async function toggleAlwaysOnTop() {
 // 悬停卡片与放大预览状态
 const hoveredItem = ref(null)
 const previewItem = ref(null)
+const waterfallEl = ref(null)
 
-// 任务队列操作
+// 任务队列操作与滚动记忆
 function selectTask(task) {
+  if (currentTask.value && waterfallEl.value) {
+    currentTask.value.scrollTop = waterfallEl.value.scrollTop
+  }
   vs.value.activeTaskId = task.id
+  nextTick(() => {
+    if (waterfallEl.value && typeof task.scrollTop === 'number') {
+      waterfallEl.value.scrollTop = task.scrollTop
+    }
+  })
   if (!task.results?.length && !task.loading) {
     triggerSearch(task)
   }
@@ -186,15 +195,15 @@ function onBboxChanged() {
   if (cropDebounceTimer) clearTimeout(cropDebounceTimer)
   cropDebounceTimer = setTimeout(() => {
     if (currentTask.value) {
-      currentTask.value.results = []
+      // 渐进式刷新（对齐 Eagle）：不清空现有卡片，仅重设分页游标并在后台静默重查，消除白屏跳变
       currentTask.value.bookmark = null
-      triggerSearch(currentTask.value)
+      triggerSearch(currentTask.value, false, true)
     }
-  }, 350)
+  }, 320)
 }
 
 /* ================== 网络检索与分页 ================== */
-async function triggerSearch(task, continueSearch = false) {
+async function triggerSearch(task, continueSearch = false, isRequery = false) {
   if (!task || task.loading) return
   task.loading = true
   task.error = null
@@ -219,7 +228,11 @@ async function triggerSearch(task, continueSearch = false) {
       if (continueSearch) {
         task.results = [...(task.results || []), ...(res.items || [])]
       } else {
+        // 成功获取新数据后整体原子替换，杜绝白屏与黑边闪烁
         task.results = res.items || []
+        if (isRequery && waterfallEl.value) {
+          waterfallEl.value.scrollTo({ top: 0, behavior: 'smooth' })
+        }
       }
       task.bookmark = res.bookmark || null
       if (res.queryMeta) {
@@ -240,10 +253,14 @@ function loadMore() {
   }
 }
 
-// 瀑布流无限滚动：向下滚自动触发加载下一页，避免手动点击与断流
+// 瀑布流无限滚动与位置记忆：向下滚自动加载下一页，同时记录当前任务滚动偏置
 function onWaterfallScroll(e) {
   const el = e?.target
-  if (!el || !currentTask.value?.bookmark || currentTask.value.loading) return
+  if (!el) return
+  if (currentTask.value) {
+    currentTask.value.scrollTop = el.scrollTop
+  }
+  if (!currentTask.value?.bookmark || currentTask.value.loading) return
   const dist = el.scrollHeight - el.scrollTop - el.clientHeight
   if (dist < 400) {
     loadMore()
@@ -251,17 +268,18 @@ function onWaterfallScroll(e) {
 }
 
 /* ================== 卡片动作 (F: 递归搜索 / S: 存入未分类 / O: 原网) ================== */
-// F: 递归搜索
+// F: 递归搜索 (紧贴当前任务后面插入，保证连续创作上下文)
 function researchItem(item, e) {
   e?.stopPropagation()
   if (!item) return
+  const curId = currentTask.value?.id
   const newTask = lib.pushVisualSearchTask({
     title: item.title || '衍生图搜',
     thumbUrl: item.thumbUrl,
     dataUrl: item.largeUrl || item.thumbUrl,
     width: item.width,
     height: item.height,
-  })
+  }, curId)
   triggerSearch(newTask)
 }
 
@@ -310,7 +328,7 @@ function openSource(item, e) {
   }
 }
 
-/* ================== 灯箱大图交互 (平移缩放、左右切图、靠近浮现工具坞) ================== */
+/* ================== 灯箱大图交互 (双层渐进加载、平滑切图预拉取、靠近浮现工具坞) ================== */
 const previewZoom = ref(1)
 const previewTx = ref(0)
 const previewTy = ref(0)
@@ -318,6 +336,7 @@ const isPreviewPanning = ref(false)
 const previewNatW = ref(0)
 const previewNatH = ref(0)
 const isDockHover = ref(false)
+const isHighResLoaded = ref(false)
 let dockHoverTimer = null
 let previewPanStart = { x: 0, y: 0, tx: 0, ty: 0 }
 
@@ -327,17 +346,49 @@ function resetPreviewTransform() {
   previewTy.value = 0
 }
 
+// 静默预加载相邻 3 张大图到浏览器缓存，切图体验对齐 Eagle 60fps 丝滑秒开
+function preloadNeighbors(curIdx) {
+  const list = currentTask.value?.results || []
+  if (!list.length || curIdx < 0) return
+  const toPreload = [curIdx + 1, curIdx + 2, curIdx - 1]
+  for (const idx of toPreload) {
+    if (idx >= 0 && idx < list.length) {
+      const it = list[idx]
+      const url = it.largeUrl || it.origUrl
+      if (url) {
+        const preImg = new Image()
+        preImg.src = url
+      }
+    }
+  }
+}
+
 function openPreview(item) {
   if (!item) return
   previewItem.value = item
   previewNatW.value = item.width || 0
   previewNatH.value = item.height || 0
+  isHighResLoaded.value = false
   resetPreviewTransform()
+  nextTick(() => {
+    preloadNeighbors(previewIndex.value)
+  })
 }
 
 function closePreview() {
   previewItem.value = null
+  isHighResLoaded.value = false
   resetPreviewTransform()
+}
+
+// 刷新当前大图 (按 R 或点击刷新，规避 Pinterest CDN 偶然 504)
+function reloadCurrentPreview() {
+  if (!previewItem.value) return
+  isHighResLoaded.value = false
+  const cur = previewItem.value
+  const base = cur.largeUrl || cur.origUrl || cur.thumbUrl
+  const sep = base.includes('?') ? '&' : '?'
+  cur.largeUrl = base.split('?_t=')[0] + sep + '_t=' + Date.now()
 }
 
 // 靠近底部自动展开工具坞 (PicNest 极简沉浸规范：平时隐身，鼠标移到底部区域立即展开)
@@ -354,12 +405,17 @@ function onLightboxPointerMove(e) {
   }
 }
 
-function onPreviewImgLoad(e) {
+function onPreviewHighResLoad(e) {
+  isHighResLoaded.value = true
   const img = e?.target
   if (img && img.naturalWidth && img.naturalHeight) {
     previewNatW.value = img.naturalWidth
     previewNatH.value = img.naturalHeight
   }
+}
+
+function onPreviewHighResError() {
+  isHighResLoaded.value = false
 }
 
 function onPreviewWheel(e) {
@@ -482,13 +538,26 @@ function onGlobalKeyDown(e) {
       openSource(previewItem.value)
       return
     }
+    if (k === 'R') {
+      e.preventDefault()
+      reloadCurrentPreview()
+      return
+    }
     return
   }
 
-  // 2. 主视窗快捷键
+  // 2. 主视窗快捷键 (支持 R / F5 / Ctrl+R 无白屏刷新当前任务)
   if (k === 'ESCAPE') {
     e.preventDefault()
     lib.closeVisualSearch()
+    return
+  }
+
+  if (k === 'R' || e.key === 'F5' || (e.ctrlKey && k === 'R')) {
+    e.preventDefault()
+    if (currentTask.value) {
+      triggerSearch(currentTask.value, false, true)
+    }
     return
   }
 
@@ -576,6 +645,19 @@ onBeforeUnmount(() => {
               <input type="range" min="160" max="520" step="20" v-model.number="scale" class="scale-slider" />
               <button class="scale-btn" @click="scale += 20">+</button>
             </div>
+
+            <!-- 刷新检索 (R / F5) -->
+            <button
+              class="icon-btn refresh-btn"
+              :class="{ spinning: currentTask?.loading }"
+              title="刷新当前检索 (R / F5)"
+              @click="currentTask && triggerSearch(currentTask, false, true)"
+            >
+              <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="23 4 23 10 17 10"/>
+                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+              </svg>
+            </button>
 
             <!-- 置顶图钉 (纯单色无固有色 SVG) -->
             <button
@@ -725,9 +807,13 @@ onBeforeUnmount(() => {
           </section>
 
           <!-- 右栏：瀑布流结果与卡片 (ResultWaterfall, flex-1) -->
-          <main class="waterfall-container" @scroll.passive="onWaterfallScroll">
-            
-            <!-- 加载态骨架屏 -->
+          <main class="waterfall-container" ref="waterfallEl" @scroll.passive="onWaterfallScroll">
+            <!-- 渐进式刷新顶部流动进度条 (对齐 Eagle 原生交互，无白屏跳动) -->
+            <div v-if="currentTask?.loading" class="waterfall-top-progress">
+              <div class="progress-bar-glow" />
+            </div>
+
+            <!-- 加载态骨架屏 (仅首次空数据时展示) -->
             <div v-if="currentTask?.loading && !currentTask.results?.length" class="skeleton-grid" :style="{ '--col-w': scale + 'px' }">
               <div v-for="i in 8" :key="i" class="skeleton-card" :style="{ height: 180 + (i % 3) * 60 + 'px' }" />
             </div>
@@ -736,7 +822,7 @@ onBeforeUnmount(() => {
             <div v-else-if="currentTask?.error" class="error-box">
               <div class="error-icon">⚠️</div>
               <div class="error-msg">{{ currentTask.error }}</div>
-              <button class="retry-btn" @click="triggerSearch(currentTask)">重新检索</button>
+              <button class="retry-btn" @click="triggerSearch(currentTask, false, true)">重新检索</button>
             </div>
 
             <!-- 空结果提示 -->
@@ -745,8 +831,13 @@ onBeforeUnmount(() => {
               <div class="empty-msg">未找到相似结果，请尝试调整框选区域或换张图片</div>
             </div>
 
-            <!-- 结果瀑布流 (真 CSS Masonry) -->
-            <div v-else class="waterfall-grid" :style="{ '--col-w': scale + 'px' }">
+            <!-- 结果瀑布流 (真 CSS Masonry，刷新期间平滑微降不透明度) -->
+            <div
+              v-else
+              class="waterfall-grid"
+              :class="{ 'waterfall-refreshing': currentTask?.loading && currentTask?.results?.length }"
+              :style="{ '--col-w': scale + 'px' }"
+            >
               <div
                 v-for="item in currentTask?.results"
                 :key="item.id"
@@ -858,6 +949,18 @@ onBeforeUnmount(() => {
               <span class="title-text" :title="previewItem.title">{{ previewItem.title || '灵感预览' }}</span>
             </div>
             <div class="topbar-actions" data-no-drag>
+              <!-- 重新载入大图 (R) -->
+              <button
+                class="topbar-pin-btn"
+                title="重新载入高清原图 (R)"
+                @click="reloadCurrentPreview"
+              >
+                <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="23 4 23 10 17 10"/>
+                  <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+                </svg>
+              </button>
+
               <!-- 右上角不带固有色的置顶图钉 -->
               <button
                 class="topbar-pin-btn"
@@ -873,23 +976,36 @@ onBeforeUnmount(() => {
             </div>
           </div>
 
-          <!-- 视图中心平移与缩放舞台 -->
+          <!-- 视图中心平移与缩放舞台 (双层渐进加载：底层缩略图瞬显杜绝黑屏，顶层原图淡入覆盖) -->
           <div
             class="lightbox-stage"
             :class="{ panning: isPreviewPanning }"
             @mousedown="onPreviewMouseDown"
             @dblclick="togglePreviewZoom"
           >
-            <img
-              ref="previewImgRef"
-              :src="previewItem.largeUrl || previewItem.thumbUrl"
-              class="lightbox-img"
+            <div
+              class="lightbox-img-wrapper"
               :style="{
                 transform: `translate3d(${previewTx}px, ${previewTy}px, 0) scale(${previewZoom})`
               }"
-              @load="onPreviewImgLoad"
-              @dragstart.prevent
-            />
+            >
+              <!-- 底层：已在瀑布流缓存的缩略图，0ms 瞬显 -->
+              <img
+                :src="previewItem.thumbUrl"
+                class="lightbox-layer-thumb"
+                @dragstart.prevent
+              />
+              <!-- 顶层：异步原图/大图，加载完成平滑淡入覆盖 -->
+              <img
+                ref="previewImgRef"
+                :src="previewItem.largeUrl || previewItem.origUrl || previewItem.thumbUrl"
+                class="lightbox-layer-highres"
+                :class="{ loaded: isHighResLoaded }"
+                @load="onPreviewHighResLoad"
+                @error="onPreviewHighResError"
+                @dragstart.prevent
+              />
+            </div>
           </div>
 
           <!-- 底部悬浮工具坞 (参考 PicNest 灯箱极简单色图标，靠近展开，居中减少鼠标位移) -->
@@ -1091,6 +1207,10 @@ onBeforeUnmount(() => {
   background: var(--accent-weak);
   color: var(--accent);
   border-color: var(--accent);
+}
+
+.refresh-btn.spinning svg {
+  animation: spin 0.8s linear infinite;
 }
 
 .queue-counter {
@@ -1366,16 +1486,48 @@ onBeforeUnmount(() => {
 /* 右栏：结果瀑布流 (真 CSS Masonry，无撕裂空白) */
 .waterfall-container {
   flex: 1;
+  position: relative;
   overflow-y: auto;
   padding: 16px;
   scroll-behavior: smooth;
   background: var(--panel-strong);
 }
 
+/* 渐进式刷新顶部流动进度条 (对齐 Eagle 原生交互规范) */
+.waterfall-top-progress {
+  position: sticky;
+  top: -16px;
+  left: -16px;
+  right: -16px;
+  margin: -16px -16px 12px -16px;
+  height: 2.5px;
+  background: rgba(255, 255, 255, 0.05);
+  overflow: hidden;
+  z-index: 30;
+}
+
+.progress-bar-glow {
+  width: 45%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, var(--accent, #6366f1), transparent);
+  animation: progressGlow 1.2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+@keyframes progressGlow {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}
+
 .waterfall-grid {
   column-width: var(--col-w, 240px);
   column-gap: 14px;
   width: 100%;
+  transition: opacity 0.25s ease;
+}
+
+.waterfall-grid.waterfall-refreshing {
+  opacity: 0.82;
+  filter: saturate(0.92);
 }
 
 .waterfall-card {
@@ -1794,7 +1946,7 @@ onBeforeUnmount(() => {
   box-shadow: 0 0 10px var(--accent-weak);
 }
 
-/* 舞台与大图 */
+/* 舞台与大图 (双层渐进加载：底层缩略图瞬显杜绝黑屏，顶层原图淡入覆盖) */
 .lightbox-stage {
   position: absolute;
   inset: 0;
@@ -1809,21 +1961,54 @@ onBeforeUnmount(() => {
   cursor: grabbing;
 }
 
-.lightbox-img {
+.lightbox-img-wrapper {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  max-width: 90vw;
+  max-height: 86vh;
+  border-radius: 8px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.65);
+  transform-origin: center center;
+  transition: transform 0.15s cubic-bezier(0.2, 0.9, 0.3, 1);
+  user-select: none;
+}
+
+.lightbox-stage.panning .lightbox-img-wrapper {
+  transition: none !important;
+}
+
+.lightbox-layer-thumb {
   max-width: 90vw;
   max-height: 86vh;
   width: auto;
   height: auto;
   object-fit: contain;
-  pointer-events: none;
   border-radius: 8px;
-  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.65);
-  transform-origin: center center;
-  transition: transform 0.15s cubic-bezier(0.2, 0.9, 0.3, 1);
+  pointer-events: none;
+  display: block;
+  z-index: 1;
 }
 
-.lightbox-stage.panning .lightbox-img {
-  transition: none !important;
+.lightbox-layer-highres {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  max-width: 90vw;
+  max-height: 86vh;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: 8px;
+  pointer-events: none;
+  opacity: 0;
+  z-index: 2;
+  transition: opacity 0.22s cubic-bezier(0.2, 0, 0, 1);
+}
+
+.lightbox-layer-highres.loaded {
+  opacity: 1;
 }
 
 /* 底部悬浮工具坞 (尺寸放大，纯净单色图标与快捷键气泡，靠近展开) */
