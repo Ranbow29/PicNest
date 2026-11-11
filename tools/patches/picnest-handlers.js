@@ -4000,14 +4000,17 @@ async function picnestCollectFetchImage(src, referer) {
       try { return new URL(u).origin + "/"; } catch (e) { return ""; }
     })();
     const isPinImg = /pinimg\.com/i.test(u);
+    const isVideoUrl = /\.(mp4|webm|mov|mkv|avi|flv|f4v)(\?.*)?$/i.test(u);
     const headers = {
       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
-      "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,video/*,*/*;q=0.8",
+      "Accept": isVideoUrl
+        ? "video/webm,video/ogg,video/*;q=0.9,application/ogg;q=0.7,audio/*;q=0.6,*/*;q=0.5"
+        : "image/avif,image/webp,image/apng,image/svg+xml,image/*,video/*,*/*;q=0.8",
       "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
       "sec-ch-ua": "\"Chromium\";v=\"124\", \"Google Chrome\";v=\"124\", \"Not-A.Brand\";v=\"99\"",
       "sec-ch-ua-mobile": "?0",
       "sec-ch-ua-platform": "\"Windows\"",
-      "sec-fetch-dest": "image",
+      "sec-fetch-dest": isVideoUrl ? "video" : "image",
       "sec-fetch-mode": "no-cors",
       "sec-fetch-site": "cross-site",
     };
@@ -4081,12 +4084,28 @@ function picnestCollectInsert(root, absFile, meta = {}) {  const st = fs.statSyn
     });
   }
   const ext = path.extname(absFile).toLowerCase();
-  if (typeof isVideoExt === "function" && isVideoExt(ext) && typeof getOrGeneratePoster === "function") {
-    getOrGeneratePoster(absFile).then((poster) => {
-      if (poster && mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send("sync-db", { type: "thumb-update", file_path: absFile, thumbnail_path: poster });
-      }
-    }).catch(() => {});
+  const isVideo = /\.(mp4|webm|mov|mkv|avi|flv|f4v|ogv)$/i.test(ext);
+  if (isVideo) {
+    const hash = crypto.createHash("md5").update(absFile).digest("hex");
+    const pWebp = path.join(cacheDir, `${hash}.webp`);
+    if (meta.poster && meta.poster.startsWith("data:image/")) {
+      try {
+        const pd = picnestCollectDataUrl(meta.poster);
+        if (pd?.buf && pd.buf.length > 0) {
+          fs.writeFileSync(pWebp, pd.buf);
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send("sync-db", { type: "thumb-update", file_path: absFile, thumbnail_path: pWebp });
+          }
+        }
+      } catch (e) {}
+    }
+    if (typeof getOrGeneratePoster === "function") {
+      getOrGeneratePoster(absFile).then((poster) => {
+        if (poster && mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send("sync-db", { type: "thumb-update", file_path: absFile, thumbnail_path: poster });
+        }
+      }).catch(() => {});
+    }
   }
   return absFile;
 }
@@ -4102,11 +4121,29 @@ async function picnestCollectSaveOne(item) {
     ext = picnestCollectExt(contentType, "");
     base = picnestCollectSafeName(item.title || "页面截图");
   } else {
-    const d = await picnestCollectFetchImage(item.dataUrl || item.src, item.url || item.referer);
+    let d = null;
+    const hasHttpSrc = item.src && /^https?:\/\//i.test(item.src);
+    if (hasHttpSrc) {
+      try {
+        d = await picnestCollectFetchImage(item.src, item.url || item.referer);
+      } catch (err) {
+        picnestCollectLog("fetch-src-failed", item.src, String(err?.message || err));
+        if (item.dataUrl) {
+          d = picnestCollectDataUrl(item.dataUrl);
+        } else {
+          throw err;
+        }
+      }
+    } else if (item.dataUrl) {
+      d = picnestCollectDataUrl(item.dataUrl);
+    } else {
+      d = await picnestCollectFetchImage(item.src, item.url || item.referer);
+    }
+    if (!d) throw new Error("未能获取采集资源内容");
     buf = d.buf;
     contentType = d.contentType;
-    ext = picnestCollectExt(contentType, item.src || item.dataUrl);
-    base = picnestCollectSafeName(item.title || "资源采集");
+    ext = picnestCollectExt(contentType, hasHttpSrc ? item.src : (item.dataUrl || item.src));
+    base = picnestCollectSafeName(item.title || (kind === "video" ? "视频采集" : "资源采集"));
   }
   const isImage = /^image\//i.test(contentType) || /\.(jpe?g|png|gif|webp|avif|bmp|svg|psd|heic|heif|tif|tiff|ico)$/i.test(ext);
   const isVideo = /^video\//i.test(contentType) || /\.(mp4|webm|mov|mkv|avi|flv|f4v|ogv)$/i.test(ext);

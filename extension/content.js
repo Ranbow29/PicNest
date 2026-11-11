@@ -2,7 +2,7 @@
 // 在网页图片上左键按住 → 光标处环形进度 → 弹出双栏面板（左：未分类/库根；右：全部文件夹）
 // 拖到目标松开即保存；松开在面板空白处则面板停留，可点击/滚动选择；Esc / 点外部取消。
 (() => {
-  const VERSION = '0.1.6'
+  const VERSION = '0.1.7'
   const prevLoaded = !!window.__picnestHoldCollectLoaded
   const prevVersion = String(window.__picnestHoldCollectVersion || '')
   /* 同版本重复注入：幂等返回。旧版本实例：0.1.4 起会挂 __picnestHoldCollectCleanup，
@@ -261,7 +261,7 @@
       if (!el.naturalWidth || !el.naturalHeight) return false
     } else if (el.tagName === 'VIDEO') {
       const src = getMediaSrc(el)
-      if (!src && !el.poster) return false
+      if (!src && !el.poster && !el.videoWidth && el.readyState === 0) return false
     }
     if (el.checkVisibility && !el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) return false
     const cs = getComputedStyle(el)
@@ -651,6 +651,46 @@
     }
   }
 
+  function findPinUrl(el) {
+    if (!el) return ''
+    let cur = el
+    while (cur && cur !== document.body) {
+      if (cur.getAttribute?.('data-test-pin-id')) {
+        return `https://www.pinterest.com/pin/${cur.getAttribute('data-test-pin-id')}/`
+      }
+      const a = cur.querySelector?.('a[href*="/pin/"]')
+      if (a?.href && /\/pin\/\d+/.test(a.href)) return a.href
+      cur = cur.parentElement
+    }
+    if (/\/pin\/\d+/.test(location.href)) return location.href
+    return ''
+  }
+
+  function findPinterestVideoFromPws(pinId) {
+    try {
+      const pws = document.getElementById('__PWS_DATA__')
+      if (pws && pws.textContent) {
+        const data = JSON.parse(pws.textContent)
+        const pins = data?.props?.initialReduxState?.pins || {}
+        if (pinId && pins[pinId]?.videos?.video_list) {
+          const vl = pins[pinId].videos.video_list
+          const best = vl.V_720P?.url || vl.V_1080P?.url || vl.V_EXP7?.url || Object.values(vl).find((v) => v?.url && v.url.includes('.mp4'))?.url
+          if (best) return best
+          if (vl.V_HLS?.url) return vl.V_HLS.url.replace('/hls/', '/720p/').replace(/\.m3u8.*$/, '.mp4')
+        }
+        for (const p of Object.values(pins)) {
+          if (p?.videos?.video_list) {
+            const vl = p.videos.video_list
+            const best = vl.V_720P?.url || vl.V_1080P?.url || vl.V_EXP7?.url || Object.values(vl).find((v) => v?.url && v.url.includes('.mp4'))?.url
+            if (best) return best
+            if (vl.V_HLS?.url) return vl.V_HLS.url.replace('/hls/', '/720p/').replace(/\.m3u8.*$/, '.mp4')
+          }
+        }
+      }
+    } catch {}
+    return ''
+  }
+
   function extractVideoInfo(el) {
     if (!el) return null
     const video = el.tagName === 'VIDEO' ? el : el.querySelector?.('video')
@@ -678,8 +718,18 @@
       }
     }
 
-    const pinA = video.closest?.('[data-test-id="pin"]')?.querySelector?.('a[href*="/pin/"]') || video.closest?.('a[href*="/pin/"]') || document.querySelector('a[href*="/pin/"]')
-    const pinUrl = pinA?.href || (location.href.includes('/pin/') ? location.href : '')
+    const pinUrl = findPinUrl(video)
+    const pinMatch = pinUrl.match(/\/pin\/(\d+)/)
+    const pinId = pinMatch ? pinMatch[1] : ''
+
+    if ((!src || src.startsWith('blob:') || src.includes('/hls/')) && isPinterest) {
+      const pwsSrc = findPinterestVideoFromPws(pinId)
+      if (pwsSrc) src = pwsSrc
+    }
+
+    if (src.includes('v.pinimg.com') && src.includes('/hls/')) {
+      src = src.replace('/hls/', '/720p/').replace(/\.m3u8.*$/, '.mp4')
+    }
 
     let frameDataUrl = ''
     try {
@@ -701,6 +751,7 @@
     return {
       src,
       pinUrl,
+      pinId,
       poster,
       frameDataUrl,
       title,
@@ -872,9 +923,15 @@
     try {
       const media = mediaFromEvent(e) || mediaAtPoint(e.clientX, e.clientY) || (e.target?.closest ? e.target.closest('a')?.querySelector('img, video') : null)
       if (media) {
+        const isVideo = media.tagName === 'VIDEO' || !!media.querySelector?.('video')
+        let vInfo = isVideo ? extractVideoInfo(media) : null
         lastContextMenuTarget = {
-          src: getMediaSrc(media),
-          title: (media.getAttribute?.('title') || media.alt || media.title || document.title || '').trim(),
+          isVideo: !!isVideo,
+          src: vInfo?.src || getMediaSrc(media),
+          title: vInfo?.title || (media.getAttribute?.('title') || media.alt || media.title || document.title || '').trim(),
+          pinUrl: vInfo?.pinUrl || '',
+          poster: vInfo?.poster || '',
+          dataUrl: vInfo?.frameDataUrl || '',
           time: Date.now(),
         }
       }
@@ -882,9 +939,12 @@
   }
 
   function onMessage(req, sender, sendResponse) {
-    if (req?.type === 'get-contextmenu-image') {
+    if (req?.type === 'get-contextmenu-media' || req?.type === 'get-contextmenu-image') {
       if (lastContextMenuTarget && Date.now() - lastContextMenuTarget.time < 30000) {
-        sendResponse({ ok: true, src: lastContextMenuTarget.src, title: lastContextMenuTarget.title })
+        sendResponse({
+          ok: true,
+          ...lastContextMenuTarget,
+        })
         return true
       }
       if (req.linkUrl) {
@@ -895,10 +955,16 @@
           const a = links.find((el) => el.href === req.linkUrl || (pathname.length > 2 && el.href && el.href.includes(pathname)))
           const media = a?.querySelector('img, video') || a?.parentElement?.querySelector('img, video') || a?.closest('[data-test-id="pin"]')?.querySelector('img, video')
           if (media) {
+            const isVideo = media.tagName === 'VIDEO' || !!media.querySelector?.('video')
+            const vInfo = isVideo ? extractVideoInfo(media) : null
             sendResponse({
               ok: true,
-              src: getMediaSrc(media),
-              title: (media.getAttribute?.('title') || media.alt || media.title || document.title || '').trim(),
+              isVideo: !!isVideo,
+              src: vInfo?.src || getMediaSrc(media),
+              title: vInfo?.title || (media.getAttribute?.('title') || media.alt || media.title || document.title || '').trim(),
+              pinUrl: vInfo?.pinUrl || '',
+              poster: vInfo?.poster || '',
+              dataUrl: vInfo?.frameDataUrl || '',
             })
             return true
           }
