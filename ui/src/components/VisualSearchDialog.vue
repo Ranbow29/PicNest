@@ -240,6 +240,16 @@ function loadMore() {
   }
 }
 
+// 瀑布流无限滚动：向下滚自动触发加载下一页，避免手动点击与断流
+function onWaterfallScroll(e) {
+  const el = e?.target
+  if (!el || !currentTask.value?.bookmark || currentTask.value.loading) return
+  const dist = el.scrollHeight - el.scrollTop - el.clientHeight
+  if (dist < 400) {
+    loadMore()
+  }
+}
+
 /* ================== 卡片动作 (F: 递归搜索 / S: 存入未分类 / O: 原网) ================== */
 // F: 递归搜索
 function researchItem(item, e) {
@@ -300,13 +310,15 @@ function openSource(item, e) {
   }
 }
 
-/* ================== 灯箱大图交互 (平移缩放、滚轮缩放、左右切图、快捷键) ================== */
+/* ================== 灯箱大图交互 (平移缩放、左右切图、靠近浮现工具坞) ================== */
 const previewZoom = ref(1)
 const previewTx = ref(0)
 const previewTy = ref(0)
 const isPreviewPanning = ref(false)
 const previewNatW = ref(0)
 const previewNatH = ref(0)
+const isDockHover = ref(false)
+let dockHoverTimer = null
 let previewPanStart = { x: 0, y: 0, tx: 0, ty: 0 }
 
 function resetPreviewTransform() {
@@ -328,6 +340,20 @@ function closePreview() {
   resetPreviewTransform()
 }
 
+// 靠近底部自动展开工具坞 (PicNest 极简沉浸规范：平时隐身，鼠标移到底部区域立即展开)
+function onLightboxPointerMove(e) {
+  const fromBottom = window.innerHeight - e.clientY
+  if (fromBottom <= 100) {
+    if (dockHoverTimer) clearTimeout(dockHoverTimer)
+    isDockHover.value = true
+  } else if (isDockHover.value) {
+    if (dockHoverTimer) clearTimeout(dockHoverTimer)
+    dockHoverTimer = setTimeout(() => {
+      isDockHover.value = false
+    }, 350)
+  }
+}
+
 function onPreviewImgLoad(e) {
   const img = e?.target
   if (img && img.naturalWidth && img.naturalHeight) {
@@ -344,7 +370,7 @@ function onPreviewWheel(e) {
 }
 
 function onPreviewMouseDown(e) {
-  if (e.button !== 0 || e.target.closest('button')) return
+  if (e.button !== 0 || e.target.closest('button, .lightbox-dock, .lightbox-topbar')) return
   e.preventDefault()
   isPreviewPanning.value = true
   previewPanStart = { x: e.clientX, y: e.clientY, tx: previewTx.value, ty: previewTy.value }
@@ -377,22 +403,43 @@ const previewIndex = computed(() => {
   return currentTask.value.results.findIndex((i) => i.id === previewItem.value.id)
 })
 
-function prevPreviewItem(e) {
-  e?.stopPropagation()
-  const list = currentTask.value?.results || []
-  if (list.length <= 1) return
-  const cur = previewIndex.value
-  const prevIdx = (cur - 1 + list.length) % list.length
-  openPreview(list[prevIdx])
-}
-
+let lastNavTime = 0
 function nextPreviewItem(e) {
   e?.stopPropagation()
+  const now = Date.now()
+  if (now - lastNavTime < 80) return // 80ms 防抖，过滤键盘连发引起的快速轮播跳帧
+  lastNavTime = now
+
   const list = currentTask.value?.results || []
-  if (list.length <= 1) return
+  if (!list.length) return
   const cur = previewIndex.value
-  const nextIdx = (cur + 1) % list.length
-  openPreview(list[nextIdx])
+  if (cur < 0) return
+
+  // 提前 5 张静默预拉取下一页，避免用户按 D 一张一张看时产生卡顿
+  if (cur >= list.length - 6 && currentTask.value?.bookmark && !currentTask.value.loading) {
+    loadMore()
+  }
+
+  // 杜绝跑马灯循环：到达末尾时停在最后一张（等待新图追加，而非突兀跳回第 1 张）
+  if (cur < list.length - 1) {
+    openPreview(list[cur + 1])
+  } else if (currentTask.value?.bookmark && !currentTask.value.loading) {
+    loadMore()
+  }
+}
+
+function prevPreviewItem(e) {
+  e?.stopPropagation()
+  const now = Date.now()
+  if (now - lastNavTime < 80) return
+  lastNavTime = now
+
+  const list = currentTask.value?.results || []
+  if (!list.length) return
+  const cur = previewIndex.value
+  if (cur > 0) {
+    openPreview(list[cur - 1])
+  }
 }
 
 /* ================== 键盘快捷键 (F / S / O / Esc / 方向键) ================== */
@@ -659,7 +706,7 @@ onBeforeUnmount(() => {
           </section>
 
           <!-- 右栏：瀑布流结果与卡片 (ResultWaterfall, flex-1) -->
-          <main class="waterfall-container">
+          <main class="waterfall-container" @scroll.passive="onWaterfallScroll">
             
             <!-- 加载态骨架屏 -->
             <div v-if="currentTask?.loading && !currentTask.results?.length" class="skeleton-grid" :style="{ '--col-w': scale + 'px' }">
@@ -743,24 +790,23 @@ onBeforeUnmount(() => {
               </div>
             </div>
 
-            <!-- 分页加载更多 -->
-            <div v-if="currentTask?.bookmark && !currentTask?.loading" class="load-more-box">
-              <button class="load-more-btn" @click="loadMore">加载更多相似图片…</button>
-            </div>
-            <div v-else-if="currentTask?.loading && currentTask?.results?.length" class="loading-more-hint">
+            <!-- 滚动流式加载指示器 -->
+            <div v-if="currentTask?.loading && currentTask?.results?.length" class="loading-more-hint">
               正在加载更多相似图片…
             </div>
           </main>
         </div>
 
-        <!-- 灯箱大图预览层 (去旋转翻转裁剪，保留纯粹平移缩放、切图、搜图与存库) -->
+        <!-- 灯箱大图预览层 (去旋转翻转裁剪，靠底悬浮展开，纯净单色图标与快捷键气泡) -->
         <div
           v-if="previewItem"
           class="preview-lightbox-layer"
+          :class="{ 'dock-show': isDockHover }"
+          @mousemove="onLightboxPointerMove"
           @wheel.prevent="onPreviewWheel"
           @click.self="closePreview"
         >
-          <!-- 顶栏信息与关闭条 -->
+          <!-- 顶栏信息与关闭条 (尺寸与百分比放左上角关联展示) -->
           <div class="lightbox-topbar">
             <div class="topbar-info">
               <span class="index-pill" v-if="previewIndex >= 0">
@@ -769,30 +815,19 @@ onBeforeUnmount(() => {
               <span class="res-pill" v-if="previewNatW && previewNatH">
                 {{ previewNatW }} × {{ previewNatH }}
               </span>
+              <span
+                class="zoom-pill"
+                title="双击图片或点击此处在 100% / 适应之间切换"
+                @click="togglePreviewZoom"
+              >
+                {{ Math.round(previewZoom * 100) }}%
+              </span>
               <span class="title-text" :title="previewItem.title">{{ previewItem.title || '灵感预览' }}</span>
             </div>
             <div class="topbar-actions">
               <button class="topbar-close-btn" title="退出预览 (Esc / 空格)" @click="closePreview">✕</button>
             </div>
           </div>
-
-          <!-- 左右切图浮动箭头 (队列结果大于 1 张时展示) -->
-          <button
-            v-if="(currentTask?.results?.length || 0) > 1"
-            class="lightbox-nav-btn prev"
-            title="上一张 (← / A)"
-            @click.stop="prevPreviewItem"
-          >
-            ‹
-          </button>
-          <button
-            v-if="(currentTask?.results?.length || 0) > 1"
-            class="lightbox-nav-btn next"
-            title="下一张 (→ / D)"
-            @click.stop="nextPreviewItem"
-          >
-            ›
-          </button>
 
           <!-- 视图中心平移与缩放舞台 -->
           <div
@@ -813,32 +848,73 @@ onBeforeUnmount(() => {
             />
           </div>
 
-          <!-- 底部悬浮药丸工具坞 (ZCode 极简磨砂风) -->
-          <div class="lightbox-dock">
-            <button class="dock-pill primary" title="以此图发起新搜索 (F)" @click="researchItem(previewItem)">
-              🔍 图片搜索 F
-            </button>
+          <!-- 底部悬浮工具坞 (参考 PicNest 灯箱极简单色图标，靠近展开，居中减少鼠标位移) -->
+          <div class="lightbox-dock glass-pill" @mouseenter="isDockHover = true">
+            <!-- 1. 保存到未分类 (S) -->
             <button
-              class="dock-pill success"
+              class="dock-action-btn"
               :class="{ saved: previewItem.saved }"
               :disabled="previewItem.saved || savingMap[previewItem.id]"
-              title="保存至未分类 (S)"
               @click="saveItem(previewItem)"
             >
-              <span v-if="savingMap[previewItem.id]">⌛ 保存中…</span>
-              <span v-else-if="previewItem.saved">✓ 已存入未分类</span>
-              <span v-else>💾 保存到未分类 S</span>
+              <svg v-if="savingMap[previewItem.id]" class="dock-svg spin" viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><circle cx="12" cy="12" r="10" stroke-opacity="0.25"/><path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round"/></svg>
+              <svg v-else-if="previewItem.saved" class="dock-svg ok" viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+              <svg v-else class="dock-svg" viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              <span class="dock-tooltip">{{ previewItem.saved ? '已存入未分类' : '保存到未分类 S' }}</span>
             </button>
+
+            <!-- 2. 以图找图 (F) -->
+            <button class="dock-action-btn" @click="researchItem(previewItem)">
+              <svg class="dock-svg" viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M4 8V4h4"/><path d="M20 8V4h-4"/><path d="M4 16v4h4"/><path d="M20 16v4h-4"/>
+                <circle cx="11.5" cy="11.5" r="3.2"/><line x1="13.8" y1="13.8" x2="18" y2="18"/>
+              </svg>
+              <span class="dock-tooltip">以图找图 F</span>
+            </button>
+
+            <!-- 3. 在 Pinterest 打开 (O) -->
+            <button v-if="previewItem.sourceUrl" class="dock-action-btn" @click="openSource(previewItem)">
+              <svg class="dock-svg" viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+                <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+              </svg>
+              <span class="dock-tooltip">在 Pinterest 打开 O</span>
+            </button>
+
+            <i class="dock-vsep" />
+
+            <!-- 4. 上一张 (A / ←) -->
             <button
-              v-if="previewItem.sourceUrl"
-              class="dock-pill"
-              title="浏览器打开原网页 (O)"
-              @click="openSource(previewItem)"
+              class="dock-action-btn"
+              :disabled="previewIndex <= 0"
+              @click.stop="prevPreviewItem"
             >
-              ↗ 来源 O
+              <svg class="dock-svg" viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="15 18 9 12 15 6"/>
+              </svg>
+              <span class="dock-tooltip">上一张 A</span>
             </button>
-            <button class="dock-pill zoom-reset" title="双击图片或点击此处重置缩放" @click="resetPreviewTransform">
-              {{ Math.round(previewZoom * 100) }}%
+
+            <!-- 5. 下一张 (D / →) -->
+            <button
+              class="dock-action-btn"
+              :disabled="previewIndex >= (currentTask?.results?.length || 0) - 1 && !currentTask?.bookmark"
+              @click.stop="nextPreviewItem"
+            >
+              <svg class="dock-svg" viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="9 18 15 12 9 6"/>
+              </svg>
+              <span class="dock-tooltip">下一张 D</span>
+            </button>
+
+            <i class="dock-vsep" />
+
+            <!-- 6. 退出预览 (Esc / 空格) -->
+            <button class="dock-action-btn" @click="closePreview">
+              <svg class="dock-svg" viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+              </svg>
+              <span class="dock-tooltip">退出预览 Esc</span>
             </button>
           </div>
         </div>
@@ -1547,6 +1623,24 @@ onBeforeUnmount(() => {
   font-size: 12px;
 }
 
+.zoom-pill {
+  font-family: monospace;
+  font-size: 12px;
+  background: rgba(255, 255, 255, 0.1);
+  padding: 1px 7px;
+  border-radius: 6px;
+  color: #60a5fa;
+  cursor: pointer;
+  transition: all 0.15s;
+  user-select: none;
+}
+
+.zoom-pill:hover {
+  background: rgba(59, 130, 246, 0.25);
+  color: #93c5fd;
+  transform: translateY(-1px);
+}
+
 .title-text {
   max-width: 480px;
   white-space: nowrap;
@@ -1578,41 +1672,6 @@ onBeforeUnmount(() => {
 .topbar-close-btn:hover {
   background: rgba(239, 68, 68, 0.85);
   transform: scale(1.06);
-}
-
-/* 左右切图浮动箭头 */
-.lightbox-nav-btn {
-  position: absolute;
-  top: 50%;
-  transform: translateY(-50%);
-  z-index: 10;
-  width: 46px;
-  height: 46px;
-  border-radius: 50%;
-  background: rgba(18, 18, 24, 0.55);
-  backdrop-filter: blur(14px);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  color: #fff;
-  font-size: 28px;
-  line-height: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: all 0.18s cubic-bezier(0.2, 0.9, 0.3, 1);
-}
-
-.lightbox-nav-btn.prev {
-  left: 20px;
-}
-
-.lightbox-nav-btn.next {
-  right: 20px;
-}
-
-.lightbox-nav-btn:hover {
-  background: rgba(255, 255, 255, 0.22);
-  transform: translateY(-50%) scale(1.08);
 }
 
 /* 舞台与大图 */
@@ -1647,80 +1706,116 @@ onBeforeUnmount(() => {
   transition: none !important;
 }
 
-/* 底部悬浮药丸工具坞 */
+/* 底部悬浮工具坞 (对齐 PicNest 原生灯箱高透薄雾与图二极简无固有色风格；靠近展开) */
 .lightbox-dock {
   position: absolute;
-  bottom: 24px;
+  bottom: 22px;
   left: 50%;
-  transform: translateX(-50%);
-  z-index: 10;
+  transform: translateX(-50%) translateY(12px) scale(0.96);
+  z-index: 100;
   display: flex;
   align-items: center;
-  gap: 8px;
-  background: rgba(18, 18, 24, 0.82);
-  backdrop-filter: blur(20px);
-  padding: 8px 16px;
-  border-radius: 28px;
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  gap: 3px;
+  background: rgba(18, 18, 24, 0.78);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  padding: 5px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.5);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.35s cubic-bezier(0.22, 1, 0.36, 1), transform 0.35s cubic-bezier(0.22, 1, 0.36, 1);
+  user-select: none;
 }
 
-.dock-pill {
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  color: #f3f4f6;
-  border-radius: 18px;
-  padding: 7px 14px;
-  font-size: 13px;
-  font-weight: 500;
+.preview-lightbox-layer.dock-show .lightbox-dock,
+.lightbox-dock:hover {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0) scale(1);
+  pointer-events: auto;
+}
+
+.dock-action-btn {
+  height: 32px;
+  width: 34px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.85);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  justify-content: center;
+  position: relative;
   transition: all 0.15s ease;
-  white-space: nowrap;
+  padding: 0;
 }
 
-.dock-pill:hover {
-  background: rgba(255, 255, 255, 0.18);
+.dock-action-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
   transform: translateY(-1px);
 }
 
-.dock-pill.primary {
-  background: rgba(59, 130, 246, 0.85);
-  border-color: rgba(59, 130, 246, 0.95);
-  color: #fff;
-  box-shadow: 0 4px 14px rgba(59, 130, 246, 0.35);
+.dock-action-btn:active {
+  transform: scale(0.92);
 }
 
-.dock-pill.primary:hover {
-  background: #2563eb;
+.dock-action-btn:disabled {
+  opacity: 0.28;
+  cursor: not-allowed;
+  pointer-events: none;
 }
 
-.dock-pill.success {
-  background: rgba(16, 185, 129, 0.85);
-  border-color: rgba(16, 185, 129, 0.95);
-  color: #fff;
-  box-shadow: 0 4px 14px rgba(16, 185, 129, 0.35);
+.dock-action-btn.saved {
+  color: #34d399;
 }
 
-.dock-pill.success:hover {
-  background: #059669;
+.dock-svg {
+  width: 16px;
+  height: 16px;
+  display: block;
 }
 
-.dock-pill.success.saved {
-  background: rgba(16, 185, 129, 0.3);
-  border-color: rgba(16, 185, 129, 0.4);
-  color: #a7f3d0;
-  cursor: default;
-  transform: none;
-  box-shadow: none;
+.dock-svg.spin {
+  animation: spin 0.8s linear infinite;
 }
 
-.dock-pill.zoom-reset {
-  font-family: monospace;
-  min-width: 52px;
-  justify-content: center;
-  opacity: 0.85;
+.dock-svg.ok {
+  color: #34d399;
+}
+
+.dock-vsep {
+  width: 1px;
+  height: 16px;
+  background: rgba(255, 255, 255, 0.14);
+  margin: 0 4px;
+}
+
+/* 按钮悬浮气泡 Tooltip (对齐图二极简黑底圆角) */
+.dock-tooltip {
+  position: absolute;
+  bottom: calc(100% + 9px);
+  left: 50%;
+  transform: translateX(-50%) translateY(4px);
+  background: rgba(16, 16, 22, 0.95);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #f3f4f6;
+  font-size: 11.5px;
+  padding: 4px 9px;
+  border-radius: 6px;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.14s ease, transform 0.14s ease;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  z-index: 60;
+}
+
+.dock-action-btn:hover .dock-tooltip {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
 }
 </style>
