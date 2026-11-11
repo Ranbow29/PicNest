@@ -2,7 +2,7 @@
 // 在网页图片上左键按住 → 光标处环形进度 → 弹出双栏面板（左：未分类/库根；右：全部文件夹）
 // 拖到目标松开即保存；松开在面板空白处则面板停留，可点击/滚动选择；Esc / 点外部取消。
 (() => {
-  const VERSION = '0.2.9'
+  const VERSION = '0.3.0'
   const prevLoaded = !!window.__picnestHoldCollectLoaded
   const prevVersion = String(window.__picnestHoldCollectVersion || '')
   /* 同版本重复注入：幂等返回。旧版本实例：0.1.4 起会挂 __picnestHoldCollectCleanup，
@@ -759,32 +759,39 @@
 
   function findPinUrl(el) {
     if (!el) return ''
-    // 1. 若元素落在列表项或网格卡片内部（右侧推荐流、瀑布流），100% 优先取卡片自身的 Pin ID！
-    const card = el.closest?.('div[role="listitem"], div[data-grid-item], [data-test-id="pin"]')
+
+    // 1. 绝对第一优先级（对齐 Eagle 核心选择器）：如果是详情页主舞台容器（closeup / story-pin），100% 绑定主页面 URL！
+    // 严禁在此处向下检索 card，因为 Pinterest 主展示区外层容器自身也带有 data-test-id="pin"，向下 querySelector 会误中推荐流链接！
+    const isCloseup = el.closest?.('[data-test-id*="closeup"], [data-test-id*="story"]')
+    if (isCloseup) {
+      if (/\/pin\/\d+/.test(location.href)) return location.href
+    }
+
+    // 2. 如果点击落在列表项、网格卡片（推荐流卡片、瀑布流）内部
+    const card = el.closest?.('div[role="listitem"][data-grid-item], div[role="listitem"], div[data-grid-item]')
     if (card) {
       const a = card.querySelector?.('a[href*="/pin/"]') || card.closest?.('a[href*="/pin/"]')
       if (a?.href && /\/pin\/\d+/.test(a.href)) return a.href
       const pId = card.getAttribute?.('data-test-pin-id')
       if (pId) return `https://www.pinterest.com/pin/${pId}/`
     }
-    // 2. 若直接点击在独立 a 标签上
+
+    // 3. 直接点击在包含 /pin/ 的 a 标签上
     const pinA = el.closest?.('a[href*="/pin/"]')
     if (pinA?.href && /\/pin\/\d+/.test(pinA.href)) return pinA.href
-    // 3. 向上逐级探测带 data-test-pin-id 的容器
+
+    // 4. 向上逐级探测独立带 data-test-pin-id 的元素（排除主舞台）
     let cur = el
     while (cur && cur !== document.body) {
-      if (cur.getAttribute?.('data-test-pin-id')) {
-        return `https://www.pinterest.com/pin/${cur.getAttribute('data-test-pin-id')}/`
+      const pId = cur.getAttribute?.('data-test-pin-id')
+      if (pId && !cur.closest?.('[data-test-id*="closeup"], [data-test-id*="story"]')) {
+        return `https://www.pinterest.com/pin/${pId}/`
       }
-      const a = cur.querySelector?.('a[href*="/pin/"]')
-      if (a?.href && /\/pin\/\d+/.test(a.href)) return a.href
       cur = cur.parentElement
     }
-    // 4. 只有当明确落在详情页主舞台容器（closeup / story）且绝不在任何推荐卡片内时，才绑定当前主页面 URL
-    if (el.closest?.('[data-test-id*="closeup"], [data-test-id*="story"]') && !card) {
-      if (/\/pin\/\d+/.test(location.href)) return location.href
-    }
-    if (/\/pin\/\d+/.test(location.href) && !card) return location.href
+
+    // 5. 兜底
+    if (/\/pin\/\d+/.test(location.href)) return location.href
     return ''
   }
 
@@ -1314,6 +1321,10 @@
 
   function onMove(e) {
     if (!session) return
+    if (session.opened || session.holding) {
+      e.stopPropagation?.()
+      e.stopImmediatePropagation?.()
+    }
     if (!session.opened) {
       const dx = e.clientX - session.x0
       const dy = e.clientY - session.y0
@@ -1330,6 +1341,10 @@
   function onUp(e) {
     const s = session
     if (!s) return
+    if (s.opened) {
+      e.stopPropagation?.()
+      e.stopImmediatePropagation?.()
+    }
     clearTimeout(s.holdTimer)
     if (!s.opened) { closePanel(); return }
     const row = rowFromEvent(e)
@@ -1349,7 +1364,11 @@
     }
   }
   function onDragStart(e) {
-    if (session && session.holding) e.preventDefault()
+    if (session) {
+      e.preventDefault?.()
+      e.stopPropagation?.()
+      e.stopImmediatePropagation?.()
+    }
   }
   let lastContextMenuTarget = null
   function onCtx(e) {
@@ -1482,6 +1501,8 @@
       document.addEventListener('pointermove', onMove, true)
       document.addEventListener('pointerup', onUp, true)
       document.addEventListener('pointercancel', closePanel, true)
+      document.addEventListener('mousemove', onMove, true)
+      document.addEventListener('mouseup', onUp, true)
       document.addEventListener('keydown', onKey, true)
       document.addEventListener('dragstart', onDragStart, true)
       document.addEventListener('contextmenu', onCtx, true)
@@ -1507,6 +1528,8 @@
     try { document.removeEventListener('pointermove', onMove, true) } catch { /* 静默 */ }
     try { document.removeEventListener('pointerup', onUp, true) } catch { /* 静默 */ }
     try { document.removeEventListener('pointercancel', closePanel, true) } catch { /* 静默 */ }
+    try { document.removeEventListener('mousemove', onMove, true) } catch { /* 静默 */ }
+    try { document.removeEventListener('mouseup', onUp, true) } catch { /* 静默 */ }
     try { document.removeEventListener('keydown', onKey, true) } catch { /* 静默 */ }
     try { document.removeEventListener('dragstart', onDragStart, true) } catch { /* 静默 */ }
     try { document.removeEventListener('contextmenu', onCtx, true) } catch { /* 静默 */ }
