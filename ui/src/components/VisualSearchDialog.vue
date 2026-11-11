@@ -201,12 +201,15 @@ async function triggerSearch(task, continueSearch = false) {
   task.error = null
 
   try {
+    const cleanBbox = task.bbox
+      ? [Number(task.bbox[0] ?? 0), Number(task.bbox[1] ?? 0), Number(task.bbox[2] ?? 1), Number(task.bbox[3] ?? 1)]
+      : [0, 0, 1, 1]
     const opts = {
-      filePath: task.filePath || '',
-      dataUrl: task.dataUrl || '',
-      bbox: task.bbox || [0, 0, 1, 1],
-      bookmark: continueSearch ? task.bookmark : null,
-      engine: engine.value,
+      filePath: String(task.filePath || ''),
+      dataUrl: String(task.dataUrl || ''),
+      bbox: cleanBbox,
+      bookmark: continueSearch && task.bookmark ? String(task.bookmark) : null,
+      engine: String(engine.value || 'pinterest'),
       pageSize: 50
     }
 

@@ -4883,20 +4883,27 @@ electron.ipcMain.handle("picnest-visual-search-query", async (_event, opts) => {
 
     // 3. Pinterest Lens 检索
     if (engine === "pinterest" || engine === "hybrid") {
-      const formData = new FormData();
-      const blob = new Blob([jpegBuf], { type: "image/jpeg" });
-      formData.append("image", blob, "query.jpg");
+      const crypto = require("crypto");
+      const boundary = "----WebKitFormBoundary" + crypto.randomBytes(16).toString("hex");
+      const crlf = "\r\n";
 
       const bx = Math.max(0, Math.min(1, Number(bbox?.[0] ?? 0)));
       const by = Math.max(0, Math.min(1, Number(bbox?.[1] ?? 0)));
       const bw = Math.max(0.01, Math.min(1 - bx, Number(bbox?.[2] ?? 1)));
       const bh = Math.max(0.01, Math.min(1 - by, Number(bbox?.[3] ?? 1)));
 
-      formData.append("x", String(bx));
-      formData.append("y", String(by));
-      formData.append("w", String(bw));
-      formData.append("h", String(bh));
-      formData.append("page_size", String(pageSize || 50));
+      const parts = [
+        Buffer.from(`--${boundary}${crlf}Content-Disposition: form-data; name="x"${crlf}${crlf}${bx}`),
+        Buffer.from(`${crlf}--${boundary}${crlf}Content-Disposition: form-data; name="y"${crlf}${crlf}${by}`),
+        Buffer.from(`${crlf}--${boundary}${crlf}Content-Disposition: form-data; name="w"${crlf}${crlf}${bw}`),
+        Buffer.from(`${crlf}--${boundary}${crlf}Content-Disposition: form-data; name="h"${crlf}${crlf}${bh}`),
+        Buffer.from(`${crlf}--${boundary}${crlf}Content-Disposition: form-data; name="page_size"${crlf}${crlf}${pageSize || 50}`),
+        Buffer.from(`${crlf}--${boundary}${crlf}Content-Disposition: form-data; name="image"; filename="query.jpg"${crlf}Content-Type: image/jpeg${crlf}${crlf}`),
+        jpegBuf,
+        Buffer.from(`${crlf}--${boundary}--${crlf}`)
+      ];
+
+      const multipartBody = Buffer.concat(parts);
 
       let apiURL = "https://api.pinterest.com/v3/visual_search/extension/image/";
       if (bookmark) {
@@ -4908,9 +4915,11 @@ electron.ipcMain.handle("picnest-visual-search-query", async (_event, opts) => {
         headers: {
           "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
           "Referer": "https://www.pinterest.com/",
-          "Accept": "application/json, text/plain, */*"
+          "Accept": "application/json, text/plain, */*",
+          "Content-Type": `multipart/form-data; boundary=${boundary}`,
+          "Content-Length": String(multipartBody.length)
         },
-        body: formData
+        body: multipartBody
       });
 
       if (res.status === 401) {
