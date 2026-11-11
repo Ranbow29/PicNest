@@ -2,7 +2,7 @@
 // 在网页图片上左键按住 → 光标处环形进度 → 弹出双栏面板（左：未分类/库根；右：全部文件夹）
 // 拖到目标松开即保存；松开在面板空白处则面板停留，可点击/滚动选择；Esc / 点外部取消。
 (() => {
-  const VERSION = '0.3.0'
+  const VERSION = '0.3.1'
   const prevLoaded = !!window.__picnestHoldCollectLoaded
   const prevVersion = String(window.__picnestHoldCollectVersion || '')
   /* 同版本重复注入：幂等返回。旧版本实例：0.1.4 起会挂 __picnestHoldCollectCleanup，
@@ -760,15 +760,18 @@
   function findPinUrl(el) {
     if (!el) return ''
 
-    // 1. 绝对第一优先级（对齐 Eagle 核心选择器）：如果是详情页主舞台容器（closeup / story-pin），100% 绑定主页面 URL！
-    // 严禁在此处向下检索 card，因为 Pinterest 主展示区外层容器自身也带有 data-test-id="pin"，向下 querySelector 会误中推荐流链接！
-    const isCloseup = el.closest?.('[data-test-id*="closeup"], [data-test-id*="story"]')
-    if (isCloseup) {
+    // 1. 主展示大舞台严格限定在左侧视觉容器（完全对齐 Eagle 生产选择器，严禁使用模糊的 *=closeup 导致匹配整个页面外壳吞噬右侧推荐栏）
+    const isVisualCloseup = el.closest?.('[data-test-id="closeup-visual-container"], [data-test-id="closeup-video-with-visibility"], [data-test-id="story-pin-closeup-page"]')
+    if (isVisualCloseup) {
       if (/\/pin\/\d+/.test(location.href)) return location.href
     }
 
-    // 2. 如果点击落在列表项、网格卡片（推荐流卡片、瀑布流）内部
-    const card = el.closest?.('div[role="listitem"][data-grid-item], div[role="listitem"], div[data-grid-item]')
+    // 2. 优先直接匹配自身或最近的 Pin 链接（右侧推荐卡片的核心标识）
+    const pinA = el.closest?.('a[href*="/pin/"]')
+    if (pinA?.href && /\/pin\/\d+/.test(pinA.href)) return pinA.href
+
+    // 3. 匹配推荐卡片容器（网格项、列表项）
+    const card = el.closest?.('div[role="listitem"], div[data-grid-item]')
     if (card) {
       const a = card.querySelector?.('a[href*="/pin/"]') || card.closest?.('a[href*="/pin/"]')
       if (a?.href && /\/pin\/\d+/.test(a.href)) return a.href
@@ -776,22 +779,18 @@
       if (pId) return `https://www.pinterest.com/pin/${pId}/`
     }
 
-    // 3. 直接点击在包含 /pin/ 的 a 标签上
-    const pinA = el.closest?.('a[href*="/pin/"]')
-    if (pinA?.href && /\/pin\/\d+/.test(pinA.href)) return pinA.href
-
-    // 4. 向上逐级探测独立带 data-test-pin-id 的元素（排除主舞台）
+    // 4. 向上逐级探测带 data-test-pin-id 的独立卡片元素（排除主视觉容器）
     let cur = el
     while (cur && cur !== document.body) {
       const pId = cur.getAttribute?.('data-test-pin-id')
-      if (pId && !cur.closest?.('[data-test-id*="closeup"], [data-test-id*="story"]')) {
+      if (pId && !cur.closest?.('[data-test-id="closeup-visual-container"], [data-test-id="story-pin-closeup-page"]')) {
         return `https://www.pinterest.com/pin/${pId}/`
       }
       cur = cur.parentElement
     }
 
-    // 5. 兜底
-    if (/\/pin\/\d+/.test(location.href)) return location.href
+    // 5. 最终兜底：只有确实没有匹配到任何独立 Pin 链接且不在任何推荐卡片内部时，才绑定主页面 URL
+    if (/\/pin\/\d+/.test(location.href) && !card && !pinA) return location.href
     return ''
   }
 
