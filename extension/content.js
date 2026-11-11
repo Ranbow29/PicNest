@@ -2,7 +2,7 @@
 // 在网页图片上左键按住 → 光标处环形进度 → 弹出双栏面板（左：未分类/库根；右：全部文件夹）
 // 拖到目标松开即保存；松开在面板空白处则面板停留，可点击/滚动选择；Esc / 点外部取消。
 (() => {
-  const VERSION = '0.2.4'
+  const VERSION = '0.2.5'
   const prevLoaded = !!window.__picnestHoldCollectLoaded
   const prevVersion = String(window.__picnestHoldCollectVersion || '')
   /* 同版本重复注入：幂等返回。旧版本实例：0.1.4 起会挂 __picnestHoldCollectCleanup，
@@ -42,6 +42,8 @@
       return false
     }
   }
+  var isPinterest = isPinterestSite
+  try { if (typeof window !== 'undefined') window.isPinterest = isPinterestSite } catch {}
 
   const HOLD_MS = 380
   const RING_DELAY = 120
@@ -768,18 +770,13 @@
     if (!rawUrl || typeof rawUrl !== 'string') return ''
     const u = rawUrl.trim()
     if (!u.includes('pinimg.com')) return u
-    // 核心逻辑：从任意 Pinterest 资源 URL 中提取 32 位 MD5 hash，直通官方无防盗链 720p MP4
-    const hashMatch = u.match(/([a-f0-9]{32})/i)
-    if (hashMatch) {
-      const hash = hashMatch[1]
-      const p1 = hash.slice(0, 2)
-      const p2 = hash.slice(2, 4)
-      const p3 = hash.slice(4, 6)
-      return `https://v.pinimg.com/videos/mc/720p/${p1}/${p2}/${p3}/${hash}.mp4`
+    // 若已是明确的 .mp4 静态直链，原样返回（严禁拼入不存在的 /mc/）
+    if (/\.mp4(\?.*)?$/i.test(u)) return u
+    // 若包含视频目录且为切片/manifest，尝试移除切片后缀
+    if (u.includes('/videos/')) {
+      return u.replace(/(_\d+[wp]|_\d+p)?\.(cmfv|cmfa|m3u8|ts|mpd).*$/i, '.mp4')
     }
-    return u.replace(/https?:\/\/[a-z0-9_.-]*pinimg\.com\//i, 'https://v.pinimg.com/')
-            .replace(/\/videos\/(iht|hls)\//i, '/videos/mc/')
-            .replace(/(_\d+[wp]|_\d+p)?\.(cmfv|cmfa|m3u8|ts|mpd).*$/i, '.mp4')
+    return u
   }
 
   function isValidVideoUrl(u) {
@@ -792,16 +789,16 @@
   function scanObjectForPinterestVideo(obj, depth = 0) {
     if (!obj || typeof obj !== 'object' || depth > 8) return ''
     if (obj.video_list && typeof obj.video_list === 'object') {
-      for (const v of Object.values(obj.video_list)) {
-        if (typeof v?.url === 'string' && v.url.includes('pinimg.com')) {
-          const norm = normalizePinterestVideoUrl(v.url)
-          if (norm) return norm
-        }
+      const vl = obj.video_list
+      for (const k of ['V_720P', 'V_1080P', 'V_EXP720P', 'V_EXPMP4']) {
+        if (vl[k]?.url && /\.mp4(\?.*)?$/i.test(vl[k].url)) return vl[k].url
+      }
+      for (const v of Object.values(vl)) {
+        if (typeof v?.url === 'string' && /\.mp4(\?.*)?$/i.test(v.url)) return v.url
       }
     }
-    if (typeof obj.url === 'string' && obj.url.includes('pinimg.com') && (obj.url.includes('/videos/') || obj.url.includes('.mp4') || obj.url.includes('.cmfv') || obj.url.includes('.m3u8'))) {
-      const norm = normalizePinterestVideoUrl(obj.url)
-      if (norm) return norm
+    if (typeof obj.url === 'string' && obj.url.includes('pinimg.com/videos/') && /\.mp4(\?.*)?$/i.test(obj.url)) {
+      return obj.url
     }
     for (const k of Object.keys(obj)) {
       if (k === 'parent' || k === 'return' || k === '_owner' || k === 'stateNode') continue

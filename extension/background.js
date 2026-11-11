@@ -27,7 +27,7 @@ chrome.runtime.onStartup.addListener(setupMenus)
    - 更老的脚本（无 cleanup）/ 扩展更新后失去 runtime 的孤立脚本 / document 监听器失效
      → 只在 Pinterest 标签自动刷新一次（chrome.storage.session 记标记防循环），其它站点走 popup「修复本页」。
    content.js 在监听器全部注册完成之后才置 Loaded，并提供健康事件，部分初始化也能被发现。 */
-const CONTENT_VERSION = '0.2.4'
+const CONTENT_VERSION = '0.2.5'
 const RELOAD_KEY = 'picnestCollectReloads'
 const INJECTABLE_RE = /^(https?|file):\/\//i
 const PINTEREST_HOST_RE = /(^|\.)pinterest\.[a-z.]+$/i
@@ -40,6 +40,7 @@ function isInjectableUrl(url) {
 function isPinterestUrl(url) {
   try { return PINTEREST_HOST_RE.test(new URL(url).hostname) } catch { return false }
 }
+var isPinterest = isPinterestUrl
 function probeCurrent(p) {
   return !!p && p.loaded === true && p.alive === true && p.healthy === true &&
     p.version === CONTENT_VERSION
@@ -292,7 +293,7 @@ async function getTarget() {
 }
 
 function notify(ok, message) {
-  // 采集结果（成功/失败）已全面由页面内右下角优雅读条 Toast 接管，彻底屏蔽系统气泡弹窗
+  // 采集结果（成功/失败/HTTP等）已全面由页面内右下角单色优雅读条 Toast 接管，彻底屏蔽系统气泡弹窗
   if (!message || message.includes('已保存') || message.includes('采集失败') || message.includes('Assignment') || message.includes('HTTP')) return
   try {
     chrome.notifications.create({
@@ -351,22 +352,49 @@ async function blobToDataUrl(src, tabId, frameId) {
   return r?.result || ''
 }
 
+/* 规范化 Pinterest 媒体 URL：保留其真实路径，严禁暴力替换为不存在的 S3 路径 */
 function normalizePinterestVideoUrl(rawUrl) {
   if (!rawUrl || typeof rawUrl !== 'string') return ''
   const u = rawUrl.trim()
   if (!u.includes('pinimg.com')) return u
-  // 核心逻辑：从任意 Pinterest 资源 URL 中提取 32 位 MD5 hash，直通官方无防盗链 720p MP4
-  const hashMatch = u.match(/([a-f0-9]{32})/i)
-  if (hashMatch) {
-    const hash = hashMatch[1]
-    const p1 = hash.slice(0, 2)
-    const p2 = hash.slice(2, 4)
-    const p3 = hash.slice(4, 6)
-    return `https://v.pinimg.com/videos/mc/720p/${p1}/${p2}/${p3}/${hash}.mp4`
+  // 若已是明确的 .mp4 静态直链，原样返回（严禁拼入不存在的 /mc/）
+  if (/\.mp4(\?.*)?$/i.test(u)) return u
+  // 若包含视频目录且为切片/manifest，尝试移除切片后缀
+  if (u.includes('/videos/')) {
+    return u.replace(/(_\d+[wp]|_\d+p)?\.(cmfv|cmfa|m3u8|ts|mpd).*$/i, '.mp4')
   }
-  return u.replace(/https?:\/\/[a-z0-9_.-]*pinimg\.com\//i, 'https://v.pinimg.com/')
-          .replace(/\/videos\/(iht|hls)\//i, '/videos/mc/')
-          .replace(/(_\d+[wp]|_\d+p)?\.(cmfv|cmfa|m3u8|ts|mpd).*$/i, '.mp4')
+  return u
+}
+
+/* 借由标签页环境拉取媒体流（原生携带 Pinterest 同域凭据与合规 Referer） */
+async function downloadMediaViaTab(tabId, url) {
+  if (!tabId || !url || !/^https?:\/\//i.test(url)) return null
+  try {
+    const [r] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: async (mediaUrl) => {
+        try {
+          const res = await fetch(mediaUrl, { credentials: 'include' })
+          if (!res.ok) return { ok: false, status: res.status }
+          const blob = await res.blob()
+          const dataUrl = await new Promise((resolve, reject) => {
+            const fr = new FileReader()
+            fr.onload = () => resolve(fr.result)
+            fr.onerror = reject
+            fr.readAsDataURL(blob)
+          })
+          return { ok: true, dataUrl, size: blob.size, contentType: blob.type || 'video/mp4' }
+        } catch (e) {
+          return { ok: false, error: String(e?.message || e) }
+        }
+      },
+      args: [url],
+    })
+    if (r?.result?.ok && r.result.dataUrl) return r.result
+  } catch (e) {
+    console.warn('downloadMediaViaTab error:', e)
+  }
+  return null
 }
 
 async function downloadMediaInBrowser(url) {
@@ -377,7 +405,6 @@ async function downloadMediaInBrowser(url) {
   try {
     const headers = {}
     if (fixedUrl.includes('pinimg.com')) {
-      headers['Referer'] = 'https://www.pinterest.com/'
       headers['Accept'] = 'video/mp4,video/*;q=0.9,*/*;q=0.8'
     }
     const res = await fetch(fixedUrl, { signal: ctl.signal, headers, credentials: 'omit' })
@@ -426,48 +453,35 @@ async function resolveVideoSource({ src, pinUrl, url, tabId }) {
     return { ok: true, src: finalSrc }
   }
 
-  // 3. 针对 tabId 页面上下文进行深度嗅探（Performance Resource Timeline、React Fiber、Poster 逆向、__PWS_DATA__）
+  // 3. 针对 tabId 页面上下文进行深度嗅探（Performance Resource Timeline、React Fiber、__PWS_DATA__）
   if (tabId && typeof chrome.scripting?.executeScript === 'function') {
     try {
       const [r] = await chrome.scripting.executeScript({
         target: { tabId },
         func: () => {
           try {
-            // 3a. Performance Resource Timeline (最快最准，直接取浏览器正在请求的真实流)
+            // 3a. Performance Resource Timeline (直接取浏览器已在请求的真实 MP4)
             const entries = performance.getEntriesByType('resource') || []
             for (let i = entries.length - 1; i >= 0; i--) {
               const u = entries[i].name || ''
               if (!u.includes('pinimg.com')) continue
               if (/\.mp4(\?.*)?$/i.test(u)) return u
-              if (u.includes('/hls/')) {
-                return u.replace('/hls/', '/720p/').replace(/(_\d+p)?\.(m3u8|ts).*$/i, '.mp4')
-              }
-              if (u.includes('/720p/') || u.includes('/1080p/') || u.includes('/exp7/')) {
-                return u.replace(/(_\d+p)?\.(m3u8|ts).*$/i, '.mp4')
-              }
             }
 
-            // 3b. 递归探测对象树中的 video_list
+            // 3b. 递归探测对象树中的真实 video_list（只挑真实存在的 .mp4）
             const scanObj = (obj, depth = 0) => {
               if (!obj || typeof obj !== 'object' || depth > 8) return ''
               if (obj.video_list && typeof obj.video_list === 'object') {
                 const vl = obj.video_list
-                let best = vl.V_720P?.url || vl.V_1080P?.url || vl.V_EXP7?.url
-                if (!best) {
-                  for (const v of Object.values(vl)) {
-                    if (v?.url && /\.mp4(\?.*)?$/i.test(v.url)) { best = v.url; break }
-                  }
+                for (const k of ['V_720P', 'V_1080P', 'V_EXP720P', 'V_EXPMP4']) {
+                  if (vl[k]?.url && /\.mp4(\?.*)?$/i.test(vl[k].url)) return vl[k].url
                 }
-                if (!best && vl.V_HLS?.url) {
-                  best = vl.V_HLS.url.replace('/hls/', '/720p/').replace(/(_\d+p)?\.(m3u8|ts).*$/i, '.mp4')
+                for (const v of Object.values(vl)) {
+                  if (v?.url && /\.mp4(\?.*)?$/i.test(v.url)) return v.url
                 }
-                if (best) return best
               }
-              if (typeof obj.url === 'string' && obj.url.includes('v.pinimg.com/videos/')) {
-                if (/\.mp4(\?.*)?$/i.test(obj.url)) return obj.url
-                if (obj.url.includes('/hls/')) {
-                  return obj.url.replace('/hls/', '/720p/').replace(/(_\d+p)?\.(m3u8|ts).*$/i, '.mp4')
-                }
+              if (typeof obj.url === 'string' && obj.url.includes('pinimg.com/videos/') && /\.mp4(\?.*)?$/i.test(obj.url)) {
+                return obj.url
               }
               for (const k of Object.keys(obj)) {
                 if (k === 'parent' || k === 'return' || k === '_owner' || k === 'stateNode') continue
@@ -501,35 +515,26 @@ async function resolveVideoSource({ src, pinUrl, url, tabId }) {
             const scripts = Array.from(document.querySelectorAll('script[type="application/json"], script#__PWS_DATA__'))
             for (const s of scripts) {
               const txt = s.textContent || ''
-              if (!txt.includes('video_list') && !txt.includes('v.pinimg.com')) continue
+              if (!txt.includes('video_list') && !txt.includes('pinimg.com')) continue
               try {
                 const data = JSON.parse(txt)
                 const found = scanObj(data)
                 if (found) return found
               } catch {}
             }
-
-            // 3e. 检查页面中所有 video 的 poster 逆向推算
-            for (const v of document.querySelectorAll('video')) {
-              const p = v.poster || v.getAttribute('poster') || ''
-              if (p.includes('/videos_thumbnails/')) {
-                return p.replace(/i\.pinimg\.com\/videos_thumbnails\/(720p|original|[a-z0-9_-]+)\//i, 'v.pinimg.com/videos/mc/720p/').replace(/(_t)?\.(jpe?g|png|webp).*$/i, '.mp4')
-              }
-            }
           } catch {}
           return ''
         },
       })
-      if (r?.result) {
-        const norm = normalizePinterestVideoUrl(r.result)
-        if (norm) return { ok: true, src: norm }
+      if (r?.result && /\.mp4(\?.*)?$/i.test(r.result)) {
+        return { ok: true, src: r.result }
       }
     } catch (e) {
       console.warn('executeScript probe error:', e)
     }
   }
 
-  // 4. PinResource 接口深度递归查询
+  // 4. PinResource 接口深度查询
   const pinMatch = resolvedPinUrl.match(/\/pin\/(\d+)/) || finalSrc.match(/\/pin\/(\d+)/)
   const pinId = pinMatch ? pinMatch[1] : ''
   if (pinId) {
@@ -550,22 +555,15 @@ async function resolveVideoSource({ src, pinUrl, url, tabId }) {
             if (!obj || typeof obj !== 'object' || depth > 8) return ''
             if (obj.video_list && typeof obj.video_list === 'object') {
               const vl = obj.video_list
-              let best = vl.V_720P?.url || vl.V_1080P?.url || vl.V_EXP7?.url
-              if (!best) {
-                for (const v of Object.values(vl)) {
-                  if (v?.url && /\.mp4(\?.*)?$/i.test(v.url)) { best = v.url; break }
-                }
+              for (const k of ['V_720P', 'V_1080P', 'V_EXP720P', 'V_EXPMP4']) {
+                if (vl[k]?.url && /\.mp4(\?.*)?$/i.test(vl[k].url)) return vl[k].url
               }
-              if (!best && vl.V_HLS?.url) {
-                best = vl.V_HLS.url.replace('/hls/', '/720p/').replace(/(_\d+p)?\.(m3u8|ts).*$/i, '.mp4')
+              for (const v of Object.values(vl)) {
+                if (v?.url && /\.mp4(\?.*)?$/i.test(v.url)) return v.url
               }
-              if (best) return best
             }
-            if (typeof obj.url === 'string' && obj.url.includes('v.pinimg.com/videos/')) {
-              if (/\.mp4(\?.*)?$/i.test(obj.url)) return obj.url
-              if (obj.url.includes('/hls/')) {
-                return obj.url.replace('/hls/', '/720p/').replace(/(_\d+p)?\.(m3u8|ts).*$/i, '.mp4')
-              }
+            if (typeof obj.url === 'string' && obj.url.includes('pinimg.com/videos/') && /\.mp4(\?.*)?$/i.test(obj.url)) {
+              return obj.url
             }
             for (const k of Object.keys(obj)) {
               if (typeof obj[k] === 'object') {
@@ -576,9 +574,8 @@ async function resolveVideoSource({ src, pinUrl, url, tabId }) {
             return ''
           }
           const found = scanObj(data)
-          if (found) {
-            const norm = normalizePinterestVideoUrl(found)
-            if (norm) return { ok: true, src: norm, pinId }
+          if (found && /\.mp4(\?.*)?$/i.test(found)) {
+            return { ok: true, src: found, pinId }
           }
         }
       }
@@ -675,10 +672,15 @@ async function saveImage(info, tab, toast) {
   if (isVideo && src && /^https?:\/\//i.test(src)) {
     toast?.updateStatus('正在下载视频流…')
     let dl = null
-    try {
-      dl = await downloadMediaInBrowser(src)
-    } catch (e) {
-      console.warn('downloadMediaInBrowser error:', e)
+    if (tab?.id) {
+      dl = await downloadMediaViaTab(tab.id, src)
+    }
+    if (!dl?.dataUrl) {
+      try {
+        dl = await downloadMediaInBrowser(src)
+      } catch (e) {
+        console.warn('downloadMediaInBrowser error:', e)
+      }
     }
     if (dl?.dataUrl) {
       payload = {
@@ -686,6 +688,13 @@ async function saveImage(info, tab, toast) {
         dataUrl: dl.dataUrl,
         poster: poster || dataUrl,
       }
+    } else if (dataUrl || poster) {
+      // 优雅降级：若网络或 CDN 拦截未能下载独立 mp4，使用高质量视频截帧入库，绝不抛 403 崩溃
+      payload = {
+        kind: 'image',
+        dataUrl: dataUrl || poster,
+      }
+      toast?.updateStatus('已保存高清视频画面（流媒体切片）')
     } else {
       payload = {
         kind: 'video',
@@ -835,6 +844,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         // 针对视频，利用多级逆向解析器换取真实的 MP4 原始直链并下载完整流
         if (kind === 'video' || isPinterestUrl(msg.url || sender?.tab?.url)) {
           let videoSrc = src
+          let dl = null
           if (!videoSrc || !/\.mp4(\?.*)?$/i.test(videoSrc)) {
             const res = await resolveVideoSource({
               src: videoSrc,
@@ -844,21 +854,33 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             })
             if (res?.ok && res.src) videoSrc = res.src
           }
-          if (videoSrc && /^https?:\/\//i.test(videoSrc)) {
+          if (videoSrc && /^https?:\/\//i.test(videoSrc) && /\.mp4(\?.*)?$/i.test(videoSrc)) {
             kind = 'video'
             src = videoSrc
             poster = poster || dataUrl
-            try {
-              const dl = await downloadMediaInBrowser(videoSrc)
-              if (dl?.dataUrl) {
-                dataUrl = dl.dataUrl
-                src = '' // 已转为完整 MP4 dataUrl，走本地无障碍写入
-              }
-            } catch (dlErr) {
-              console.warn('Browser download failed, falling back to direct src:', dlErr)
+            // 优先在当前标签页内借同域凭据下载为 Base64
+            if (sender?.tab?.id) {
+              dl = await downloadMediaViaTab(sender.tab.id, videoSrc)
             }
-          } else if (kind === 'video' && isPinterestUrl(msg.url || sender?.tab?.url)) {
-            throw new Error('未嗅探到 Pinterest 视频原片 MP4，请先在页面点击播放 1 秒后重试')
+            if (!dl?.dataUrl) {
+              try {
+                dl = await downloadMediaInBrowser(videoSrc)
+              } catch (dlErr) {
+                console.warn('Browser download failed:', dlErr)
+              }
+            }
+            if (dl?.dataUrl) {
+              dataUrl = dl.dataUrl
+              src = '' // 已转为完整 MP4 dataUrl，走本地无障碍写入
+            }
+          }
+          // 优雅降级：若网络未拉取到独立 MP4（某些流媒体切片无单体 mp4 文件），自动采用高清 Canvas 视频截帧
+          if (kind === 'video' && !dataUrl && (!src || src.startsWith('blob:'))) {
+            if (msg.frameDataUrl || poster) {
+              kind = 'image'
+              dataUrl = msg.frameDataUrl || poster
+              src = ''
+            }
           }
         }
 

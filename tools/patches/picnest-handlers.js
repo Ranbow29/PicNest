@@ -3999,13 +3999,6 @@ async function picnestCollectFetchImage(src, referer) {
     const ref = String(referer || "").trim() || (() => {
       try { return new URL(u).origin + "/"; } catch (e) { return ""; }
     })();
-    if (u.includes("pinimg.com")) {
-      const hashMatch = u.match(/([a-f0-9]{32})/i);
-      if (hashMatch) {
-        const hash = hashMatch[1];
-        u = `https://v.pinimg.com/videos/mc/720p/${hash.slice(0, 2)}/${hash.slice(2, 4)}/${hash.slice(4, 6)}/${hash}.mp4`;
-      }
-    }
     const isPinImg = /pinimg\.com/i.test(u);
     const isVideoUrl = /\.(mp4|webm|mov|mkv|avi|flv|f4v|cmfv)(\?.*)?$/i.test(u) || u.includes("/videos/");
     const headers = {
