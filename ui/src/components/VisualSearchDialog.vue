@@ -39,6 +39,26 @@ function onImageLoaded(e) {
   }
 }
 
+// 预览图加载异常兜底恢复（针对视频代表帧或 PSD 预览，防止任何异常导致左侧画面塌陷消失）
+async function onQueryImgError() {
+  if (!currentTask.value?.filePath) return
+  const fp = currentTask.value.filePath
+  const ext = fp.slice(fp.lastIndexOf('.')).toLowerCase()
+  try {
+    if (ext === '.psd') {
+      const r = await api.psdPreview(fp)
+      if (r?.ok && r?.path) {
+        currentTask.value.thumbUrl = fileUrl(r.path)
+      }
+    } else if (['.mp4', '.webm', '.mov', '.mkv', '.avi', '.flv', '.f4v'].includes(ext)) {
+      const r = await api.videoPreview(fp)
+      if (r?.ok && r?.path) {
+        currentTask.value.thumbUrl = fileUrl(r.path)
+      }
+    }
+  } catch (err) {}
+}
+
 // 窗口置顶状态
 const isAlwaysOnTop = ref(false)
 async function toggleAlwaysOnTop() {
@@ -316,7 +336,15 @@ async function triggerSearch(task, continueSearch = false, isRequery = false) {
       if (res.queryMeta) {
         if (res.queryMeta.width) task.width = res.queryMeta.width
         if (res.queryMeta.height) task.height = res.queryMeta.height
-        if (res.queryMeta.thumbUrl) task.thumbUrl = res.queryMeta.thumbUrl
+        if (res.queryMeta.thumbUrl) {
+          let u = String(res.queryMeta.thumbUrl)
+          if (u.startsWith('picnest-file://')) {
+            u = fileUrl(decodeURIComponent(u.replace(/^picnest-file:\/\//, '')))
+          } else if (/^[a-zA-Z]:[/\\]/.test(u)) {
+            u = fileUrl(u)
+          }
+          task.thumbUrl = u
+        }
       }
     }
   } catch (err) {
@@ -822,6 +850,7 @@ onBeforeUnmount(() => {
                     :src="currentTask.thumbUrl || currentTask.dataUrl"
                     class="query-img"
                     @load="onImageLoaded"
+                    @error="onQueryImgError"
                     @dragstart.prevent
                   />
                   <div v-else class="query-loading-placeholder">
@@ -1574,6 +1603,8 @@ onBeforeUnmount(() => {
   box-shadow: var(--shadow-float);
   max-width: 100%;
   max-height: 100%;
+  min-width: 120px;
+  min-height: 120px;
 }
 
 .query-img {

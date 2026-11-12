@@ -4991,6 +4991,11 @@ electron.ipcMain.handle("picnest-visual-search-query", async (_event, opts) => {
     const isSubCrop = (bx > 0.02 || by > 0.02 || bw < 0.98 || bh < 0.98);
 
     let resolvedThumbUrl = null;
+    const toFileUrl = (p) => {
+      if (!p) return null;
+      const norm = String(p).replace(/\\/g, "/");
+      return "file:///" + norm.split("/").map(encodeURIComponent).join("/");
+    };
 
     // 1. 本地已有 JPEG 文件且未进行子区域裁切时：直接透传原始无损 Buffer！
     // 杜绝 nativeImage.resize 模糊滤镜导致的二次元高频线稿/笔触丢失与质量降级（这是此前搜图质量远逊于 Eagle 的主因）
@@ -5026,7 +5031,7 @@ electron.ipcMain.handle("picnest-visual-search-query", async (_event, opts) => {
               const png = await ensurePsdPng(path.resolve(filePath));
               if (png && fs.existsSync(png)) {
                 targetFilePath = png;
-                resolvedThumbUrl = "picnest-file://" + encodeURI(png.replace(/\\/g, "/"));
+                resolvedThumbUrl = toFileUrl(png);
               }
             }
           } catch (e) {
@@ -5041,7 +5046,7 @@ electron.ipcMain.handle("picnest-visual-search-query", async (_event, opts) => {
             for (const c of candidates) {
               if (fs.existsSync(c)) {
                 targetFilePath = c;
-                resolvedThumbUrl = "picnest-file://" + encodeURI(c.replace(/\\/g, "/"));
+                resolvedThumbUrl = toFileUrl(c);
                 break;
               }
             }
@@ -5056,7 +5061,7 @@ electron.ipcMain.handle("picnest-visual-search-query", async (_event, opts) => {
               const poster = await getOrGeneratePoster(path.resolve(filePath));
               if (poster && fs.existsSync(poster)) {
                 targetFilePath = poster;
-                resolvedThumbUrl = "picnest-file://" + encodeURI(poster.replace(/\\/g, "/"));
+                resolvedThumbUrl = toFileUrl(poster);
               }
             }
           } catch (e) {
@@ -5068,14 +5073,14 @@ electron.ipcMain.handle("picnest-visual-search-query", async (_event, opts) => {
               const row = getDb().prepare("SELECT thumbnail_path, width, height FROM images WHERE file_path = ? OR file_path = ?").get(filePath, normFp);
               if (row?.thumbnail_path && fs.existsSync(row.thumbnail_path)) {
                 targetFilePath = row.thumbnail_path;
-                resolvedThumbUrl = "picnest-file://" + encodeURI(row.thumbnail_path.replace(/\\/g, "/"));
+                resolvedThumbUrl = toFileUrl(row.thumbnail_path);
                 if (row.width && row.height) { imgW = row.width; imgH = row.height; }
               } else {
                 const hash = crypto.createHash("md5").update(path.resolve(filePath)).digest("hex");
                 const pWebp = path.join(cacheDir, `${hash}.webp`);
                 if (fs.existsSync(pWebp)) {
                   targetFilePath = pWebp;
-                  resolvedThumbUrl = "picnest-file://" + encodeURI(pWebp.replace(/\\/g, "/"));
+                  resolvedThumbUrl = toFileUrl(pWebp);
                 } else {
                   const bundledFfmpeg = path.join(__dirname, "../../node_modules/@ffmpeg-installer/win32-x64/ffmpeg.exe");
                   let ffmpegBin = fs.existsSync(bundledFfmpeg) ? bundledFfmpeg : null;
@@ -5097,7 +5102,7 @@ electron.ipcMain.handle("picnest-visual-search-query", async (_event, opts) => {
                     }
                     if (fs.existsSync(vPng)) {
                       targetFilePath = vPng;
-                      resolvedThumbUrl = "picnest-file://" + encodeURI(vPng.replace(/\\/g, "/"));
+                      resolvedThumbUrl = toFileUrl(vPng);
                     }
                   }
                 }
