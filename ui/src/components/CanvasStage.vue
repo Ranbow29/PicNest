@@ -127,15 +127,33 @@ function draw() {
   ctx.drawImage(img, sx * kx, sy * ky, sw * kx, sh * ky, left, top, right - left, bottom - top)
 }
 
-watch(() => [props.previewSrc, props.fallbackSrc], ([p, f]) => {
+watch(() => [props.previewSrc, props.fallbackSrc], ([p, f], oldVal) => {
+  if (oldVal && (oldVal[0] !== p || oldVal[1] !== f)) {
+    // 切换图片时主动切断前一张位图引用，避免高分辨率位图在过渡期堆叠驻留
+    imgs.preview = null
+    imgs.fallback = null
+    ready.preview = false
+    ready.fallback = false
+  }
   load('preview', p)
   load('fallback', f)
 }, { immediate: true })
-watch(() => props.fullSrc, (s) => {
+watch(() => props.fullSrc, (s, oldS) => {
+  if (oldS && oldS !== s) {
+    imgs.full = null
+    ready.full = false
+  }
   if (s && props.useFull) load('full', s)
 }, { immediate: true })
 watch(() => props.useFull, (u) => {
-  if (u && props.fullSrc) load('full', props.fullSrc)
+  if (u && props.fullSrc) {
+    load('full', props.fullSrc)
+  } else if (!u && imgs.full) {
+    // 缩放回窗口自适应时，主动卸载原始巨幅位图，立即向系统归还几十至数百兆显存/内存
+    imgs.full = null
+    ready.full = false
+    schedule()
+  }
 })
 watch(() => [props.scale, props.tx, props.ty], ([s, x, y]) => {
   view.scale = s ?? 1
@@ -159,6 +177,15 @@ onBeforeUnmount(() => {
   ro?.disconnect()
   ro = null
   window.removeEventListener('resize', resize)
+  // 主动归还 GPU 离屏表面与图片位图内存
+  if (canvasEl.value) {
+    canvasEl.value.width = 0
+    canvasEl.value.height = 0
+  }
+  imgs.preview = null
+  imgs.full = null
+  imgs.fallback = null
+  ctx = null
 })
 defineExpose({ drawAt })
 </script>

@@ -596,7 +596,17 @@ async function toggleFullscreen() {
   } catch { /* 静默 */ }
 }
 watch(() => [lib.lightbox.open, lib.lightbox.path], ([open]) => {
-  if (!open || kind.value !== 'video') return
+  if (!open || kind.value !== 'video') {
+    // 退出大图或切离视频时：主动释放 D3D11 视频硬件解码器管线与显存交换链
+    if (videoEl.value) {
+      try {
+        videoEl.value.pause()
+        videoEl.value.removeAttribute('src')
+        videoEl.value.load()
+      } catch (e) {}
+    }
+    return
+  }
   showRateMenu.value = false
   nextTick(() => {
     const v = videoEl.value

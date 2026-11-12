@@ -284,7 +284,19 @@ function resetAutoTimer() {
   }
 }
 watch(() => [lib.brief.open, lib.brief.path], ([open]) => {
-  if (!open) { autoPlay.value = false; topRightHover.value = false; bottomHover.value = false; showRateMenu.value = false }
+  if (!open || kind.value !== 'video') {
+    // 退出简报模式或切离视频时：主动释放 D3D11 视频硬件解码器管线与显存交换链
+    if (videoEl.value) {
+      try {
+        videoEl.value.pause()
+        videoEl.value.removeAttribute('src')
+        videoEl.value.load()
+      } catch (e) {}
+    }
+  }
+  if (!open) {
+    autoPlay.value = false; topRightHover.value = false; bottomHover.value = false; showRateMenu.value = false
+  }
   resetAutoTimer()
 })
 function onBriefPointerMove(e) {
