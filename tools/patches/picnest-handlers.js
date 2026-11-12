@@ -911,7 +911,15 @@ function picnestDragIcon(list) {
     ? path.join(process.cwd(), "_internal_data", "icon.png")
     : path.join(__dirname, "../../../../_internal_data", "icon.png");
   let icon = electron.nativeImage.createEmpty();
-  if (/\.(png|jpe?g|webp|gif|bmp)$/i.test(list[0])) {
+  if (typeof list[0] === "string" && list[0]) {
+    try {
+      const row = getDb().prepare("SELECT thumbnail_path FROM images WHERE file_path = ?").get(list[0]);
+      if (row?.thumbnail_path && fs.existsSync(row.thumbnail_path)) {
+        icon = electron.nativeImage.createFromPath(row.thumbnail_path);
+      }
+    } catch (e) {}
+  }
+  if (icon.isEmpty() && /\.(png|jpe?g|webp|gif|bmp)$/i.test(list[0])) {
     try { icon = electron.nativeImage.createFromPath(list[0]); } catch (e) {}
   }
   if (icon.isEmpty()) icon = electron.nativeImage.createFromPath(iconPath);
