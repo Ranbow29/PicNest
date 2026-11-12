@@ -54,8 +54,10 @@ function onVideoMeta(e) {
   if (vid.playing) {
     v.play().catch(() => { vid.playing = false })
   }
+  nextTick(syncMediaTransform)
 }
 function onVideoTime(e) {
+  if (pan.active) return // 拖拽平移中不触发响应式更新，防止 Vue diff 把正在平移的视频重置回起点
   if (!isSeeking.value) {
     vid.cur = e.target.currentTime || 0
   }
@@ -216,9 +218,16 @@ watch(() => lib.brief.path, async (p) => {
 }, { immediate: true })
 
 const mediaStyle = computed(() => ({
-  transform: `translate3d(${lib.brief.tx || 0}px, ${lib.brief.ty || 0}px, 0) scale(${lib.brief.scale || 1})`,
   cursor: dragging.value ? 'grabbing' : (kind.value === 'video' ? 'pointer' : 'grab'),
 }))
+
+function syncMediaTransform() {
+  const el = kind.value === 'video' ? videoEl.value : mediaEl.value
+  if (el) {
+    el.style.transform = `translate3d(${lib.brief.tx || 0}px, ${lib.brief.ty || 0}px, 0) scale(${lib.brief.scale || 1})`
+  }
+}
+watch(() => [lib.brief.tx, lib.brief.ty, lib.brief.scale, kind.value], syncMediaTransform)
 function next() { lib.briefNav(1) }
 function prev() { lib.briefNav(-1) }
 

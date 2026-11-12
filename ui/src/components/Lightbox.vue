@@ -31,6 +31,12 @@ function applyPan(tx, ty) {
   const el = imgEl.value
   if (el) el.style.transform = stageTransform(tx, ty)
 }
+
+function syncVideoTransform() {
+  const v = videoEl.value
+  if (v) v.style.transform = `translate(${lib.viewer.tx}px, ${lib.viewer.ty}px) scale(${lib.viewer.scale})`
+}
+watch(() => [lib.viewer.tx, lib.viewer.ty, lib.viewer.scale, kind.value], syncVideoTransform)
 function commitPan() {
   if (!pan.active) return
   if (pan.raf) { cancelAnimationFrame(pan.raf); pan.raf = 0 }
@@ -501,10 +507,16 @@ function onVideoMeta() {
   v.muted = vid.value.muted
   v.loop = vid.value.loop
   v.playbackRate = vid.value.rate || 1
-  nextTick(fitToWindow)
+  nextTick(() => {
+    fitToWindow()
+    syncVideoTransform()
+  })
   v.play?.().catch(() => {}) // 双击进入已有用户手势；被策略拦截就等用户点 ▶
 }
-function onVideoTime() { if (videoEl.value) vid.value.time = videoEl.value.currentTime || 0 }
+function onVideoTime() {
+  if (pan.active) return
+  if (videoEl.value) vid.value.time = videoEl.value.currentTime || 0
+}
 function onVideoClick() {
   if (didDrag) {
     didDrag = false
@@ -1014,7 +1026,6 @@ function onKey(e) {
       ref="videoEl" :src="url" class="stage video" :class="{ gray: lib.grayscaleMode }" playsinline
       draggable="false" @dragstart.prevent
       :style="{
-        transform: `translate(${lib.viewer.tx}px, ${lib.viewer.ty}px) scale(${lib.viewer.scale})`,
         cursor: dragging ? 'grabbing' : (lib.viewer.scale > 1.05 ? 'grab' : 'grab'),
       }"
       @loadedmetadata="onVideoMeta" @timeupdate="onVideoTime"
