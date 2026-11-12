@@ -1227,6 +1227,7 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: center;
   animation: fadeIn 0.15s ease-out;
+  -webkit-app-region: drag; /* 允许在弹窗外围所有暗色留白区直接按住拖拽移动整个窗口 */
 }
 
 @keyframes fadeIn {
@@ -1247,6 +1248,7 @@ onBeforeUnmount(() => {
   flex-direction: column;
   overflow: hidden;
   color: var(--text);
+  -webkit-app-region: no-drag; /* 弹窗卡片主体禁用拖拽，保证内容操作与局部框选不受干扰 */
 }
 
 /* 顶栏控制区 */

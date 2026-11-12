@@ -185,7 +185,7 @@ function onKey(e) {
 </script>
 
 <template>
-  <header class="titlebar" :class="{ 'lb-clear': lib.lightbox.open }">
+  <header class="titlebar" :class="{ 'lb-clear': lib.lightbox.open, 'vs-covered': lib.visualSearch?.open }">
     <div class="glass"></div>
     <div class="drag-surface">
     <div class="bar-content">
@@ -372,6 +372,14 @@ function onKey(e) {
   -webkit-backdrop-filter: none;
 }
 .titlebar.lb-clear::after { display: none; }
+
+/* 以图搜图（或其它全屏遮罩）激活时：彻底清除主顶栏所有 app-region，杜绝底层按钮在暗色遮罩中穿透留下无法拖拽的隐形空洞 */
+.titlebar.vs-covered,
+.titlebar.vs-covered .drag-surface,
+.titlebar.vs-covered .bar-content,
+.titlebar.vs-covered * {
+  -webkit-app-region: none !important;
+}
 .bar-content {
   /* 45 > 裁剪层 30 / 裁剪条 40：裁剪时左上返回与右上窗控必须可点 */
   position: relative; z-index: 45; height: 42px; display: flex; align-items: center;
