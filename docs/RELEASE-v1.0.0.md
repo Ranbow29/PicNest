@@ -23,11 +23,20 @@
 - **毫秒精确查重**：大小分桶预筛 + 快速分块 Hash + 逐字节防碰撞确证，秒级发现重复冗余画稿并统计可释放空间。
 - **AI 语义查重**：本地 8×8 dHash / 宽高比初筛 + 标准 OpenAI 兼容多模态视觉接口精筛，可自由配置私有 API 地址、Key 与视觉模型，精准识别裁切、缩放、重压及微调版本。
 
+<img width="1450" height="980" alt="image" src="https://github.com/user-attachments/assets/b77ec82f-6c6c-4249-b61c-5e863a02ed9e" />
+
 ### 5. 专为画师打磨的细节交互
 - **MP4 视频动态缩略图**：自动截取视频代表帧，动态素材一览无余，告别黑框。
 - **无框沉浸式五星评分**：去除非必要黑底，与上方动态色板协同呼应。
+- **极简灯箱展示**：双击进入图片后，设有鼠标靠近才会浮现的隐蔽按钮机制，正常浏览观察缩放图片时享有极致的原生体验。
 - **外部拖入“防手滑”安全锁**：外部素材拖入与内部整理完全对齐整行归类逻辑，彻底关闭上下间隙白线指示，杜绝手滑误入未分类。
 - **绝对数据安全底线**：所有素材与文件夹删除一律移至 **Windows 原生回收站**，随时可撤回还原，数据万无一失。
+
+<img width="1750" height="1125" alt="image" src="https://github.com/user-attachments/assets/70093c79-469b-4d87-b770-6827d7c4a3ae" />
+<img width="1794" height="1354" alt="image" src="https://github.com/user-attachments/assets/3eed7506-616f-42b2-ba02-03ff20cf372e" />
+
+### 6. 以及还有黑白预览，色板筛选，标签筛选，全屏预览，库内挂载旋转翻转等等功能等你来探索
+<img width="1393" height="1116" alt="image" src="https://github.com/user-attachments/assets/59eec8c4-1758-40e1-b3aa-1fa7a838f0dc" />
 
 ---
 
