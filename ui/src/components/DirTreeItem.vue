@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, watch } from 'vue'
-import { useLibrary, extractDropUrls } from '../stores/library'
+import { useLibrary } from '../stores/library'
+import { handleExternalDrop } from '../lib/dropExtract'
 import { isExternalDT, dndTypes } from '../lib/dnd'
 import AnimIcon from './AnimIcon.vue'
 import { folderTint } from '../lib/folderColors'
@@ -38,8 +39,9 @@ function onContextMenu(e) {
 }
 /* 单击=打开并单选；Shift=范围多选（不打开）；Alt/Ctrl=加选/减选（不打开） */
 function onClick(e) {
+  try { window.__TAURI_INTERNALS__?.invoke('diag_event', { msg: `tree-click rel=${rel.value}` }) } catch {}
   const add = e.altKey || e.ctrlKey || e.metaKey
-  lib.selectDir(rel.value, { shift: e.shiftKey, add })
+  lib.selectDir(rel.value, { shift: e.shiftKey, add, preview: false })
   if (!e.shiftKey && !add) emit('open', props.node)
 }
 
@@ -75,22 +77,26 @@ function onDragOver(e) {
   e.preventDefault()
   const external = isExternalDT(e) // 内部拖拽优先：text/uri-list 是浏览器自动附带的，不能当外部文件
   e.dataTransfer.dropEffect = external ? 'copy' : 'move'
+
+  /* 外部文件拖入：对齐内部图片拖入，只认整个文件夹行（into），不提供上/下缝隙插入，彻底杜绝手滑拖入缝隙误进父级/未分类 */
+  if (external) {
+    e.stopPropagation()
+    dropMark.value = 'into'
+    lib.setDropHint('dir', dragHintLabel('into'), e.clientX, e.clientY)
+    return
+  }
+
   /* 根行不是可排序项：内部文件夹只能“移入库根”，外部文件/文件夹录入库根；
      不允许在根行做 before/after，否则会把根名与同名子文件夹混淆并写坏顶层顺序 */
   if (!props.node.rel) {
     e.stopPropagation()
     dropMark.value = 'into'
-    if (external) lib.setDropHint('dir', dragHintLabel('into'), e.clientX, e.clientY)
     return
   }
   const r = e.currentTarget.getBoundingClientRect()
   const y = e.clientY - r.top
-  /* 外部拖入与内部文件夹拖动同规则：上/下 30% = 缝隙插入，中间 = 放进该文件夹 */
+  /* 只有内部文件夹拖拽排序才保留 before/after 缝隙插入，中间 = 放进该文件夹 */
   dropMark.value = y < r.height * 0.3 ? 'before' : y > r.height * 0.7 ? 'after' : 'into'
-  if (external) {
-    e.stopPropagation() // 抢占落点：主展示区/侧栏空白不再覆盖
-    lib.setDropHint('dir', dragHintLabel(dropMark.value), e.clientX, e.clientY)
-  }
 }
 function onDragLeave() { dropMark.value = '' }
 
@@ -115,18 +121,15 @@ async function onDrop(e) {
   e.stopPropagation()
   lib.clearDropHint()
   const internalImages = isInternalImagesDT(e)
-  const mark = internalImages ? 'into' : dropMark.value
+  const external = isExternalDT(e)
+  // 外部拖入与内部图片拖入均强制 into，仅内部文件夹排序允许 before/after
+  const mark = (internalImages || external) ? 'into' : dropMark.value
   dropMark.value = ''
   if (internalImages && !props.node.rel) return // 库根行不接图片（走侧栏「未分类」入口）
-  // 外部拖入（Eagle 式）：文件/文件夹 → 按落点录入
-  if (isExternalDT(e)) {
-    const paths = [...(e.dataTransfer.files || [])].map((f) => window.picrand.getFilePath?.(f)).filter(Boolean)
-    const urls = extractDropUrls(e.dataTransfer)
-    const target = (mark === 'before' || mark === 'after')
-      ? gapTarget(mark)
-      : { rootId: lib.activeRootId, rel: props.node.rel }
-    if (paths.length) await lib.importDrop(paths, target)
-    else if (urls.length) await lib.importUrls(urls, target)
+  // 外部拖入（Eagle 式）：文件/文件夹 → 始终直接录入到所选目标文件夹
+  if (external) {
+    const target = { rootId: lib.activeRootId, rel: props.node.rel }
+    await handleExternalDrop(e, lib, target)
     return
   }
   const srcDir = e.dataTransfer.getData('application/x-picnest-dir')

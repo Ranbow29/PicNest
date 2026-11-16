@@ -7,13 +7,27 @@ mod importer;
 mod media_server;
 mod scanner;
 mod trash_ops;
+mod updater;
 mod visual_search;
 mod watcher;
+#[cfg(test)]
+mod testutil;
 
 use commands::*;
 use tauri::Manager;
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use trash_ops::*;
 use std::sync::{Arc, Mutex};
+
+/// 托盘点击 / “打开窗口”菜单项共用：显示、恢复并聚焦主窗。
+fn show_main(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    }
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -40,6 +54,10 @@ pub fn run() {
     };
 
     tauri::Builder::default()
+        // 单实例：重复双击 exe 不再叠后台，只把已有窗口唤回前台
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            show_main(app);
+        }))
         .manage(state)
         .invoke_handler(tauri::generate_handler![
             window_minimize,
@@ -161,6 +179,10 @@ pub fn run() {
             ai_dup_continue,
             ai_dup_cancel,
             cleanup_orphan_thumbs,
+            crate::updater::check_update,
+            crate::updater::download_update,
+            crate::updater::cancel_download_update,
+            crate::updater::quit_and_install,
             diag_event,
             diag_dump
         ])
@@ -172,8 +194,17 @@ pub fn run() {
                         .build(),
                 )?;
             }
-            let win_cfg = app.config().app.windows.first().cloned()
+            let mut win_cfg = app.config().app.windows.first().cloned()
                 .ok_or_else(|| "missing main window config".to_string())?;
+            // 2026-11-15 修复：裸 cargo build 不带 custom-protocol 时 tauri 内部 cfg(dev)
+            // 恒为 true，release 也去加载 devUrl 5173（Vite 没起即 ERR_CONNECTION_REFUSED）。
+            // Cargo.toml 已加 custom-protocol；开发热更改为 PICNEST_DEV=1 时显式把入口
+            // 指成 External(devUrl)，普通双击走内嵌 assets（tauri.localhost）。
+            if std::env::var("PICNEST_DEV").map(|v| v == "1").unwrap_or(false) {
+                if let Some(dev) = app.config().build.dev_url.clone() {
+                    win_cfg.url = tauri::utils::config::WebviewUrl::External(dev);
+                }
+            }
             let mut builder = tauri::WebviewWindowBuilder::from_config(app.handle(), &win_cfg)?;
             /* WebView2 默认可能不走 GPU 光栅/零拷贝，合成与悬停重绘会挤在 UI 线程上，
                主线程一忙就“鼠标跑了高亮还挂着”。这里明确开 GPU 路径。
@@ -220,6 +251,43 @@ pub fn run() {
             }
             media_server::diag_push(&format!("webview args: {}", args));
             let win = builder.build()?;
+
+            // —— 系统托盘 ——
+            // 关窗只隐藏进托盘；托盘左键唤回窗口，右键菜单里“退出”才是真退。
+            let show_item = MenuItem::with_id(app.handle(), "tray_show", "打开 PicNest 窗口", true, None::<&str>)?;
+            let quit_item = MenuItem::with_id(app.handle(), "tray_quit", "退出 PicNest", true, None::<&str>)?;
+            let tray_menu = Menu::with_items(app.handle(), &[&show_item, &quit_item])?;
+            let _tray = TrayIconBuilder::with_id("picnest-main")
+                .icon(tauri::include_image!("icons/tray-icon.png"))
+                .tooltip("PicNest")
+                .menu(&tray_menu)
+                // Windows：左键不再弹菜单（弹给事件处理），右键才弹“退出”
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id().as_ref() {
+                    "tray_quit" => app.exit(0),
+                    "tray_show" => show_main(app),
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event {
+                        show_main(tray.app_handle());
+                    }
+                })
+                .build(app.handle())?;
+
+            // Alt+F4 等任何关窗路径都在这里拦下：隐藏而不是关闭，托盘永远留一个入口。
+            // （updater 的安装重启走 handle.exit(0)，不经过这里，不受影响）
+            let win_for_close = win.clone();
+            win.on_window_event(move |event| {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    let _ = win_for_close.hide();
+                }
+            });
 
             // 启文件监听：库里任何目录的新增/删除/改名 → 防抖合并 → 通知前端自动同步。
             // 开销：ReadDirectoryChangesW 是内核事件通知，不轮询、不读文件内容。

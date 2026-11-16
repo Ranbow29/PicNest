@@ -102,7 +102,7 @@ function thumbOf(file) {
           </div>
           <div v-if="stats && !activeLoading" class="df-stats">
             <b>{{ stats.groups }}</b> 组 · <b>{{ stats.files }}</b> 个文件 · 可省 <b>{{ fmtSize(stats.wasted) }}</b>
-            <span v-if="f.mode === 'ai'" class="df-cap">（dHash {{ stats.dhashPairs ?? stats.candidates }} 对 → 本地预筛后 {{ stats.candidates }} 对，已查 {{ stats.checked }}<template v-if="stats.capped">；候选超出上限，只查最接近的 {{ stats.caps }} 对</template>）</span>
+            <span v-if="f.mode === 'ai'" class="df-cap">（dHash {{ stats.dhashPairs ?? stats.candidates }} 对 → 色块+pHash 预筛后 {{ stats.candidates }} 对 → AI 实查 <b>{{ stats.aiCalls ?? 0 }}</b> 次<template v-if="stats.aiFail">，失败 {{ stats.aiFail }}<template v-if="stats.aiError">（{{ stats.aiError }}）</template></template><template v-if="stats.withAi === false">；未配置 AI，仅用本地判断</template><template v-if="stats.capped">；候选超出上限，只查最接近的 {{ stats.caps }} 对</template>）</span>
           </div>
           <button class="df-x" title="关闭（Esc）" @click="lib.closeDupFinder()">✕</button>
         </header>
@@ -125,14 +125,21 @@ function thumbOf(file) {
             <span v-else>已获取 {{ f.ai.models.length }} 个模型，点「模型」输入框选择，或继续手填</span>
           </div>
           <label class="ai-allow">
-            <input v-model="f.ai.allowed" type="checkbox" />
+            <input v-model="f.ai.allowed" type="checkbox" @change="lib.persistAiAllowed(f.ai.allowed)" />
             <span>允许把候选缩略图发送到该 API（会产生调用费用；不上传原图）</span>
           </label>
           <div class="ai-actions">
             <button class="df-btn" :disabled="f.ai.testing" @click="saveAi">{{ f.ai.testing ? '测试中…' : '保存并测试' }}</button>
             <button class="df-btn" :disabled="f.ai.modelsLoading" @click="lib.fetchAiModels(aiKey)">{{ f.ai.modelsLoading ? '获取中…' : '获取模型' }}</button>
             <button class="df-btn primary" :disabled="f.ai.loading || f.ai.testing || !f.ai.hasKey || !f.ai.allowed" @click="lib.aiFindDuplicates()">开始 AI 查重</button>
+            <button
+              v-if="stats && stats.remaining > 0 && !f.ai.loading"
+              class="df-btn"
+              @click="lib.aiFindDuplicatesMore()"
+            >继续查剩下的 {{ stats.remaining }} 对</button>
             <span v-if="f.ai.note" class="ai-note" :class="{ err: f.ai.noteErr }">{{ f.ai.note }}</span>
+            <span v-else-if="!f.ai.hasKey" class="ai-note err">先在上方保存 API Key</span>
+            <span v-else-if="!f.ai.allowed" class="ai-note err">需勾选上方「允许上传候选缩略图」才会调用 AI</span>
           </div>
           <div class="ai-hint">OpenAI 兼容 /chat/completions + /models，模型需支持图片输入。先本地 dHash 缩圈，再用 32×32 色块 + pHash 预筛（dHash≤4 的强结构对直接保留），最后把候选缩略图交给 AI 确认；AI 阶段 4 路并发，最多检查 {{ f.ai.maxPairs }} 对。</div>
           <div class="ai-risk">注意：图片可能因暴露度较高或不符合所选 AI 的使用准则而被服务商拒绝/弹回；请自行甄别素材并确认该服务条款。</div>

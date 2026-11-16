@@ -25,6 +25,11 @@ let hostBtn = null
 const onHostEnter = () => play()
 
 function play() {
+  // 调试开关：window.__picNoIconAnim = true 可彻底停掉图标逐帧动画，
+  // 用来隔离「切目录时宿主主线程被烧」到底是不是 SVG 逐帧动画造成的。
+  if (typeof window !== 'undefined' && window.__picNoIconAnim) return
+  // 窗口最小化 / 在后台时不画：环境晃动是定时器驱动的，隐藏时还画等于白磨 GPU、白耗电
+  if (typeof document !== 'undefined' && document.hidden) return
   cancelAnimationFrame(raf)
   const t0 = performance.now()
   const tick = (now) => {

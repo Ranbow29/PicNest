@@ -411,12 +411,23 @@ onMounted(async () => {
 
   if (api.onUpdateProgress) {
     unbindProgress = api.onUpdateProgress((p) => {
-      if (p) progress.value = p
+      if (!p) return
+      // 后端只保证 received/speed；total 从 assetSize 兜底，percent 在这里算
+      const total =
+        Number(p.total) || Number(progress.value.total) || Number(updateInfo.value?.assetSize) || 0
+      const received = Number(p.received) || 0
+      const percent =
+        total > 0
+          ? Math.min(100, Math.round((received / total) * 100))
+          : progress.value.percent
+      progress.value = { received, total, percent, speed: Number(p.speed) || 0 }
     })
   }
   if (api.onUpdateStatus) {
     unbindStatus = api.onUpdateStatus((s) => {
       if (s?.text) installStageText.value = s.text
+      else if (s?.stage === 'extracting') installStageText.value = '正在异步解压更新包…'
+      else if (s?.stage === 'restarting') installStageText.value = '正在启动热替换跳板并重启图巢…'
     })
   }
 })

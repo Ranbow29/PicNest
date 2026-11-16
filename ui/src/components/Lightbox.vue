@@ -36,7 +36,6 @@ function syncVideoTransform() {
   const v = videoEl.value
   if (v) v.style.transform = `translate(${lib.viewer.tx}px, ${lib.viewer.ty}px) scale(${lib.viewer.scale})`
 }
-watch(() => [lib.viewer.tx, lib.viewer.ty, lib.viewer.scale, kind.value], syncVideoTransform)
 function commitPan() {
   if (!pan.active) return
   if (pan.raf) { cancelAnimationFrame(pan.raf); pan.raf = 0 }
@@ -53,10 +52,26 @@ const kind = computed(() => {
   const p = lib.lightbox.path
   return isVideoPath(p) ? 'video' : isTextPath(p) ? 'text' : 'image'
 })
+watch(() => [lib.viewer.tx, lib.viewer.ty, lib.viewer.scale, kind.value], syncVideoTransform)
+const videoCompatPath = ref('')
+let compatReqPath = ''
+async function onVideoError() {
+  const p = lib.lightbox.path
+  if (!p || compatReqPath === p || videoCompatPath.value) return
+  compatReqPath = p
+  try {
+    const r = await api.videoCompat(p)
+    if (lib.lightbox.path === p && r?.ok && r.path) {
+      videoCompatPath.value = r.path
+      nextTick(() => { videoEl.value?.play?.().catch(() => {}) })
+    }
+  } catch { /* 静默 */ }
+}
 const url = computed(() => {
   const img = meta.value
   if (!img?.file_path) return ''
-  const base = fileUrl(img.file_path)
+  const target = (kind.value === 'video' && videoCompatPath.value) ? videoCompatPath.value : img.file_path
+  const base = fileUrl(target)
   /* 图片/视频带版本号：保存旋转/翻转后同一路径能强制刷新 */
   return kind.value === 'text' ? base : base + '?v=' + (img.modify_time || 0)
 })
@@ -85,6 +100,10 @@ function onViewerLeave() {
   dockHover.value = false
 }
 let flipRaf = 0
+/* 开灯箱的 FLIP 动画目标缩放：动画进行中用户一滚动滚轮就立刻跳到这个终态，
+   再从他的缩放继续。不这么做的话动画每帧都在覆写 scale/tx/ty，和滚轮互相抢，
+   屏幕上就会出现“放大残影”闪烁约半秒。 */
+let flipTargetScale = 1
 const isPsd = computed(() => extOf(lib.lightbox.path) === '.psd')
 /* PSD 原图：主进程用 ag-psd 合成整幅 PNG（不是 400/1024 缩略图），先显示缩略图占位 */
 const psdFull = ref('')
@@ -288,6 +307,7 @@ function fitToWindow(animateFlip = false) {
     const startTy = (orig.top + orig.height / 2) - (rect.top + rect.height / 2)
     const dur = 360
     const t0 = performance.now()
+    flipTargetScale = targetScale
     lib.viewer.scale = startScale
     lib.viewer.tx = startTx
     lib.viewer.ty = startTy
@@ -322,7 +342,20 @@ function fitToWindow(animateFlip = false) {
   lib.viewer.tx = 0; lib.viewer.ty = 0
 }
 function oneToOne() { lib.viewer.scale = 1; lib.viewer.tx = 0; lib.viewer.ty = 0 }
+/* 把进行中的开灯箱动画立刻收到终态（幂等），供任何用户交互打断它 */
+function finishFlip() {
+  if (!flipRaf) return false
+  cancelAnimationFrame(flipRaf)
+  flipRaf = 0
+  lib.viewer.scale = flipTargetScale
+  lib.viewer.tx = 0
+  lib.viewer.ty = 0
+  if (canvasMode.value) canvasStage.value?.drawAt?.(0, 0, flipTargetScale)
+  return true
+}
+
 function dblClick() {
+  finishFlip()
   if (Math.abs(lib.viewer.scale - 1) < 0.02) fitToWindow()
   else oneToOne()
 }
@@ -344,9 +377,30 @@ watch(() => [lib.viewer.scale, lib.viewer.tx, lib.viewer.ty, lib.viewer.showInsp
     }
   })
 })
-watch(() => lib.lightbox.path, () => { lib.viewer.rot = 0; lib.viewer.flopX = false; nextTick(fitToWindow) })
-onMounted(() => { nextTick(() => fitToWindow(true)); window.addEventListener('keydown', onKey) })
+function cleanupVideo() {
+  const v = videoEl.value
+  if (v) {
+    try {
+      v.pause()
+      v.removeAttribute('src')
+      v.load()
+    } catch {}
+  }
+}
+watch(() => lib.lightbox.path, () => {
+  cleanupVideo()
+  lib.viewer.rot = 0
+  lib.viewer.flopX = false
+  nextTick(fitToWindow)
+})
+onMounted(() => {
+  nextTick(() => fitToWindow(true))
+  window.addEventListener('keydown', onKey)
+  /* 调试探针：验证“滚轮打断入场动画”是否生效（不影响功能） */
+  window.__picViewer = () => ({ scale: lib.viewer.scale, tx: lib.viewer.tx, ty: lib.viewer.ty, flip: !!flipRaf })
+})
 onBeforeUnmount(() => {
+  cleanupVideo()
   if (flipRaf) cancelAnimationFrame(flipRaf)
   window.removeEventListener('keydown', onKey)
   window.removeEventListener('mousemove', onMove)
@@ -356,6 +410,8 @@ onBeforeUnmount(() => {
 function onWheel(e) {
   if (kind.value === 'text') return // 文本编辑器里滚轮 = 滚动正文
   e.preventDefault()
+  // 开灯箱的入场动画还在跑？先把它钉到终态，否则滚轮和动画抢同一个 scale，会闪残影
+  finishFlip()
   const s0 = lib.viewer.scale || 1
   const k = e.deltaY < 0 ? 1.12 : 1 / 1.12
   const s1 = Math.min(8, Math.max(0.05, s0 * k))
@@ -395,6 +451,7 @@ function onDown(e) {
   if (lib.viewer.cropMode && (cropAction.value || insideRect(e) || handleAt(e))) return
   if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.closest?.('.dock, .crop-bar, .ask-card, button'))) return
   e.preventDefault() // 阻止视频原生拖拽虚影与选区干扰，保证平移连续性
+  finishFlip() // 拖动也是接管：别和入场动画抢位移
   pan.active = true
   didDrag = false
   pan.startX = e.clientX; pan.startY = e.clientY
@@ -442,9 +499,11 @@ function onContext(e) {
 /* 把当前旋转/翻转写回原图（先备份、失效缩略图/色板） */
 const saveBusy = ref(false)
 const saveNote = ref('')
+const saveBackupPath = ref('')
 async function saveTransform() {
   if (!hasTransform.value || saveBusy.value) return
   saveBusy.value = true
+  saveBackupPath.value = ''
   stageDead.value = false
   stageFallback.value = false
   try {
@@ -463,12 +522,19 @@ async function saveTransform() {
       stageDead.value = false
       nextTick(fitToWindow)
     }
-    saveNote.value = r?.ok ? (r.changed === false ? '没有可保存的变换' : '已保存到原图（原件已备份）') : (r?.error || '保存失败')
+    if (r?.ok && r.changed !== false && r.backupPath) {
+      saveBackupPath.value = r.backupPath
+    }
+    saveNote.value = r?.ok
+      ? (r.changed === false
+        ? '没有可保存的变换'
+        : (r.backupPath ? '已覆盖原图（原件已备份到软件缓存目录）' : '已覆盖原图'))
+      : (r?.error || '保存失败')
   } catch (e) {
     saveNote.value = String(e?.message || e)
   } finally {
     saveBusy.value = false
-    setTimeout(() => { saveNote.value = '' }, 2600)
+    setTimeout(() => { saveNote.value = ''; saveBackupPath.value = '' }, 3200)
   }
 }
 
@@ -596,6 +662,8 @@ async function toggleFullscreen() {
   } catch { /* 静默 */ }
 }
 watch(() => [lib.lightbox.open, lib.lightbox.path], ([open]) => {
+  videoCompatPath.value = ''
+  compatReqPath = ''
   if (!open || kind.value !== 'video') {
     // 退出大图或切离视频时：主动释放 D3D11 视频硬件解码器管线与显存交换链
     if (videoEl.value) {
@@ -802,6 +870,7 @@ const cropDimsText = computed(() => {
 })
 
 function enterCrop() {
+  finishFlip() // 裁切要基于稳定的适配尺寸，别让入场动画把图层位置带偏
   lib.viewer.cropMode = true
   nextTick(() => {
     if (imgEl.value) {
@@ -1013,6 +1082,10 @@ function onKey(e) {
     stepTime(5)
   }
   else if (e.key === '0' && (kind.value === 'image' || kind.value === 'video')) fitToWindow()
+  else if (plain && k >= '1' && k <= '5') {
+    e.preventDefault()
+    if (lib.lightbox.path) lib.rate(lib.lightbox.path, parseInt(k, 10))
+  }
 }
 </script>
 
@@ -1040,7 +1113,8 @@ function onKey(e) {
       }"
       @loadedmetadata="onVideoMeta" @timeupdate="onVideoTime"
       @play="vid.playing = true" @pause="vid.playing = false" @ended="vid.playing = false"
-      @click="onVideoClick" @dblclick="lib.openBrief(lib.lightbox.path)"
+      @error="onVideoError"
+      @click="onVideoClick" @dblclick.stop="fitToWindow(false)"
     />
     <!-- 文本：内置编辑器（自动保存 + Ctrl+S；超 2MB 只读预览） -->
     <div v-else-if="kind === 'text'" class="text-stage">
@@ -1137,7 +1211,7 @@ function onKey(e) {
       </button>
       <i class="vsep" />
       <button class="dock-btn wide" :class="{ on: hasTransform }" :disabled="!hasTransform || saveBusy"
-              title="保存旋转/翻转（写回原图，原件自动备份）" @click="saveTransform">{{ saveBusy ? '保存中…' : '保存' }}</button>
+              title="保存旋转/翻转（覆盖原图，原件备份至软件缓存目录）" @click="saveTransform">{{ saveBusy ? '保存中…' : '保存' }}</button>
       <i class="vsep" />
       <button class="dock-btn wide" title="原始大小（1:1）" @click="oneToOne">1:1</button>
       <button class="dock-btn wide" title="缩放到窗口大小" @click="fitToWindow">⤢ 适应</button>
@@ -1179,12 +1253,13 @@ function onKey(e) {
       </div>
       <button class="dock-btn" :class="{ on: vid.loop }" :title="vid.loop ? '循环播放：已开启' : '循环播放：已关闭'" @click="toggleLoop">↻</button>
       <button class="dock-btn" title="简报全屏（⛶）" @click="lib.openBrief(lib.lightbox.path)">⛶</button>
+      <button class="dock-btn wide" title="缩放到窗口大小（0）" @click="fitToWindow(false)">⤢ 适应</button>
     </div>
     <div v-if="!url" class="empty">图片不存在</div>
     <div v-else-if="stageDead && kind === 'image'" class="empty">图片加载失败（原图与缩略图都不可读）</div>
     <!-- 裁剪结果 toast：不随 cropMode 消失（挂在舞台根层） -->
     <div v-if="cropNote" class="crop-toast">{{ cropNote }}</div>
-    <div v-if="saveNote" class="crop-toast">{{ saveNote }}</div>
+    <div v-if="saveNote" class="crop-toast" :title="saveBackupPath ? ('备份位置：' + saveBackupPath) : ''">{{ saveNote }}</div>
 
     <!-- 应用裁剪：三选一（另存为副本 / 覆盖原图 / 取消） -->
     <div v-if="cropAsk" class="ask-veil" @mousedown.self="cropAsk = false">
@@ -1194,7 +1269,7 @@ function onKey(e) {
           <b>另存为副本</b><span>存进原图所在文件夹，自动入库</span>
         </button>
         <button class="ask-btn" :disabled="cropBusy" @click="applyCrop">
-          <b>覆盖原图</b><span>原件自动备份，可找回</span>
+          <b>覆盖原图</b><span>原件备份至软件缓存，可找回</span>
         </button>
         <button class="ask-btn ghost" @click="cropAsk = false">取消</button>
       </div>

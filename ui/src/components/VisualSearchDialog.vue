@@ -310,24 +310,28 @@ async function triggerSearch(task, continueSearch = false, isRequery = false) {
     const cleanBbox = task.bbox
       ? [Number(task.bbox[0] ?? 0), Number(task.bbox[1] ?? 0), Number(task.bbox[2] ?? 1), Number(task.bbox[3] ?? 1)]
       : [0, 0, 1, 1]
+    // 只传 camelCase：Rust 侧 `rename_all = "camelCase"` + `alias` 已兼容下划线写法，
+    // 同时传两套会让 serde 报 `duplicate field`。
     const opts = {
       filePath: String(task.filePath || ''),
       dataUrl: String(task.dataUrl || ''),
       bbox: cleanBbox,
       bookmark: continueSearch && task.bookmark ? String(task.bookmark) : null,
       engine: 'pinterest',
-      pageSize: 200
+      pageSize: 200,
     }
 
     const res = await api.visualSearchQuery(opts)
     if (!res?.ok) {
       task.error = res?.error || '检索失败'
     } else {
+      // 后端字段是 results（不是 items）
+      const list = Array.isArray(res.results) ? res.results : (Array.isArray(res.items) ? res.items : [])
       if (continueSearch) {
-        task.results = [...(task.results || []), ...(res.items || [])]
+        task.results = [...(task.results || []), ...list]
       } else {
         // 成功获取新数据后整体原子替换，杜绝白屏与黑边闪烁
-        task.results = res.items || []
+        task.results = list
         if (isRequery && waterfallEl.value) {
           waterfallEl.value.scrollTop = 0
         }

@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { useLibrary, extractDropUrls } from './stores/library'
+import { useLibrary } from './stores/library'
+import { handleExternalDrop } from './lib/dropExtract'
 import { isExternalDT, isNativeDragOutActive, markNativeDragOut, endNativeDragOut } from './lib/dnd'
 import { isVideoPath } from './lib/fileKinds'
 import TitleBar from './components/TitleBar.vue'
@@ -101,6 +102,20 @@ function onKeydown(e) {
     lib.clearSelections()
     return
   }
+  /* 数字键 0-5 快捷评分：在有选中图片、未在文本输入、未开弹窗灯箱时 */
+  if (!e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+    if (!isTypingTarget(e.target) && !lib.lightbox.open && !lib.brief.open && !lib.confirmDialog.open && !lib.dupDialog.open && !lib.visualSearch?.open) {
+      if (e.key >= '0' && e.key <= '5') {
+        const rating = parseInt(e.key, 10)
+        const paths = lib.selectedPaths?.length ? lib.selectedPaths : (lib.selectedPath ? [lib.selectedPath] : [])
+        if (paths.length) {
+          e.preventDefault()
+          paths.forEach((p) => lib.rate(p, rating))
+          return
+        }
+      }
+    }
+  }
   if (e.shiftKey && (e.key === 'S' || e.code === 'KeyS') && !e.ctrlKey && !e.metaKey && !e.altKey) {
     if (isTypingTarget(e.target)) return
     if (lib.selectedPaths?.length || lib.activeImage?.file_path) {
@@ -131,6 +146,10 @@ function onKeydown(e) {
 }
 function clearDropUi() { lib.clearDropHint() }
 function onWindowDragLeave(e) { if (!e.relatedTarget) lib.clearDropHint() }
+function onWindowFocusSync() {
+  if (document.visibilityState === 'hidden') return
+  lib.syncActiveRootOnFocus()
+}
 /* 原生拖出媒体文件：拖回 PicNest 内的落回事件必须吞掉，不能当成“外部录入”再导一遍 */
 function onNativeDragOutOver(e) {
   if (!isNativeDragOutActive() || !isExternalDT(e)) return
@@ -143,6 +162,8 @@ onMounted(() => {
   refreshPluginThemes().catch(() => {}) // 启动时应用已启用的主题插件
   window.addEventListener('picnest-check-update-trigger', checkForUpdatesManual)
   silentUpdateTimer = setTimeout(checkForUpdatesSilently, 5000)
+  window.addEventListener('focus', onWindowFocusSync)
+  document.addEventListener('visibilitychange', onWindowFocusSync)
   window.addEventListener('keydown', onKeydown)
   window.addEventListener('drop', clearDropUi, true)
   window.addEventListener('dragend', clearDropUi, true)
@@ -163,6 +184,8 @@ onMounted(() => {
   } catch { /* 旧内核无 RO 时退回 window.innerHeight 估算 */ }
 })
 onBeforeUnmount(() => {
+  window.removeEventListener('focus', onWindowFocusSync)
+  document.removeEventListener('visibilitychange', onWindowFocusSync)
   window.removeEventListener('keydown', onKeydown)
   window.removeEventListener('drop', clearDropUi, true)
   window.removeEventListener('dragend', clearDropUi, true)
@@ -181,11 +204,14 @@ function isExternal(e) {
 /* 主展示区兜底：子区（树行/资料库行）会 stopPropagation 抢占各自落点 */
 function onDragEnter(e) {
   if (!isExternal(e)) return
+  e.preventDefault()
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
   lib.setDropHint('main', lib.mainDropLabel(), e.clientX, e.clientY)
 }
 function onDragOver(e) {
   if (!isExternal(e)) return
   e.preventDefault()
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
   lib.setDropHint('main', lib.mainDropLabel(), e.clientX, e.clientY)
 }
 function onDragLeave(e) {
@@ -195,13 +221,8 @@ function onDragLeave(e) {
 async function onDrop(e) {
   if (!isExternal(e)) return
   lib.clearDropHint()
-  const paths = [...(e.dataTransfer.files || [])].map((f) => window.picrand.getFilePath?.(f)).filter(Boolean)
-  const urls = extractDropUrls(e.dataTransfer)
-  if (!paths.length && !urls.length) return
   /* 主展示区落点 = 当前浏览文件夹（非文件夹视图 → 库根 = 全部/未分类） */
-  const target = lib.dropTarget()
-  if (paths.length) await lib.importDrop(paths, target)
-  else if (urls.length) await lib.importUrls(urls, target)
+  await handleExternalDrop(e, lib, lib.dropTarget())
 }
 const chipStyle = computed(() => {
   const x = Math.max(8, Math.min(lib.dropHint.x + 18, innerWidth - 260))

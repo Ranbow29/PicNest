@@ -22,3 +22,13 @@ Thumbs.db
 # 临时测试与凭据
 .env
 .env.local
+
+# 临时脚本与备份
+ui/src-tauri/src/_*.py
+*.bak-before-*
+
+# 构建产物与发布包
+PicNest.exe
+*.exe
+*.zip
+ui/src-tauri/target/

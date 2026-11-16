@@ -1277,9 +1277,7 @@ mod tests {
 
     #[test]
     fn test_collector_pipeline_and_endpoints() {
-        let tmp = std::env::temp_dir().join(format!("picnest_collector_test_{}", std::process::id()));
-        let _ = fs::remove_dir_all(&tmp);
-        fs::create_dir_all(&tmp).unwrap();
+        let tmp = crate::testutil::TempDir::new("picnest_collector_test");
 
         let data_dir = tmp.join("data");
         let root_dir = tmp.join("photos");

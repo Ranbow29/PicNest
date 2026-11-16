@@ -4,7 +4,7 @@ import { useLibrary } from '../stores/library'
 import { fileUrl } from '../api'
 
 // Eagle 式重复添加提示：已存在 vs 新的文件 对比卡
-// files = 拖入图片冲突（二选一）；merge = 文件夹放入时库内查重（三选一：跳过旧/覆盖旧/都保留）
+// files = 拖入图片冲突（三选一：用已存在/用新覆盖老/都保留）；merge = 文件夹放入时库内查重（三选一：跳过旧/覆盖旧/都保留）
 const lib = useLibrary()
 const dlg = computed(() => lib.dupDialog)
 const mode = computed(() => dlg.value.mode || 'files')
@@ -57,8 +57,8 @@ function dismiss() {
           <label class="radio"><input type="radio" value="use-existing" v-model="choice" />
             {{ mode === 'merge' ? '只保留旧位置（跳过新文件夹里的重复图）' : '使用已存在文件导入' }}
           </label>
-          <label v-if="mode === 'merge'" class="radio"><input type="radio" value="use-new" v-model="choice" />
-            覆盖到新文件夹（旧图移入回收站）
+          <label class="radio"><input type="radio" value="use-new" v-model="choice" />
+            {{ mode === 'merge' ? '覆盖到新文件夹（旧图移入回收站）' : '用新文件覆盖老文件（旧图移入回收站）' }}
           </label>
           <label class="radio"><input type="radio" value="keep-both" v-model="choice" />
             {{ mode === 'merge' ? '两个文件夹都保留' : '保留两者' }}

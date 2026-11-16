@@ -502,6 +502,41 @@ pub fn fetch_ai_models(data_dir: &Path, opts: &serde_json::Value) -> Result<serd
 }
 
 // 核心多模态比对函数（对齐旧版源码，针对 MiMo 思考模式进行专门适配）
+/// 清掉一次 AI 比对用的两个临时文件（请求体里是 base64 图，不能留在 %TEMP% 里）
+fn cleanup_ai_temps(req: &Path, resp: &Path) {
+    let _ = fs::remove_file(req);
+    let _ = fs::remove_file(resp);
+}
+
+/// 兜底清扫：异常退出/旧版本可能留下 `picnest_ai_req_*` / `picnest_ai_resp_*`，超过时限就删。
+/// 返回删掉的文件数。
+pub(crate) fn sweep_stale_ai_temps(temp_dir: &Path, max_age_secs: u64) -> usize {
+    let Ok(rd) = fs::read_dir(temp_dir) else {
+        return 0;
+    };
+    let now = std::time::SystemTime::now();
+    let mut removed = 0usize;
+    for e in rd.flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        if !(name.starts_with("picnest_ai_req_") || name.starts_with("picnest_ai_resp_")) {
+            continue;
+        }
+        let p = e.path();
+        let old = fs::metadata(&p)
+            .and_then(|m| m.modified())
+            .map(|t| {
+                now.duration_since(t)
+                    .map(|d| d.as_secs() >= max_age_secs)
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false);
+        if old && fs::remove_file(&p).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
+}
+
 pub fn call_ai_compare(
     cfg: &AiConfig,
     data_url_a: &str,
@@ -612,11 +647,12 @@ pub fn call_ai_compare(
                         if retryable && attempt < 2 {
                             continue;
                         }
-                        let _ = fs::remove_file(&resp_tmp);
+                        // 不可重试的错误（Key 错/模型错）：两个临时文件都要收走，
+                        // 以前这里只删了响应，请求文件（含两张 384px base64）会一直留着
+                        cleanup_ai_temps(&req_tmp, &resp_tmp);
                         return Err(last_err);
                     }
-                    let _ = fs::remove_file(&resp_tmp);
-                    let _ = fs::remove_file(&req_tmp);
+                    cleanup_ai_temps(&req_tmp, &resp_tmp);
                     return finish_ai_compare(val);
                 }
                 last_err = "API 返回空响应".to_string();
@@ -632,8 +668,7 @@ pub fn call_ai_compare(
             Err(e) => last_err = format!("启动 curl 请求失败: {}", e),
         }
     }
-    let _ = fs::remove_file(&resp_tmp);
-    let _ = fs::remove_file(&req_tmp);
+    cleanup_ai_temps(&req_tmp, &resp_tmp);
     return Err(last_err);
 }
 
@@ -782,6 +817,7 @@ pub fn execute_ai_dup_continue(
     progress: Option<&dyn Fn(&str, usize, usize, usize)>,
 ) -> Result<serde_json::Value, String> {
     let key = session_key(root_id, rel);
+    sweep_stale_ai_temps(&std::env::temp_dir(), 3600);
     let mut sess = {
         let mut m = sessions()
             .lock()
@@ -1068,6 +1104,8 @@ pub fn execute_ai_dup_scan(
     max_pairs: Option<usize>,
     progress: Option<&dyn Fn(&str, usize, usize, usize)>,
 ) -> Result<serde_json::Value, String> {
+    // 开扫前先扔掉以前异常退出留下的请求/响应临时文件（里面有 base64 图，不能长期躺在 %TEMP%）
+    sweep_stale_ai_temps(&std::env::temp_dir(), 3600);
     let notify = |phase: &str, done: usize, total: usize, cands: usize| {
         if let Some(cb) = progress {
             cb(phase, done, total, cands);
@@ -1491,4 +1529,29 @@ pub fn execute_ai_dup_scan(
             "ms": t0.elapsed().as_millis(),
         }
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 临时请求/响应文件必须能被扫掉，且不误伤别的临时文件
+    #[test]
+    fn sweep_stale_ai_temps_only_touches_its_own_files() {
+        let dir = std::env::temp_dir().join(format!("picnest_ai_sweep_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let own = dir.join("picnest_ai_req_1_1.json");
+        let own2 = dir.join("picnest_ai_resp_1_1.json");
+        let other = dir.join("someone_else.json");
+        for p in [&own, &own2, &other] {
+            fs::write(p, b"{}").unwrap();
+        }
+        // max_age = 0：全部视为过期
+        let removed = sweep_stale_ai_temps(&dir, 0);
+        assert_eq!(removed, 2, "只该删自己的两个文件");
+        assert!(!own.exists() && !own2.exists());
+        assert!(other.exists(), "别把别人的临时文件删了");
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

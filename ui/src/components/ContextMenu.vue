@@ -1,15 +1,49 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, ref, watch, nextTick } from 'vue'
 import { useLibrary } from '../stores/library'
 
 const lib = useLibrary()
 const menu = computed(() => lib.contextMenu)
+const menuEl = ref(null)
+const menuW = ref(230)
+const menuH = ref(360)
 
-/* 视口钳制定位：innerWidth 不是模板作用域标识（曾渲染成 NaNpx → 菜单钉在左上角） */
-const pos = computed(() => ({
-  left: Math.max(4, Math.min(menu.value.x ?? 0, window.innerWidth - 230)) + 'px',
-  top: Math.max(4, Math.min(menu.value.y ?? 0, window.innerHeight - 280)) + 'px',
-}))
+/* 视口边界动态钳制定位：根据菜单实际尺寸自适应翻转，绝不超出窗体边界遮挡按钮 */
+const pos = computed(() => {
+  const x = menu.value.x ?? 0
+  const y = menu.value.y ?? 0
+  const w = menuW.value || 230
+  const h = menuH.value || 360
+  const winW = window.innerWidth || 800
+  const winH = window.innerHeight || 600
+
+  let left = x
+  if (left + w > winW - 12) {
+    left = Math.max(12, left - w)
+  }
+  left = Math.max(12, Math.min(left, winW - w - 12))
+
+  let top = y
+  if (top + h > winH - 12) {
+    top = Math.max(12, y - h)
+  }
+  top = Math.max(12, Math.min(top, winH - h - 12))
+
+  return {
+    left: left + 'px',
+    top: top + 'px',
+  }
+})
+
+watch(() => menu.value.open, async (open) => {
+  if (open) {
+    await nextTick()
+    if (menuEl.value) {
+      menuW.value = menuEl.value.offsetWidth || 230
+      menuH.value = menuEl.value.offsetHeight || 360
+    }
+  }
+})
 
 /* 图片所在文件夹（库根散图 rel=''）；查重与设封面共用 */
 function imageRelInfo() {
@@ -97,7 +131,7 @@ function onLeave() { lib.closeContextMenu() }
 <template>
   <Teleport to="body">
     <div v-if="menu.open" class="menu-layer" @click="onLeave" @contextmenu.prevent="onLeave">
-      <div class="menu glass-card" :style="pos">
+      <div ref="menuEl" class="menu glass-card" :style="pos">
         <button
           v-for="(it, i) in items" :key="i"
           class="mi" :class="{ danger: it.danger, sep: it.sep }"
@@ -118,7 +152,9 @@ function onLeave() { lib.closeContextMenu() }
   background: var(--panel-strong); backdrop-filter: blur(var(--blur));
   border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow);
   animation: pop .14s ease;
+  max-height: calc(100vh - 20px); overflow-y: auto; scrollbar-width: none;
 }
+.glass-card::-webkit-scrollbar { display: none; }
 @keyframes pop { from { transform: scale(.96); opacity: 0; } to { transform: none; opacity: 1; } }
 .mi {
   display: block; width: 100%; border: none; background: transparent;

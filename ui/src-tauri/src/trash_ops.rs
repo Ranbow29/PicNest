@@ -798,9 +798,8 @@ mod tests {
     use super::*;
     use crate::db::init_db;
 
-    fn make_temp_env(tag: &str) -> (PathBuf, PathBuf, rusqlite::Connection) {
-        let base = std::env::temp_dir().join(format!("picnest_trash_test_{}_{}", tag, now_ms()));
-        let _ = std::fs::remove_dir_all(&base);
+    fn make_temp_env(tag: &str) -> (crate::testutil::TempDir, PathBuf, rusqlite::Connection) {
+        let base = crate::testutil::TempDir::new(&format!("picnest_trash_test_{}", tag));
         let data_dir = base.join("data");
         let root_dir = base.join("library");
         std::fs::create_dir_all(&data_dir).unwrap();

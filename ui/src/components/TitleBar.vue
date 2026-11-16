@@ -220,9 +220,9 @@ function onKey(e) {
             <span v-else class="crumb current">{{ c.label }}</span>
           </template>
         </template>
-        <span v-if="lib.activeFilterCount()" class="count">筛选结果 ({{ lib.filteredImages.length.toLocaleString() }})</span>
-        <span v-else-if="lib.view === 'trash' && (lib.images.length + lib.trashFolders.length)" class="count">{{ (lib.images.length + lib.trashFolders.length).toLocaleString() }} 项</span>
-        <span v-else-if="lib.images.length" class="count">{{ lib.images.length.toLocaleString() }} 张</span>
+        <span v-if="lib.activeFilterCount() && lib.gridFresh" class="count">筛选结果 ({{ lib.filteredImages.length.toLocaleString() }})</span>
+        <span v-else-if="lib.gridFresh && lib.view === 'trash' && (lib.images.length + lib.trashFolders.length)" class="count">{{ (lib.images.length + lib.trashFolders.length).toLocaleString() }} 项</span>
+        <span v-else-if="lib.gridFresh && lib.images.length" class="count">{{ lib.images.length.toLocaleString() }} 张</span>
       </div>
       <div class="vo-wrap">
         <button class="tool funnel" :class="{ on: lib.filterBarOpen }" title="筛选工具 Ctrl+Shift+F" @click.stop="toggleFilterBar">
@@ -250,13 +250,17 @@ function onKey(e) {
             <button v-for="o in SORTS" :key="o.key" class="vo-cell sm" :class="{ on: lib.sortMode === o.key }" @click="lib.setSort(o.key)">{{ o.label }}</button>
             <button class="vo-cell sm apply-manual"
                     :disabled="lib.sortMode === 'manual' || !lib.gridOrder.length || lib.view === 'trash'"
-                    :title="lib.sortMode === 'manual' ? '当前已经是手动排序' : '按当前显示顺序写入手动排序，并重命名原文件（会先确认）'"
+                    :title="lib.sortMode === 'manual' ? '当前已经是手动排序' : '按当前显示顺序写入手动排序（只存元数据，不改文件名）'"
                     @click="lib.applyGridOrderToManual()">{{ lib.sortMode === 'manual' ? '已是手动排序' : '应用为手动排序' }}</button>
+            <button class="vo-cell sm apply-manual"
+                    :disabled="!lib.currentDirRel || !lib.images.length || lib.view === 'trash'"
+                    title="把当前顺序写成文件名前的 01_ 数字前缀（会先预览，只动文件名，不动内容）"
+                    @click="lib.writeOrderToFilenames()">写入文件名…</button>
           </div>
         </div>
       </div>
       <button class="tool num-btn" :class="{ on: lib.hideOrderNumbers }"
-              :title="lib.hideOrderNumbers ? '隐藏排序编号：开（01_ 前缀只影响磁盘名）' : '隐藏排序编号：关（显示真实文件名）'"
+              :title="lib.hideOrderNumbers ? '隐藏排序编号：开（01_ 前缀只在磁盘名里，界面不显示）' : '隐藏排序编号：关（显示真实文件名）'"
               @click.stop="lib.toggleHideOrderNumbers()">01</button>
       <div class="vo-wrap">
         <button class="tool theme-btn" :class="{ on: themeOpen || theme.mode.value !== 'auto' }" :title="`主题：${themeLabel}`"
@@ -292,8 +296,8 @@ function onKey(e) {
       <button class="wc" :class="{ on: lib.sidebarCollapsed }" :title="lib.sidebarCollapsed ? '展开左边栏' : '收起左边栏'" @click="lib.toggleSidebar()"><AnimIcon name="sidebar" :size="14" :collapsed="lib.sidebarCollapsed" /></button>
       <button class="wc" :class="{ on: lib.viewer.showInspector }" title="详情面板（收起/放出）" @click="lib.toggleInspector()"><AnimIcon name="contents" :size="14" /></button>
       <div class="vo-wrap settings-wrap">
-        <button class="wc" :class="{ on: settingsOpen || topPinned || lib.cardTilt3D || lib.docPrivacyMode }" title="窗口与个性化设置" @click.stop="toggleSettings">
-          <AnimIcon name="pin" :size="14" :active="settingsOpen || topPinned || lib.cardTilt3D || lib.docPrivacyMode" />
+        <button class="wc" :class="{ on: settingsOpen || topPinned || lib.cardTilt3D }" title="窗口与个性化设置" @click.stop="toggleSettings">
+          <AnimIcon name="pin" :size="14" :active="settingsOpen || topPinned || lib.cardTilt3D" />
         </button>
         <div v-if="settingsOpen" class="vo-panel glass-card settings-panel" @click.stop>
           <div class="vo-cap">窗口与个性化</div>
@@ -321,13 +325,6 @@ function onKey(e) {
               <button class="set-copy-btn" type="button" title="重置密钥将使当前所有已配对浏览器失效，用于重新测试未配对流程" @click.stop="resetCollectToken">重置</button>
             </div>
           </div>
-          <div class="set-row" @click="lib.toggleDocPrivacyMode()">
-            <div class="set-meta">
-              <div class="set-title">文档隐私折叠</div>
-              <div class="set-desc">缩略图隐藏正文仅留标题，防窥防泄露</div>
-            </div>
-            <button class="set-switch" :class="{ on: lib.docPrivacyMode }" type="button"><i /></button>
-          </div>
         </div>
       </div>
       <button class="wc" title="最小化" @click="api.windowMinimize()">─</button>
@@ -343,7 +340,10 @@ function onKey(e) {
 .titlebar {
   position: absolute; top: 0; left: 0; right: 0;
   height: 42px;
-  /* 不建 z 上下文：玻璃 20 < 详情浮岛 24 < 栏内容/窗控 26（Feb 指定详情压在顶栏之上、按钮之下） */
+  /* z-index 5：高于 .browse（z auto）—— 否则内容区在 DOM 后面会把顶栏盖住，
+     拖拽面收不到鼠标，按钮 hover 也要绕远。
+     仍低于详情浮岛 24，保持「详情压在顶栏之上」的原设计。 */
+  z-index: 5;
 }
 /* 纯视觉玻璃层：不背 app-region（不进拖拽位图），backdrop-filter 决不能与 drag 同体 */
 .glass {
@@ -383,13 +383,18 @@ function onKey(e) {
 .bar-content {
   /* 45 > 裁剪层 30 / 裁剪条 40：裁剪时左上返回与右上窗控必须可点 */
   position: relative; z-index: 45; height: 42px; display: flex; align-items: center;
-  -webkit-app-region: drag; /* 交给 Windows 原生标题栏移动循环：拖动窗口不再逐帧 IPC */
+  /* 2026-11-15：不再用 CSS -webkit-app-region: drag。
+     那会让 WebView2 在 WM_NCHITTEST 直接返回 HTCAPTION，整条顶栏被系统拖窗循环接管，
+     鼠标移动不再走 DOM，hover 高亮明显滞后（用户反馈“鼠标掠过按钮高亮卡”）。
+     改由 api.js 里的 mousedown 接管（closest('.titlebar .bar-content') → win.startDragging()），
+     双击最大化也在那里处理。
+     下面的 no-drag 规则必须保留：JS 靠读祖先链上的 app-region:no-drag 判断该不该拖。 */
 }
 /* 拖拽区里的交互控件必须显式挖空，否则会被当成标题栏 */
 .bar-content button, .bar-content input, .bar-content a,
 .bar-content .vo-wrap, .bar-content .zoom-slider, .bar-content .search,
 .bar-content .bar-controls, .bar-content [data-no-drag] { -webkit-app-region: no-drag; }
-.left { display: flex; align-items: center; gap: 6px; padding-left: 16px; min-width: 0; overflow: hidden; }
+.left { display: flex; align-items: center; gap: 6px; padding-left: 16px; min-width: 160px; max-width: 540px; flex: 1 1 auto; overflow: hidden; }
 .nav-arrow {
   width: 24px; height: 24px; flex: none; border: none; border-radius: 7px;
   display: flex; align-items: center; justify-content: center;
@@ -399,17 +404,18 @@ function onKey(e) {
 .nav-arrow:hover:not(:disabled) { background: var(--accent-weak); color: var(--accent); }
 .nav-arrow:disabled { opacity: 0.28; cursor: default; }
 .crumb-link {
-  border: none; background: transparent; padding: 2px 3px; border-radius: 5px;
-  color: var(--text-2); font-size: 12px; cursor: pointer;
-  max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  border: none; background: transparent; padding: 2px 4px; border-radius: 5px;
+  color: var(--text-2); font-size: 13px; cursor: pointer;
+  min-width: 36px; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  flex-shrink: 1;
   transition: background 0.15s, color 0.15s;
 }
 .crumb-link:hover { background: var(--accent-weak); color: var(--accent); }
-.crumb-root { font-size: 12px; color: var(--text-2); }
-.sep { color: var(--text-2); font-size: 11px; }
-.crumb { font-size: 12px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.crumb.current { color: var(--text); font-weight: 600; }
-.count { display: inline-block; min-width: 126px; margin-left: 8px; font-size: 11px; color: var(--text-2); font-variant-numeric: tabular-nums; /* 实测到 10,000 需 125px：位数进位不推挤右侧按钮 */ }
+.crumb-root { font-size: 13px; color: var(--text-2); flex-shrink: 0; }
+.sep { color: var(--text-2); font-size: 12px; opacity: 0.7; flex-shrink: 0; margin: 0 1px; }
+.crumb { font-size: 13px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-shrink: 0; }
+.crumb.current { color: var(--text); font-weight: 600; min-width: 60px; max-width: 280px; flex-shrink: 0; }
+.count { display: inline-block; white-space: nowrap; flex-shrink: 0; margin-left: 8px; font-size: 12px; color: var(--text-2); font-variant-numeric: tabular-nums; }
 .pos { font-size: 12.5px; color: var(--text-2); font-variant-numeric: tabular-nums; padding: 0 6px; }
 .zoom-label { font-size: 11px; letter-spacing: 2px; color: var(--text-2); padding: 0 8px; }
 /* 灯箱返回钮（此前无任何样式，裸按钮） */

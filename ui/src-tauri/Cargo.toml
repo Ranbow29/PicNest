@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "0.1.0"
+version = "1.0.0"
 description = "A Tauri App"
 authors = ["you"]
 license = ""
@@ -26,8 +26,11 @@ base64 = "0.22"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "multipart", "rustls-tls", "socks", "native-tls"] }
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
-tauri = { version = "2.12.5", features = ["protocol-asset", "devtools"] }
+# 2026-11-15：必须带 custom-protocol，否则 tauri 内部 cfg(dev)=true，
+# 裸 cargo build --release 也会去加载 devUrl 127.0.0.1:5173 且不内嵌前端资源。
+tauri = { version = "2.12.5", features = ["protocol-asset", "devtools", "tray-icon", "image-png", "custom-protocol"] }
 tauri-plugin-log = "2"
+tauri-plugin-single-instance = "2"
 rusqlite = { version = "0.32", features = ["bundled"] }
 trash = "5.2"
 jwalk = "0.8"

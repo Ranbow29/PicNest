@@ -1,7 +1,8 @@
 <script setup>
-import { computed, nextTick, ref, watch } from 'vue'
-import { useLibrary, extractDropUrls } from '../stores/library'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { useLibrary } from '../stores/library'
 import { isExternalDT as isDnDExternal } from '../lib/dnd'
+import { handleExternalDrop } from '../lib/dropExtract'
 import DirTreeItem from './DirTreeItem.vue'
 import FolderIcon from './FolderIcon.vue'
 import NamePromptDialog from './NamePromptDialog.vue'
@@ -9,6 +10,17 @@ import DirContextMenu from './DirContextMenu.vue'
 import EagleImportWizard from './EagleImportWizard.vue'
 
 const lib = useLibrary()
+/* 插件宿主只在旧版 Electron 预加载层里真实存在；Rust 版 picrand 的 Proxy 给未知键返回 null 桩，
+   所以这里必须真调一次看有没有 ok 响应，别把空插件库当可用功能摆出来 */
+const pluginHostReady = ref(false)
+onMounted(async () => {
+  try {
+    const r = await window.picrand?.picnestPluginsList?.()
+    pluginHostReady.value = !!r?.ok
+  } catch {
+    pluginHostReady.value = false
+  }
+})
 const eagleImport = ref(null)
 const eagleChecking = ref(false)
 let eagleCheckTimer = null
@@ -137,11 +149,7 @@ async function dropToRoot(e) {
   e.stopPropagation()
   lib.clearDropHint()
   if (isDnDExternal(e)) {
-    const paths = [...(e.dataTransfer.files || [])].map((f) => window.picrand.getFilePath?.(f)).filter(Boolean)
-    const urls = extractDropUrls(e.dataTransfer)
-    const target = { rootId: lib.activeRootId, rel: '' }
-    if (paths.length) await lib.importDrop(paths, target)
-    else if (urls.length) await lib.importUrls(urls, target)
+    await handleExternalDrop(e, lib, { rootId: lib.activeRootId, rel: '' })
     return
   }
   const srcDir = e.dataTransfer.getData('application/x-picnest-dir')
@@ -205,11 +213,7 @@ async function dropOnLib(e, l) {
     return
   }
   if (!isExternalDT(e)) return
-  const paths = [...(e.dataTransfer.files || [])].map((f) => window.picrand.getFilePath?.(f)).filter(Boolean)
-  const urls = extractDropUrls(e.dataTransfer)
-  const target = { rootId: l.id, rel: '' }
-  if (paths.length) await lib.importDrop(paths, target)
-  else if (urls.length) await lib.importUrls(urls, target)
+  await handleExternalDrop(e, lib, { rootId: l.id, rel: '' })
 }
 </script>
 
@@ -284,7 +288,7 @@ async function dropOnLib(e, l) {
 
     <div v-if="lib.error" class="error">{{ lib.error }}</div>
 
-    <div class="sb-foot">
+    <div v-if="pluginHostReady" class="sb-foot">
       <button class="plugin-entry" title="插件库（主题 / 界面插件）" @click="lib.openPlugins()">
         <span class="pe-ico">🧩</span><span>插件库</span>
       </button>
@@ -307,12 +311,15 @@ async function dropOnLib(e, l) {
   flex: none; display: flex; flex-direction: column;
   padding: 10px 8px 8px; overflow: hidden;
   box-sizing: border-box;
-  will-change: width, transform, opacity;
+  /* 不再 will-change: width —— 那是 layout 属性，声明它只会让浏览器每帧重排。
+     contain: layout paint 把重排限在侧栏内部，折叠/展开不再拖累整个网格重排。*/
+  contain: layout paint;
+  will-change: transform, opacity;
   transform: translateZ(0);
-  transition: width 0.26s cubic-bezier(0.16, 1, 0.3, 1),
-              padding 0.22s cubic-bezier(0.16, 1, 0.3, 1),
-              opacity 0.2s ease,
-              transform 0.26s cubic-bezier(0.16, 1, 0.3, 1);
+  /* padding 不参与过渡（也是 layout），时长缩短以减少过渡帧数 */
+  transition: width 0.18s cubic-bezier(0.16, 1, 0.3, 1),
+              opacity 0.18s ease,
+              transform 0.18s cubic-bezier(0.16, 1, 0.3, 1);
   /* 底子顶部白色渐变：从栏顶亮起，150px 内渐隐回 --bg（范围对齐品牌区+「全部」行） */
   background: linear-gradient(180deg, var(--sidebar-glow) 0, rgba(255, 255, 255, 0) 150px);
 }
@@ -324,7 +331,7 @@ async function dropOnLib(e, l) {
 .sidebar > * {
   min-width: calc(var(--sb-target-w, 240px) - 16px);
 }
-.brand { display: flex; align-items: baseline; gap: 8px; padding: 1px 10px 8px; border-bottom: 1px solid var(--border); user-select: none; -webkit-app-region: drag; }
+.brand { display: flex; align-items: baseline; gap: 8px; padding: 1px 10px 8px; border-bottom: 1px solid var(--border); user-select: none; }
 .brand h1 { font-family: var(--font-serif); font-size: 19px; margin: 0; letter-spacing: 4px; }
 .brand .sub { font-size: 10px; color: var(--text-2); letter-spacing: 1.5px; }
 

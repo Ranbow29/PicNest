@@ -8,7 +8,24 @@ import { isTextPath, isVideoPath, extOf } from '../lib/fileKinds'
 import CanvasStage from './CanvasStage.vue'
 
 const lib = useLibrary()
-const url = computed(() => (lib.brief.path ? fileUrl(lib.brief.path) : ''))
+const videoCompatPath = ref('')
+const url = computed(() => {
+  const p = videoCompatPath.value || lib.brief.path
+  return p ? fileUrl(p) : ''
+})
+let compatReqPath = ''
+async function onVideoError() {
+  const p = lib.brief.path
+  if (!p || compatReqPath === p || videoCompatPath.value) return
+  compatReqPath = p
+  try {
+    const r = await api.videoCompat(p)
+    if (lib.brief.path === p && r?.ok && r.path) {
+      videoCompatPath.value = r.path
+      nextTick(() => { videoEl.value?.play?.().catch(() => {}) })
+    }
+  } catch { /* 静默 */ }
+}
 const kind = computed(() => {
   const p = lib.brief.path
   return isVideoPath(p) ? 'video' : isTextPath(p) ? 'text' : 'image'
@@ -169,6 +186,8 @@ watch(() => lib.brief.path, async (p) => {
   imgDead.value = false
   psdFull.value = ''
   psdError.value = ''
+  videoCompatPath.value = ''
+  compatReqPath = ''
   showRateMenu.value = false
   isSeeking.value = false
   vid.cur = 0
@@ -441,7 +460,8 @@ onBeforeUnmount(() => {
                :class="{ gray: lib.grayscaleMode }" :style="mediaStyle"
                playsinline
                @loadedmetadata="onVideoMeta" @timeupdate="onVideoTime"
-               @play="vid.playing = true" @pause="vid.playing = false" @ended="vid.playing = false" />
+               @play="vid.playing = true" @pause="vid.playing = false" @ended="vid.playing = false"
+               @error="onVideoError" />
         <div v-else class="brief-empty">
           <template v-if="kind === 'image'">图片加载失败<br /><span>← → 仍可切到下一张</span></template>
           <template v-else>

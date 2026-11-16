@@ -9,7 +9,15 @@ const KF_V = [0, -0.12, 1, -0.2, 0.065, 0]
 // 集体晃动总线：页面切换/换文件夹/关面板/收窗体时 +1，所有动效图标同时做一次手势
 import { ref } from 'vue'
 export const iconShake = ref(0)
+/* 节流：每个图标要跑 640ms 逐帧动画（60 个图标约 2280 次响应式更新），
+   连点按钮时动画首尾相接，主线程就一直被占着 —— 表现就是“多点几下就卡住”。
+   400ms 内的后续触发直接丢弃，单次点击手感不变。 */
+let lastShakeAt = 0
+const SHAKE_MIN_GAP = 400
 export function collectiveShake() {
+  const now = typeof performance !== 'undefined' ? performance.now() : Date.now()
+  if (now - lastShakeAt < SHAKE_MIN_GAP) return
+  lastShakeAt = now
   iconShake.value++
 }
 

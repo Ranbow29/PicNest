@@ -12,16 +12,24 @@ const lib = useLibrary()
 const showLabels = computed(() => lib.hoverLabels !== false)
 const { resolved: themeResolved } = useTheme() // 概览滑尺是 canvas：换主题要重画取新 --accent
 
-/* Wenku8 式全体动效：视图/排序/筛选/内容更新 → 首屏入场波重放（防抖合并连续变更） */
+/* Wenku8 式全体动效：只在“首次进入/切换视图/换根”时重播入场波。
+   切文件夹不再重播——那等于把整屏格子的 transform/opacity 动画重跑一遍，
+   是切换粘滞的主要来源之一（格子多时尤其明显）。 */
 let waveTimer = null
 watch(
-  () => [lib.view, lib.currentDirRel, lib.sortMode, lib.sortAsc, lib.layout, lib.activeRootId, lib.images.length, JSON.stringify(lib.filters)],
+  () => [lib.view, lib.activeRootId, lib.sortMode, lib.sortAsc, lib.layout, JSON.stringify(lib.filters)],
   () => {
     if (Date.now() < (lib.suppressWaveUntil || 0)) return // 拖动排序/移动的本地更新不重放入场波
     clearTimeout(waveTimer)
     waveTimer = setTimeout(replayWave, 120)
   },
 )
+// 首次挂载时补一次，保证进场有波
+if (Date.now() >= (lib.suppressWaveUntil || 0)) setTimeout(replayWave, 120)
+
+/* 入场波保留（2026-11-14 晚）：Feb 确认旧版（Electron）也是同一套 173ms 延迟 + 520ms 淡入，
+   旧版不卡，所以它不是「跟手」的本质矛盾，不能拿它换手感。
+   历史上试过给切目录加 nowi 抑制，已回退。 */
 
 
 /* ---------- 视口与虚拟滚动 ---------- */
@@ -30,6 +38,31 @@ const viewW = ref(0)
 const viewH = ref(0)
 const scrollTop = ref(0)
 let ro = null, rafPending = false
+
+function resetScrollTop() {
+  if (viewport.value) {
+    viewport.value.scrollTop = 0
+  }
+  scrollTop.value = 0
+}
+
+/* 换文件夹/切换根/切换视图/切换多选视图时：默认从顶部开始浏览。
+   位置指纹：严格只看当前真正浏览的库、视图、目录以及多选视图下的集合，
+   绝不监听普通视图下的 selectedDirs，避免点击图片触发 clearDirSelection() 时被误判为切文件夹。 */
+const locationKey = computed(() => {
+  const selKey = lib.selectionView && lib.selectedDirs?.length
+    ? lib.selectedDirs.slice().sort().join('|')
+    : ''
+  return `${lib.activeRootId}::${lib.view}::${lib.currentDirRel ?? ''}::${lib.selectionView}::${selKey}`
+})
+
+watch(locationKey, (newKey, oldKey) => {
+  if (newKey === oldKey) return
+  resetScrollTop()
+  requestAnimationFrame(() => {
+    resetScrollTop()
+  })
+}, { flush: 'sync' })
 
 onMounted(() => {
   ro = new ResizeObserver((entries) => {
@@ -49,6 +82,8 @@ onBeforeUnmount(() => {
 })
 
 function onScroll() {
+  // 记录交互时间：store 侧的延迟补偿同步靠它判断“用户正在用”就往后推
+  lib._lastInteractAt = Date.now()
   if (rafPending) return
   rafPending = true
   requestAnimationFrame(() => {
@@ -102,6 +137,7 @@ function onCellDragStart(e, img) {
 
 /* ---------- 排列方式（Eagle 式）：名称/添加/修改/大小/尺寸/评分/随机 ---------- */
 const sortedImages = computed(() => {
+  if (lib.pendingSlow) return [] // 超过 200ms 才清空旧图（快切换时保留旧图无缝替换）
   const arr = [...lib.filteredImages]
   const mode = lib.sortMode, asc = lib.sortAsc ? 1 : -1
   if (mode === 'random') {
@@ -168,6 +204,46 @@ const fmtTrashDate = (ms) => {
 /* 卡片封面：每个子文件夹取一张图（缩略图优先） */
 const covers = ref({})
 let coverToken = 0
+let coverBusy = false
+let coverAgain = false
+let coverDelayTimer = null
+/* 封面批量拉取：同一时刻只允许一份请求在飞；期间又有变化就落定后补跑一次。
+   原来「每目录一个 imagesByDir」会并发铺开十几个查询。 */
+async function runCoverBatch() {
+  if (coverBusy) { coverAgain = true; return }
+  coverBusy = true
+  try {
+    do {
+      coverAgain = false
+      const list = subfolders.value
+      const token = ++coverToken
+      if (!list.length) { covers.value = {}; continue }
+      const out = {}
+      const need = []
+      for (const f of list) {
+        const mem = lib.dirMemory[f.rel] || {}
+        if (mem.cover) { out[f.rel] = fileUrl(mem.coverThumb || mem.cover); continue } // 手动设置的封面优先
+        need.push(f.rel)
+      }
+      if (need.length) {
+        try {
+          /* 一次 IPC 取回整层所有子目录的候选图；挑选规则不变：
+             优先缩略图，其次非文本/非视频 */
+          const batch = (await api.dirCovers(lib.activeRootId, need, 6)) || {}
+          for (const rel of need) {
+            const rows = batch[rel] || []
+            const pick = rows.find((im) => im.thumbnail_path && im.thumbnail_path !== 'SKIP')
+              || rows.find((im) => !isTextPath(im.file_path) && !isVideoPath(im.file_path))
+            if (pick) out[rel] = fileUrl(pick.thumbnail_path && pick.thumbnail_path !== 'SKIP' ? pick.thumbnail_path : pick.file_path)
+          }
+        } catch { /* 批量失败则本轮不出封面，下次刷新再来 */ }
+      }
+      if (token === coverToken) covers.value = out
+    } while (coverAgain)
+  } finally {
+    coverBusy = false
+  }
+}
 watch(
   () => [
     lib.activeRootId,
@@ -175,26 +251,21 @@ watch(
     subfolders.value.map((f) => f.rel).join('|'),
     subfolders.value.map((f) => lib.dirMemory[f.rel]?.cover || '').join('|'),
   ].join('::'),
-  async () => {
-    const list = subfolders.value
-    const token = ++coverToken
-    if (!list.length) { covers.value = {}; return }
-    const out = {}
-    await Promise.all(list.map(async (f) => {
-      try {
-        const mem = lib.dirMemory[f.rel] || {}
-        if (mem.cover) { out[f.rel] = fileUrl(mem.coverThumb || mem.cover); return } // 手动设置的封面优先
-        /* 取前几张挑封面：文本/视频没有缩略图时会退化成裂图，宁可回落到文件夹图标 */
-        const rows = await api.imagesByDir(lib.activeRootId, f.rel, 0, 6, 'added', false)
-        const pick = (rows || []).find((im) => im.thumbnail_path && im.thumbnail_path !== 'SKIP')
-          || (rows || []).find((im) => !isTextPath(im.file_path) && !isVideoPath(im.file_path))
-        if (pick) out[f.rel] = fileUrl(pick.thumbnail_path && pick.thumbnail_path !== 'SKIP' ? pick.thumbnail_path : pick.file_path)
-      } catch { /* 单目录失败忽略 */ }
-    }))
-    if (token === coverToken) covers.value = out
+  () => {
+    // 封面是纯装饰，推迟到首屏出图之后再跑，避免和取数抢连接
+    clearTimeout(coverDelayTimer)
+    coverDelayTimer = setTimeout(() => { runCoverBatch() }, 320)
   },
   { immediate: true }
 )
+function dropCover(rel) {
+  /* 封面图加载失败（OneDrive 占位文件、缩略图被清）→ 去掉这一条，回落到文件夹图标，
+     不留下一个空洞的灰块 */
+  if (!covers.value[rel]) return
+  const next = { ...covers.value }
+  delete next[rel]
+  covers.value = next
+}
 function onSubClick(e, f) {
   const add = e.altKey || e.ctrlKey || e.metaKey
   /* 正文卡片：单击/Shift/Alt 只选中并更新详情，不切中央网格；双击才进入 */
@@ -207,17 +278,19 @@ function onSubDblClick(e, f) {
 
 /* ---------- 编辑排印头块（Wenku8 式：衬线大标题 + 英文小标 + 规则线） ---------- */
 const VIEW_EN = { all: 'LIBRARY', recent: 'RECENT', uncategorized: 'UNSORTED', random: 'RANDOM', trash: 'TRASH', search: 'SEARCH' }
+/* 位置变了、数据未到时，数量不拿旧值充数 */
+const countText = computed(() => (lib.gridFresh ? (lib.images.length || 0).toLocaleString() : '—'))
 const header = computed(() => {
   const viewEn = VIEW_EN[lib.view] || 'LIBRARY'
   if (lib.selectionView) {
     const n = lib.selectedDirs.length
-    return { big: `已选定 ${n} 个文件夹`, caption: `${(lib.images.length || 0).toLocaleString()} IMAGES / ${n} FOLDERS` }
+    return { big: `已选定 ${n} 个文件夹`, caption: `${countText.value} IMAGES / ${n} FOLDERS` }
   }
   if (lib.view !== 'all') {
-    const n = lib.view === 'trash' ? (lib.images.length + (lib.trashFolders?.length || 0)) : lib.images.length
-    return { big: { all: '全部', recent: '最近使用', uncategorized: '未分类', random: '随机模式', trash: '回收站' }[lib.view], caption: `${n.toLocaleString()} ITEMS / ${viewEn}` }
+    const n = lib.view === 'trash' ? (lib.gridFresh ? (lib.images.length + (lib.trashFolders?.length || 0)) : 0) : (lib.gridFresh ? lib.images.length : 0)
+    return { big: { all: '全部', recent: '最近使用', uncategorized: '未分类', random: '随机模式', trash: '回收站' }[lib.view], caption: `${lib.gridFresh ? n.toLocaleString() : '—'} ITEMS / ${viewEn}` }
   }
-  if (!lib.currentDirRel) return { big: '全部', caption: `${(lib.images.length || 0).toLocaleString()} IMAGES / ${viewEn}` }
+  if (!lib.currentDirRel) return { big: '全部', caption: `${countText.value} IMAGES / ${viewEn}` }
   const parts = lib.currentDirRel.split('/')
   return { big: lib.dispName(parts[parts.length - 1]), caption: `${(lib.images.length || 0).toLocaleString()} IMAGES / ${viewEn}` }
 })
@@ -322,7 +395,18 @@ const items = computed(() => {
 watch(
   [items, sortedImages],
   ([it, arr]) => {
-    lib.gridOrder = (it && it.length ? it : arr).map((i) => i.file_path)
+    const next = (it && it.length ? it : arr).map((i) => i.file_path)
+    // 顺序没变就不回写：否则每次 layoutTick（缩略图补齐、尺寸回填）
+    // 都要 map 一遍全量（784 张 = 784 个字符串）并触发 TitleBar/BriefMode 重渲染。
+    const prev = lib.gridOrder
+    if (prev && prev.length === next.length) {
+      let same = true
+      for (let i = 0; i < next.length; i++) {
+        if (prev[i] !== next[i]) { same = false; break }
+      }
+      if (same) return
+    }
+    lib.gridOrder = next
   },
   { immediate: true },
 )
@@ -453,14 +537,109 @@ function onRulerDown(e) {
 function onRulerMove(e) { if (dragRuler) rulerJump(e) }
 function onRulerUp() { dragRuler = false }
 
+function __picDisplayDebug() {
+  return {
+    id: __picDisplayId,
+    busy: displayBusy,
+    tried: displayTried.size,
+    keys: Object.keys(displaySrc).length,
+    err: (typeof window !== 'undefined' && window.__picDisplayErr) || null,
+    vis: visible.value.length,
+    ws: visible.value.slice(0, 4).map((i) => i.w),
+    kinds: cells.value.slice(0, 4).map((c) => c.srcKind),
+    firstKey: Object.keys(displaySrc)[0] || null,
+  }
+}
+let __picDisplayId = 0
+if (typeof window !== 'undefined') {
+  // 每次挂载一个新 id：如果窗口里出现两份实例，能从快照里看出来
+  __picDisplayId = (window.__picSeq = (window.__picSeq || 0) + 1)
+  window.__picDisplays = window.__picDisplays || []
+  window.__picDisplays.push(__picDisplayDebug)
+  window.__picDisplay = __picDisplayDebug
+}
+
 /* ---------- 缩略图按需补齐（只对可视窗口，带超时兜底防子进程挂起） ---------- */
 const inFlight = new Map() // path -> 时间戳
-/* 大格子显示图：1024px 有界缓存（主进程生成）；没有时先用 400 缩略图，到了再换 */
+/* 1024 高清显示图（第二档）：图片自身宽度 ≥ 240px 就上 1024，
+   400 档只留给 <240px 的小图（400 当唯一低档太小，画师在网格里看细节会糊）。
+   阈值想改就改这一个数。 */
+const DISPLAY_MIN_W = 240
+const displaySrc = reactive({}) // file_path -> 1024 缓存 url
+const displayBroken = new Set() // 验证不过的 1024：本会话内不再尝试
+const displayTried = new Set() // 已请求过的（成功与否不重复要同一张）
+let displayBusy = false
 function requestDisplayThumbs(vis) {
-  const big = (vis || []).filter((i) =>
-    i.w > 500 && !isTextPath(i.file_path) && !isVideoPath(i.file_path) && !/\.gif$/i.test(i.file_path) &&
-    i.thumbnail_path && i.thumbnail_path !== 'SKIP')
-  if (big.length) lib.ensureDisplayThumbs(big.map((i) => ({ path: i.file_path, mtime: i.modify_time || 0 })))
+  if (displayBusy) return
+  const need = vis
+    .filter((i) => {
+      const p = i.file_path
+      if (!p || displaySrc[p] || displayTried.has(p)) return false
+      if (isTextPath(p) || isVideoPath(p)) return false
+      return (i.w || i.width || 0) >= DISPLAY_MIN_W
+    })
+    .map((i) => i.file_path)
+    .slice(0, 12)
+  if (!need.length) return
+  displayBusy = true
+  for (const p of need) displayTried.add(p)
+  let timedOut = false
+  const timeout = new Promise((resolve) =>
+    setTimeout(() => {
+      timedOut = true
+      resolve(null)
+    }, 20000)
+  )
+  ;(async () => {
+    try {
+      const res = await Promise.race([api.picnestDisplayThumbs(need), timeout])
+      if (typeof window !== 'undefined') window.__picDisplayLast = res
+      /* 先自己把 1024 图完整载入一次再交给格子：
+         换源那一瞬旧请求被中止也会吐 error，靠 error 事件分不清是谁坏的，
+         所以改成“先验证后使用，预加载还能直接命中缓存”。 */
+      const list = (res?.results || []).filter((r) => r?.file_path && r?.display_path)
+      let n = 0
+      const okFlags = await Promise.all(
+        list.map((r) =>
+          new Promise((resolve) => {
+            const im = new Image()
+            im.onload = () => resolve(true)
+            im.onerror = () => resolve(false)
+            im.src = fileUrl(r.display_path)
+          })
+        )
+      )
+      list.forEach((r, i) => {
+        if (okFlags[i]) {
+          displaySrc[r.file_path] = r.display_path
+          n++
+        } else {
+          displayBroken.add(r.file_path)
+        }
+      })
+      if (typeof window !== 'undefined') {
+        window.__picDisplayAssigned = n
+        window.__picDisplayKeysAfter = Object.keys(displaySrc).length
+      }
+    } catch (e) {
+      // 记录一下，避免出错时静默不生成（排查用：window.__picDisplayErr）
+      if (typeof window !== 'undefined') window.__picDisplayErr = String(e)
+    } finally {
+      displayBusy = false
+      // 超时没拿到结果：把标记撒回去，下一次还能重试
+      if (timedOut) for (const p of need) displayTried.delete(p)
+      // 还有没补完的：下一拍再来一批，不要一次扔上百张把滚动拖卡
+      const rest = visible.value.some(
+        (i) =>
+          (i.w || i.width || 0) >= DISPLAY_MIN_W &&
+          !displaySrc[i.file_path] &&
+          !displayTried.has(i.file_path) &&
+          !isTextPath(i.file_path) &&
+          !isVideoPath(i.file_path)
+      )
+      if (rest) setTimeout(() => requestDisplayThumbs(visible.value), 120)
+    }
+  })()
 }
 watch(() => visible.value.map((i) => `${i.file_path}:${i.thumbnail_path || ''}:${i.modify_time || 0}`).join('|'),
   () => requestDisplayThumbs(visible.value))
@@ -474,7 +653,7 @@ watch(visible, (vis) => {
   const timeout = new Promise((resolve) => setTimeout(() => resolve(null), 20000))
   /* 文本走 SVG 文字缩略图管线；图片/视频走原生 sharp/poster 管线 */
   const textNeed = need.filter((p) => isTextPath(p)).slice(0, 80)
-  const imgNeed = need.filter((p) => !isTextPath(p)).slice(0, 80)
+  const imgNeed = need.filter((p) => !isTextPath(p)).slice(0, 24)
   const jobs = []
   if (imgNeed.length) jobs.push(Promise.race([api.generateThumbnailsBatch(imgNeed), timeout]))
   if (textNeed.length) jobs.push(Promise.race([api.generateTextThumbnails(textNeed), timeout]))
@@ -501,8 +680,29 @@ watch(visible, (vis) => {
 /* 图片加载兜底：显示图/缩略图失败逐级降级（1024 显示图 → 400 缩略图 → 原图重试一次 → 占位可点重试）。
    网格不再直接解码原图（Chromium 解码缓存预算下 10MB+ PNG 会偶发失败），原图只留给灯箱。 */
 const imgFix = reactive({}) // path -> { mode: 'thumb' | 'original' | 'error', n?: number }
-function onCellImgError(cell) {
+function onCellImgError(cell, ev) {
   const p = cell.file_path
+  /* 旧图晚到的失败不要当作当前源的失败：换源（400 → 1024）的瞬间，
+     被中止的上一次请求也会吐 error，不区分就会把刚拿到的 1024 误删、退回原图。 */
+  const attempted = ev?.target?.getAttribute?.('src')
+  if (attempted && cell.src && attempted !== cell.src) return
+  // 1024 显示图自己坏了：从可用表里拿掉，别让它在降级后又被选回来（否则会反复重试）
+  if (cell.srcKind === 'display') {
+    /* 这里的 error 大多数不是真的坏图：切源那一瞬旧请求被中止、或滚动出屏被取消，
+       都会吐一个 error。所以不直接拉黑，而是拿同一张图重新载一次——真坏才拉黑。 */
+    const url = fileUrl(displaySrc[p] || '')
+    if (url) {
+      const im = new Image()
+      im.onload = () => {
+        lib.layoutTick++ // 图片其实没问题：让格子重算一次就能回到 1024
+      }
+      im.onerror = () => {
+        displayBroken.add(p)
+        lib.layoutTick++
+      }
+      im.src = url + `?rechk=${Date.now()}`
+    }
+  }
   const hasThumb = !!(cell.thumbnail_path && cell.thumbnail_path !== 'SKIP')
   const cur = imgFix[p] || { n: 0 }
   if (cell.srcKind === 'display' || cell.srcKind === 'original') {
@@ -520,14 +720,13 @@ function retryCellImg(cell) {
 
 const cells = computed(() =>
   visible.value.map((img) => {
-    // 取源策略：文本/视频不直链；gif 大格保留原图动画；其余优先 1024 显示图 → 400 缩略图 → 原图
+    // 取源策略：文本/视频不直链；PSD 原生无法解码走缩略图；大格 (>500px) 直出原图（无损细节）；其余小格用 400 缩略图极速出帧
     const isVideo = isVideoPath(img.file_path)
     const isText = isTextPath(img.file_path)
-    const isGif = /\.gif$/i.test(img.file_path)
+    const ext = extOf(img.file_path).toLowerCase()
+    const isPsd = ext === '.psd' || ext === '.psb'
     const hasThumb = img.thumbnail_path && img.thumbnail_path !== 'SKIP'
     const ver = img.modify_time || 0
-    const disp = lib.displayThumbs[img.file_path]
-    const hasDisplay = !!(disp && disp.p && disp.m === ver)
     const fx = imgFix[img.file_path]
     const withVer = (u) => (u ? `${u}?v=${ver}` : '')
     let src = ''
@@ -540,18 +739,24 @@ const cells = computed(() =>
     } else if (fx?.mode === 'error') {
       src = ''
       srcKind = 'error'
+    } else if ((img.w || img.width || 0) >= DISPLAY_MIN_W && displaySrc[img.file_path] && !displayBroken.has(img.file_path)) {
+      // 第二档 1024 优先于任何降级状态：400 没生成或曾经失败时，1024 一就绪就该顶上
+      // 注意：displaySrc 存的是磁盘路径，必须过 fileUrl 才能当 src 用
+      src = withVer(fileUrl(displaySrc[img.file_path]))
+      srcKind = 'display'
     } else if (fx?.mode === 'thumb' && hasThumb) {
       src = withVer(fileUrl(img.thumbnail_path)) + (fx.n ? `&r=${fx.n}` : '')
       srcKind = 'thumb'
     } else if (fx?.mode === 'original') {
       src = withVer(fileUrl(img.file_path)) + (fx.n ? `&r=${fx.n}` : '')
       srcKind = 'original'
-    } else if (isGif && img.w > 500) {
-      src = withVer(fileUrl(img.file_path))
-      srcKind = 'original'
-    } else if (hasDisplay) {
-      src = withVer(fileUrl(disp.p))
-      srcKind = 'display'
+    } else if (isPsd) {
+      if (hasThumb) { src = withVer(fileUrl(img.thumbnail_path)); srcKind = 'thumb' }
+      else { src = ''; srcKind = 'error' }
+    } else if ((img.w || img.width || 0) >= DISPLAY_MIN_W) {
+      // 1024 还在生成：先用 400 顶上（没有 400 就先直出原图），好了自动换
+      if (hasThumb) { src = withVer(fileUrl(img.thumbnail_path)); srcKind = 'thumb' }
+      else { src = withVer(fileUrl(img.file_path)); srcKind = 'original' }
     } else if (hasThumb) {
       src = withVer(fileUrl(img.thumbnail_path))
       srcKind = 'thumb'
@@ -563,7 +768,6 @@ const cells = computed(() =>
     const res = isText
       ? ['文本', extOf(img.file_path).slice(1).toUpperCase(), sizeText(img.file_size)].filter(Boolean).join(' · ')
       : (isVideo ? '视频' : (img.width && img.height ? `${img.width} × ${img.height}` : ''))
-    const ext = extOf(img.file_path).toLowerCase()
     let formatBadge = ''
     if (isVideo) formatBadge = ext.slice(1).toUpperCase()
     else if (['.psd', '.gif', '.webp', '.svg', '.avif'].includes(ext)) {
@@ -584,6 +788,24 @@ const cells = computed(() =>
     }
   })
 )
+
+/* 视频悬停静音微预览：鼠标悬停 350ms 自动轻量播放，移出即销毁 */
+const hoverVideoPath = ref('')
+let hoverVideoTimer = 0
+function onCellPointerEnter(img) {
+  if (!img?.isVideo) return
+  clearTimeout(hoverVideoTimer)
+  hoverVideoTimer = setTimeout(() => {
+    hoverVideoPath.value = img.file_path
+  }, 350)
+}
+function onCellPointerLeave(img) {
+  if (!img?.isVideo) return
+  clearTimeout(hoverVideoTimer)
+  if (hoverVideoPath.value === img.file_path) {
+    hoverVideoPath.value = ''
+  }
+}
 
 /* 选择：Shift=范围（按 filteredImages 可见顺序），Alt/Ctrl=加选/减选 */
 const selectedSet = computed(() => new Set(lib.selectedPaths))
@@ -914,7 +1136,7 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
               @contextmenu.prevent="lib.openDirMenu($event, { rel: f.rel, node: f })"
             >
               <div class="sf-cover">
-                <img v-if="covers[f.rel]" :src="covers[f.rel]" :class="{ gray: lib.grayscaleMode }" draggable="false" loading="lazy" decoding="async" @error="$event.target.style.visibility='hidden'" />
+                <img v-if="covers[f.rel]" :src="covers[f.rel]" :class="{ gray: lib.grayscaleMode }" draggable="false" loading="lazy" decoding="async" @error="dropCover(f.rel)" />
                 <FolderIcon v-else :color="lib.dirMemory[f.rel]?.color || ''" :size="30" />
               </div>
               <div class="sf-name" :title="lib.dispName(f.name) + ' · 双击进入'">{{ lib.dispName(f.name) }}</div>
@@ -950,7 +1172,7 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
       <div ref="reorderLineEl" class="reorder-line" style="display: none" />
 
       <div
-        v-for="img in cells" :key="img.id + '-' + waveSeq"
+        v-for="img in cells" :key="img.id"
         class="cell" :class="{ selected: selectedSet.has(img.file_path) }"
         :data-cell-path="img.file_path"
         :style="{ transform: `translate(${img.x}px, ${img.y + 0}px)`, width: img.w + 'px', height: img.h + 'px', '--d': waveDelay(img.gi) + 'ms' }"
@@ -958,8 +1180,9 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
         @dragstart="onCellDragStart($event, img)"
         @click="onCellClick($event, img)"
         @dblclick="onCellDblClick($event, img)"
+        @pointerenter="onCellPointerEnter(img)"
+        @pointerleave="onCellPointerLeave(img); onCellTiltLeave($event)"
         @pointermove="onCellTiltMove"
-        @pointerleave="onCellTiltLeave"
         @contextmenu.prevent="lib.openContextMenu($event, img)"
       >
         <div class="thumb wi" :class="{ nowi: img.gi >= 48, gray: lib.grayscaleMode }">
@@ -984,7 +1207,24 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
           </div>
           <!-- 左上角格式小标 (PSD / GIF / MP4 / WEBP 等特殊格式，对齐 Eagle 设计) -->
           <span v-if="img.formatBadge && !img.isText" class="format-badge">{{ img.formatBadge }}</span>
-          <img v-if="img.src" :src="img.src" loading="lazy" decoding="async" draggable="false" @error="onCellImgError(img)" />
+          <video
+            v-if="hoverVideoPath === img.file_path"
+            class="cell-video-preview"
+            :src="fileUrl(img.file_path)"
+            autoplay
+            muted
+            loop
+            playsinline
+          />
+          <img v-else-if="img.src" :key="img.src" :src="img.src" loading="lazy" decoding="async" draggable="false" @error="onCellImgError(img, $event)" />
+          <video
+            v-else-if="img.isVideo"
+            class="cell-video-poster"
+            :src="fileUrl(img.file_path) + '#t=0.001'"
+            preload="metadata"
+            muted
+            playsinline
+          />
           <div v-else-if="img.isText" class="docph">
             <b>{{ img.extLabel }}</b>
             <span>{{ lib.dispName(img.file_name) }}</span>
@@ -996,7 +1236,7 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
         </div>
       </div>
     </div>
-    <div v-if="lib.loading" class="state overlay-state">载入中…</div>
+    <div v-if="lib.pendingSlow" class="state overlay-state">载入中…</div>
     <div v-else-if="!lib.images.length && !(lib.view === 'trash' && trashFolders.length)" class="state overlay-state">
       {{ lib.view === 'trash' ? '回收站是空的' : (subfolders.length ? '此文件夹暂无直属图片' : '此文件夹暂无图片') }}
     </div>
@@ -1106,6 +1346,20 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
   border-radius: 4px;
   pointer-events: none;
   user-select: none;
+}
+.cell-video-preview,
+.cell-video-poster {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  pointer-events: none;
+  border-radius: inherit;
+  background: transparent;
+}
+.cell-video-preview {
+  z-index: 1;
 }
 .noimg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--text-2); font-size: 22px; }
 .noimg.broken { cursor: pointer; color: var(--accent); font-size: 20px; opacity: 0.75; }

@@ -229,7 +229,7 @@ function clearSection(kind) {
       <div class="fmt-list">
         <button v-for="[e, n] in formatDefsShown" :key="e" class="fmt" :class="{ on: f.formats.includes(e), ex: f.formatEx.includes(e) }"
                 @click="toggleFormat(e, false)" @contextmenu.prevent="toggleFormat(e, true)">
-          <span class="mono">{{ e }}</span><em>{{ n }}</em><i v-if="f.formatEx.includes(e)" class="ex-mark">排除</i>
+          <span class="mono">{{ e }}</span><i v-if="f.formats.includes(e)" class="ok-mark">✓</i><em>{{ n }}</em><i v-if="f.formatEx.includes(e)" class="ex-mark">排除</i>
         </button>
         <div class="hint-row">选择 <b>左键</b> · 排除 <b>右键</b></div>
       </div>
@@ -306,6 +306,8 @@ function clearSection(kind) {
 .fmt em { font-style: normal; color: var(--text-2); font-size: 11px; font-variant-numeric: tabular-nums; }
 .mono { font-family: Consolas, monospace; }
 .ex-mark { font-style: normal; font-size: 10px; color: #d24b4b; border: 1px solid #d24b4b; border-radius: 4px; padding: 0 3px; }
+/* 选中的格式后面打钩（数量保留，一眼看得出哪几项在筛选里） */
+.ok-mark { font-style: normal; font-size: 11px; line-height: 1; color: var(--accent); font-weight: 700; }
 .hint-row { padding: 6px 8px 0; font-size: 11px; color: var(--text-2); }
 .hint-row b { color: var(--text); }
 .tag-empty { font-size: 11.5px; color: var(--text-2); padding: 3px 0; }

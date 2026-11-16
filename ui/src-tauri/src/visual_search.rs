@@ -55,7 +55,7 @@ fn registry_proxy() -> Option<String> {
 }
 
 /// 按原版顺序探测代理：环境变量 → 注册表 → 常见本地端口。
-fn detect_proxy() -> Option<String> {
+pub(crate) fn detect_proxy() -> Option<String> {
     for k in [
         "HTTPS_PROXY",
         "https_proxy",

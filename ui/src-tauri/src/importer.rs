@@ -1176,15 +1176,8 @@ mod tests {
         assert_eq!(String::from_utf8(decoded).unwrap(), "中文");
     }
 
-    fn setup_test_env(name: &str) -> (PathBuf, Arc<Mutex<Connection>>, i64) {
-        let base = std::env::temp_dir().join(format!(
-            "picnest_imp_test_{}_{}",
-            name,
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+    fn setup_test_env(name: &str) -> (crate::testutil::TempDir, Arc<Mutex<Connection>>, i64) {
+        let base = crate::testutil::TempDir::new(&format!("picnest_imp_test_{}", name));
         let root = base.join("library");
         std::fs::create_dir_all(root.join("01_doc")).unwrap();
         let db_path = base.join("test.db");

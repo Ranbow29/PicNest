@@ -265,6 +265,29 @@ async function applyMultiMeta(field) {
   multiNote.value = `已应用到 ${n} 个文件`
   setTimeout(() => { if (multiNote.value === `已应用到 ${n} 个文件`) multiNote.value = '' }, 2400)
 }
+const hoverRating = ref(0)
+function setHover(s) { hoverRating.value = s }
+function clearHover() { hoverRating.value = 0 }
+
+const ratingText = computed(() => {
+  const r = hoverRating.value || (mode.value === 'img' ? (img.value?.rating || 0) : multiRating.value)
+  if (r === -1) return '包含不同评分'
+  if (!r) return '未评分'
+  return `${r} 星`
+})
+
+function applySingleRating(s) {
+  if (!img.value) return
+  const cur = img.value.rating || 0
+  const target = cur === s ? 0 : s
+  lib.rate(img.value.file_path, target)
+}
+
+function clearSingleRating() {
+  if (!img.value) return
+  lib.rate(img.value.file_path, 0)
+}
+
 async function rateMulti(s) {
   const target = multiRating.value === s ? 0 : s
   await Promise.all(multiImages.value.map((im) => lib.rate(im.file_path, target)))
@@ -405,8 +428,19 @@ async function exportFolder() {
       <div class="sec">
         <div class="sec-head" @click="toggle('rating')"><span>评分</span><i>{{ sections.rating ? '▾' : '▸' }}</i></div>
         <div v-show="sections.rating" class="sec-body">
-          <div class="stars">
-            <i v-for="s in 5" :key="s" class="star" :class="{ on: (img.rating || 0) >= s }" @click="lib.rate(img.file_path, (img.rating || 0) === s ? 0 : s)">★</i>
+          <div class="stars" @mouseleave="clearHover">
+            <i
+              v-for="s in 5"
+              :key="s"
+              class="star"
+              :class="{
+                on: (hoverRating || (img.rating || 0)) >= s,
+                preview: hoverRating > 0 && hoverRating >= s && (img.rating || 0) < s
+              }"
+              :title="`设为 ${s} 星`"
+              @mouseenter="setHover(s)"
+              @click="applySingleRating(s)"
+            >★</i>
           </div>
         </div>
       </div>
@@ -486,10 +520,21 @@ async function exportFolder() {
       <div class="sec">
         <div class="sec-head" @click="toggle('rating')"><span>评分</span><i>{{ sections.rating ? '▾' : '▸' }}</i></div>
         <div v-show="sections.rating" class="sec-body">
-          <div class="stars">
-            <i v-for="s in 5" :key="s" class="star" :class="{ on: multiRating >= s }" @click="rateMulti(s)">★</i>
+          <div class="stars" @mouseleave="clearHover">
+            <i
+              v-for="s in 5"
+              :key="s"
+              class="star"
+              :class="{
+                on: (hoverRating || multiRating) >= s,
+                preview: hoverRating > 0 && hoverRating >= s && multiRating < s
+              }"
+              :title="`设为 ${s} 星`"
+              @mouseenter="setHover(s)"
+              @click="rateMulti(s)"
+            >★</i>
           </div>
-          <div v-if="multiRating < 0" class="muted">多个评分</div>
+          <div v-if="multiRating < 0" class="muted" style="margin-top: 6px;">所选包含不同评分</div>
         </div>
       </div>
 
@@ -685,10 +730,37 @@ async function exportFolder() {
 .swatches i:hover { transform: translateY(-2px); border-color: var(--accent); }
 .swatches i.on { border-color: #fff; box-shadow: 0 0 0 1.5px var(--accent); }
 
-.stars { display: flex; gap: 4px; font-size: 19px; line-height: 1; }
-.star { color: var(--border); cursor: pointer; transition: color .12s, transform .12s; }
-.star:hover { transform: scale(1.15); }
-.star.on { color: var(--accent); }
+/* 星级：严格对齐老版——纯字符星，没有按钮底、没有固定框、不做缩放。
+   高度完全由 line-height 撑开（19px），否则详情面板会跟着变高/变矮。 */
+.stars {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 19px;
+  line-height: 1;
+  padding: 0;
+}
+.star {
+  font-size: 19px;
+  line-height: 1;
+  font-style: normal;
+  color: var(--border);
+  background: none;
+  border: 0;
+  cursor: pointer;
+  user-select: none;
+  transition: color 0.12s;
+}
+.star:hover {
+  color: var(--text-2);
+}
+.star.on {
+  color: var(--accent);
+}
+.star.preview {
+  color: var(--accent);
+  opacity: 0.75;
+}
 
 .actions { display: flex; flex-direction: column; gap: 6px; }
 .actions button {

@@ -1,19 +1,52 @@
 <script setup>
 // 资料库文件夹右键菜单：新建(子)文件夹 / 重命名 / 排序 / 移动到… / 导出 / 图标颜色
-import { computed, ref } from 'vue'
+import { computed, ref, watch, nextTick } from 'vue'
 import { useLibrary } from '../stores/library'
 import NamePromptDialog from './NamePromptDialog.vue'
 
 const lib = useLibrary()
 const menu = computed(() => lib.dirMenu)
+const menuEl = ref(null)
+const menuW = ref(230)
+const menuH = ref(450)
 
-/* 视口钳制定位（窗口尺寸不可在模板作用域直接引用，会变 NaNpx） */
-const pos = computed(() => ({
-  left: Math.max(4, Math.min(menu.value.x ?? 0, window.innerWidth - 250)) + 'px',
-  top: Math.max(4, Math.min(menu.value.y ?? 0, window.innerHeight - 430)) + 'px',
-}))
+/* 视口边界动态钳制定位：根据菜单实际尺寸自适应翻转，绝不超出窗体边界遮挡按钮 */
+const pos = computed(() => {
+  const x = menu.value.x ?? 0
+  const y = menu.value.y ?? 0
+  const w = menuW.value || 230
+  const h = menuH.value || 450
+  const winW = window.innerWidth || 800
+  const winH = window.innerHeight || 600
 
-const sortOpen = ref(false)
+  let left = x
+  if (left + w > winW - 12) {
+    left = Math.max(12, left - w)
+  }
+  left = Math.max(12, Math.min(left, winW - w - 12))
+
+  let top = y
+  if (top + h > winH - 12) {
+    top = Math.max(12, y - h)
+  }
+  top = Math.max(12, Math.min(top, winH - h - 12))
+
+  return {
+    left: left + 'px',
+    top: top + 'px',
+  }
+})
+
+watch(() => menu.value.open, async (open) => {
+  if (open) {
+    await nextTick()
+    if (menuEl.value) {
+      menuW.value = menuEl.value.offsetWidth || 230
+      menuH.value = menuEl.value.offsetHeight || 450
+    }
+  }
+})
+
 const colorOpen = ref(false)
 const ask = ref(null) // { title, initial, selectBase, run(name) }
 const isLib = computed(() => !!menu.value.node?.isLibrary) // 资料库根：不提供重命名/移动（保 DB 登记一致性）
@@ -37,32 +70,49 @@ function nameOf(rel) { return rel ? rel.split('/').pop() : (lib.tree?.rootPath |
 
 function run(fn) {
   lib.closeDirMenu()
-  sortOpen.value = false
   colorOpen.value = false
   fn()
 }
 function toggle(which) {
-  sortOpen.value = which === 'sort' ? !sortOpen.value : false
   colorOpen.value = which === 'color' ? !colorOpen.value : false
 }
 
-function newSub() {
+function resetOrder() {
+  const rel = relOf(menu.value.rel)
+  const rootId = isLib.value ? menuNode.value?.id : lib.activeRootId
+  run(async () => {
+    await lib.resetDirOrder(rootId, rel)
+  })
+}
+
+/* 统一成「新建文件夹」：一律建在右键的那个文件夹里面。
+   右键库根行则在库根建。以前还分一个「新建子文件夹」和一个「新建文件夹（同级）」，
+   两个按钮名字差不多、行为相反，很容易建错地方，所以合并掉。 */
+function newFolder() {
   const rel = relOf(menu.value.rel)
   const isLibrary = isLib.value
   const rootId = menuNode.value?.id
+  const label = isLibrary ? '库根' : `「${lib.dispName(nameOf(rel) || '当前文件夹')}」`
   run(() => {
-    ask.value = { title: '新建子文件夹', initial: '', run: async (name) => {
-      const r = isLibrary ? await lib.mkdirInLibrary(rootId, name) : await lib.mkdirIn(rel, name)
-      if (r?.ok && !isLibrary) lib.patchDirMemory(rel, { expanded: true })
-    } }
+    ask.value = {
+      title: `在${label}里新建文件夹`,
+      initial: '',
+      run: async (name) => {
+        const r = isLibrary ? await lib.mkdirInLibrary(rootId, name) : await lib.mkdirIn(rel, name)
+        if (r?.ok && !isLibrary) lib.patchDirMemory(rel, { expanded: true })
+      },
+    }
   })
 }
-function newSibling() {
-  const parent = parentRelOf(relOf(menu.value.rel))
-  run(() => {
-    ask.value = { title: parent ? '新建文件夹（同级）' : '在库根新建文件夹', initial: '', run: (name) => lib.mkdirIn(parent, name) }
-  })
+
+/* 开关：拖完顺序自动写文件名（默认关）。真正干活的是带缓存迁移的 write_order_to_filenames。 */
+function togglePhysOrder() {
+  run(() => lib.togglePhysicalOrder())
 }
+
+/* 2026-11-14：两个手动入口已移除：
+   - 「同步到文件夹（写入文件名）」→ 已由「排序同步文件名」开关自动完成（拖完 800ms）
+   - 「从磁盘重新读取」→ 已由文件监听自动完成（新增/删除/改名都会入同步） */
 function rename() {
   const rel = relOf(menu.value.rel)
   const oldName = nameOf(rel)
@@ -131,7 +181,7 @@ async function moveTo() {
     } catch { /* 静默 */ }
   })
 }
-function exportDir() {
+function exportDir(stripPrefix) {
   const rel = relOf(menu.value.rel)
   const isLibrary = isLib.value
   const rootId = menuNode.value?.id
@@ -139,8 +189,10 @@ function exportDir() {
     lib.scanning = true
     lib.scanNote = '导出中…'
     try {
-      const r = isLibrary ? await lib.exportLibrary(rootId) : await lib.exportDir(rel)
-      if (r?.ok) lib.scanNote = `已导出 ${r.count} 张 → ${r.dest}`
+      const r = isLibrary
+        ? await lib.exportLibrary(rootId, !!stripPrefix)
+        : await lib.exportDir(rel, !!stripPrefix)
+      if (r?.ok) lib.scanNote = `已导出 ${r.count} 张${stripPrefix ? '（去数字前缀）' : ''} → ${r.dest}`
       else if (r?.canceled) lib.scanNote = ''
       else lib.scanNote = r?.error || '导出失败'
     } finally {
@@ -161,27 +213,8 @@ function repairThumbs() {
   const rootId = isLib.value ? menuNode.value?.id : lib.activeRootId
   run(() => lib.repairThumbs(rootId))
 }
-/* 一键清除整个根目录的 01_ 排序前缀（文件+文件夹，确认后改磁盘名） */
-function stripPrefixes() {
-  const rootId = isLib.value ? menuNode.value?.id : lib.activeRootId
-  run(() => lib.stripOrderPrefixes(rootId))
-}
-/* 全局开关：手动排序时把顺序同步成文件名数字前缀（默认真改磁盘，谨慎开启） */
-function togglePhysOrder() {
-  run(() => lib.togglePhysicalOrder())
-}
-function sortLevel(mode) {
-  const rel = relOf(menu.value.rel)
-  const isLibrary = isLib.value
-  const rootId = menuNode.value?.id
-  run(() => (isLibrary ? lib.sortLibrary(rootId, mode) : lib.sortDir(rel, mode)))
-}
-function sortRecursive(mode) {
-  const rel = relOf(menu.value.rel)
-  const isLibrary = isLib.value
-  const rootId = menuNode.value?.id
-  run(() => (isLibrary ? lib.sortLibraryRecursive(rootId, mode) : lib.sortDirRecursive(rel, mode)))
-}
+/* 2026-11-14：清除 01_ 前缀 / 排序同步文件名两个入口已移除（排序不再碰文件名） */
+
 function colorTargets() {
   if (isLib.value) return ['']
   const rel = relOf(menu.value.rel)
@@ -254,43 +287,28 @@ function pasteItem() {
   })
 }
 
-const sortItems = [
-  { label: '标题（当前层级） A→Z', mode: 'name_asc' },
-  { label: '标题（当前层级） Z→A', mode: 'name_desc' },
-  { label: '标题（全部层级） A→Z', mode: 'name_asc', rec: true },
-  { label: '标题（全部层级） Z→A', mode: 'name_desc', rec: true },
-  { label: '修改时间 新→旧', mode: 'mtime_desc' },
-  { label: '修改时间 旧→新', mode: 'mtime_asc' },
-]
+
 </script>
 
 <template>
   <Teleport to="body">
     <div v-if="menu.open" class="dm-layer" @click="lib.closeDirMenu()" @contextmenu.prevent="lib.closeDirMenu()">
-      <div class="dm glass-card" :style="pos" @click.stop>
+      <div ref="menuEl" class="dm glass-card" :style="pos" @click.stop>
         <button v-if="isLib" class="mi" @click="revealLib">在文件管理器中打开</button>
-        <button class="mi" @click="newSub">新建子文件夹</button>
+        <button class="mi" @click="newFolder">新建文件夹</button>
         <button v-if="isLib" class="mi" @click="renameLib">重命名根文件…</button>
-        <button v-if="!isLib" class="mi" @click="newSibling">新建文件夹</button>
         <button v-if="!isLib" class="mi" @click="rename">重命名</button>
         <button class="mi" @click="copyItem">{{ isLib ? '复制根文件' : '复制' }}</button>
         <button v-if="hasClip" class="mi" @click="pasteItem">粘贴到此{{ isLib ? '根文件' : '文件夹' }}</button>
 
-        <div class="mi group" @click.stop="toggle('sort')">
-          <span>排序</span><i class="caret" :class="{ on: sortOpen }">▸</i>
-        </div>
-        <template v-if="sortOpen">
-          <button v-for="s in sortItems" :key="s.label" class="mi sub" @click="s.rec ? sortRecursive(s.mode) : sortLevel(s.mode)">
-            {{ s.label }}
-          </button>
-        </template>
+        <button class="mi" :title="lib.physicalOrder ? '已开启：拖动排序会自动写成文件名前缀' : '开启后，拖动排序会自动把顺序写成文件名数字前缀（只改名字）'" @click="togglePhysOrder">{{ lib.physicalOrder ? '✓ ' : '' }}排序同步文件名</button>
+        <button class="mi" @click="resetOrder">重置文件夹顺序</button>
 
         <button v-if="!isLib" class="mi" @click="moveTo">移动到…</button>
-        <button class="mi" @click="exportDir">导出（含子文件夹）</button>
+        <button class="mi" @click="exportDir(false)">导出（含子文件夹）</button>
+        <button class="mi" @click="exportDir(true)">导出（去掉数字前缀）</button>
         <button class="mi" @click="findDupes">查找重复…</button>
         <button v-if="isLib" class="mi" @click="repairThumbs">修复缩略图…</button>
-        <button v-if="isLib" class="mi" @click="stripPrefixes">清除排序编号…</button>
-        <button class="mi" title="手动排序时把顺序写成文件名数字前缀（会真实改名）" @click="togglePhysOrder">{{ lib.physicalOrder ? '✓ ' : '' }}排序同步文件名</button>
 
         <div class="mi group" @click.stop="toggle('color')">
           <span>图标颜色</span><i class="caret" :class="{ on: colorOpen }">▸</i>

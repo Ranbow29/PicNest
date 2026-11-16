@@ -1,9 +1,40 @@
 import { defineStore } from 'pinia'
+import { markRaw } from 'vue'
 import { deltaE76, deltaE2000, isGrayPalettes } from '../lib/eagleColor'
 import { collectiveShake } from '../lib/iconMotion'
 import { emitPluginEvent } from '../lib/plugins'
 import { isTextPath } from '../lib/fileKinds'
-import { api, fileUrl } from '../api'
+import { api, fileUrl, onFsDirChanged } from '../api'
+
+/* 诊断上报：走已缓存的 invoke。以前每次调用都 dynamic import('@tauri-apps/api/core')，
+   一次导航要付 3~4 次模块解析 + IPC。
+   2026-11-14：又发现原版 Electron 根本没有这套 diag 上报（grep 原版 api.js/store 为 0 命中），
+   属于新版独有的纯冗余：一次导航多 4–5 次 IPC 往返，IPC 堵塞时还会跟着排队。
+   现在默认不发：要开就在 DevTools 里 `localStorage.picnestDebug = '1'` 再刷新。 */
+let _diagEnabled = null
+const diagEnabled = () => {
+  if (_diagEnabled === null) {
+    try { _diagEnabled = localStorage.getItem('picnestDebug') === '1' } catch { _diagEnabled = false }
+  }
+  return _diagEnabled
+}
+
+let _diagInvoke = null
+export function diagLog(msg) {
+  if (!diagEnabled()) return
+  try {
+    const p = window.picrand?.diagEvent
+    if (typeof p === 'function') { p(String(msg)); return }
+    if (_diagInvoke === null) {
+      const inv = window.__TAURI_INTERNALS__?.invoke
+      _diagInvoke = typeof inv === 'function' ? inv : false
+    }
+    if (_diagInvoke) {
+      const r = _diagInvoke('diag_event', { msg: String(msg) })
+      if (r && typeof r.catch === 'function') r.catch(() => {})
+    }
+  } catch { /* 诊断永不影响主流程 */ }
+}
 
 // 图巢核心状态：根文件夹（物理目录）→ 派生目录树 → 子目录图片
 // 从拖拽数据里提取图片 URL（浏览器拖图入库，Eagle 同款细节）
@@ -39,7 +70,13 @@ function defaultAiDupState() {
   return {
     configLoaded: false, baseUrl: '', model: '', hasKey: false, encrypted: true,
     models: [], modelsLoading: false, modelsError: '',
-    allowed: false, maxPairs: 40, pricePerM: aiPriceDefault(),
+    // 勾选状态要持久化：之前写死 false，每次重开 app 都回到未勾选，
+    // 而「开始 AI 查重」按钮的条件是 `!hasKey || !allowed`，于是永久置灰，
+    // 表现就是“AI 查重根本不走 AI”。
+    allowed: (() => {
+      try { return localStorage.getItem('picnest.aiDupAllowed') === '1' } catch { return false }
+    })(),
+    maxPairs: 40, pricePerM: aiPriceDefault(),
     loading: false, testing: false, canceling: false,
     note: '', noteErr: false,
     progress: { phase: '', done: 0, total: 0, candidates: 0 },
@@ -78,6 +115,13 @@ function dupPreserveDefault() {
   try { return localStorage.getItem('picnest.dupPreserveExt') !== '0' } catch { return true }
 }
 
+/* 位置的唯一指纹：根 / 视图 / 目录 / 多选文件夹。
+   只要它变了，说明界面已经换了地方，旧 images 就不能再画到网格上。 */
+function locKeyOf(s) {
+  const sel = s.selectionView && s.selectedDirs?.length ? s.selectedDirs.join('|') : ''
+  return `${s.activeRootId}::${s.view}::${s.currentDirRel ?? ''}::${sel}`
+}
+
 export const useLibrary = defineStore('library', {
   state: () => ({
     roots: [],            // [{id, path, display_name}]
@@ -106,13 +150,30 @@ export const useLibrary = defineStore('library', {
     hoverLabels: true,    // 网格悬停显字（M5 视图选项可关）
     showSubfolderContent: localStorage.getItem('picnest.showSubfolderContent') !== '0', // 文件夹视图：是否包含子文件夹图片
     layout: localStorage.getItem('picnest.layout') || 'grid',       // grid | justified | masonry（持久化）
-    hideOrderNumbers: localStorage.getItem('picnest.hideOrderNumbers') !== '0', // 显示层隐藏 01_ 排序前缀（默认开）
+    /* 2026-11-14：排序支持写进文件名（physicalOrder 开关），所以界面也需要能把 01_ 前缀隐藏起来。
+       hideOrderNumbers 默认开：磁盘名保留前缀，界面只显示后面的真名。 */
+    hideOrderNumbers: localStorage.getItem('picnest.hideOrderNumbers') !== '0',
     zoom: Number(localStorage.getItem('picnest.zoom')) || 1,          // 顶栏缩放滑条（持久化）
     sortMode: localStorage.getItem('picnest.sortMode') || 'manual',    // manual 默认/最重要；name|added|mtime|size|dims|rating|random
-    physicalOrder: localStorage.getItem('picnest.physicalOrder') === '1', // 手动排序同步改文件名前缀（实验，默认关）
+    /* 拖动排序后自动写文件名（只改名字，不动内容）。**默认关**：
+       排序默认只存元数据；想要磁盘名也跟着排，右击根文件勾「排序同步文件名」。 */
+    physicalOrder: localStorage.getItem('picnest.physicalOrder') === '1',
+    /* 收到新图后，把目标文件夹提到同级第一位。只写 picnest_dir_order，不改文件名。
+       关掉就回到“新目录排最后、靠拖拽调”。 */
+    autoPinOnImport: localStorage.getItem('picnest.autoPinOnImport') !== '0',
     sortAsc: localStorage.getItem('picnest.sortAsc') !== '0',
     randomNonce: 0,       // 随机排序的种子换代
     layoutTick: 0,        // 尺寸回填后触发重排
+    /* 当前 images 数组到底属于哪个位置：切目录/切视图后立刻失配，
+       网格据此停止渲染旧图（宁可空白骨架，也不能让新标题配旧图）。 */
+    loadedLocKey: '',
+    /* 最近看过的目录列表缓存（键=根|视图|目录）：切回上一个文件夹时直接秒出，
+       不再走「先 60 行再补全量」的中间态，避免列表条数跳变导致的不跟手 */
+    _listCache: new Map(),
+    _inflightAbort: null,
+    /* 切换后超过 200ms 还没拿到数据才算「慢」：快切换时保留旧图无缝替换，
+       不让网格闪成骨架屏 */
+    pendingSlow: false,
     dimsFilling: false,
     thumbsFilling: false,
     lightbox: { open: false, path: null },
@@ -170,6 +231,9 @@ export const useLibrary = defineStore('library', {
 
   getters: {
     activeRoot: (s) => s.roots.find((r) => r.id === s.activeRootId) || null,
+    /* 网格数据是否对得上当前面包屑：对不上就当作「还没载入」 */
+    gridFresh: (s) => s.loadedLocKey !== '' && s.loadedLocKey === locKeyOf(s),
+    gridPending: (s) => !(s.loadedLocKey !== '' && s.loadedLocKey === locKeyOf(s)),
     memoryKey: (s) => (s.activeRootId == null ? '' : `${s.activeRootId}/${s.currentDirRel ?? ''}`),
     canGoBack: (s) => s.navIndex > 0,
     canGoForward: (s) => s.navIndex >= 0 && s.navIndex < s.navHistory.length - 1,
@@ -186,18 +250,95 @@ export const useLibrary = defineStore('library', {
 
   actions: {
     async init() {
+      const diag = diagLog
+      if (typeof window !== 'undefined') window.__picnestStore = this
+      /* 2026-11-16：默认回到「关」。之前那次一次性把老配置翻成了 '1'，这里翻回来（只跑一次）。 */
+      try {
+        if (localStorage.getItem('picnest.physicalOrderOffV3') !== '1') {
+          localStorage.setItem('picnest.physicalOrderOffV3', '1')
+          localStorage.setItem('picnest.physicalOrder', '0')
+          this.physicalOrder = false
+        }
+      } catch {}
+      if (typeof window !== 'undefined') window.__picnestLib = this
+      diag('init() start')
+      /* 启动后延迟清一次孤儿缩略图（防止历史包袱积成磁盘风暴）。
+         延迟 30s 避开首屏；限流 400 个/次，不会成为新的 IO 峰值。 */
+      setTimeout(() => {
+        window.picrand?.cleanupOrphanThumbs?.(400).catch(() => {})
+      }, 30000)
       try {
         // 主进程种子导入是异步的；轮询等根出现
         for (let i = 0; i < 60 && !this.roots.length; i++) {
           this.roots = await api.getAllFolders()
           if (!this.roots.length) await new Promise((r) => setTimeout(r, 1500))
         }
+        diag(`roots loaded count=${this.roots.length}`)
+        /* 文件系统监听：库内目录有新增/删除/改名时自动同步。
+           以前只在「切进目录 1.2 秒后」扫一次，停在目录里丢图不会自己更新。
+           现在交给 Rust 侧的 ReadDirectoryChangesW（不轮询、不读文件内容）。 */
+        // 防抖后的真实同步（事件合并到 350ms 窗口后只跑一次）
+        const runFsSync = async () => {
+          if (this._fsSyncing) {
+            this._fsSyncTimer = setTimeout(runFsSync, 200)
+            return
+          }
+          this._fsSyncing = true
+          try {
+            const cur = this.currentDirRel || ''
+            const abs = this.absPathOf(cur)
+            if (!abs) return
+            // 事件本身就是「磁盘变了」的信号。删除已经由 Rust 侧 watcher 直接软删（所以
+            // syncDirSnapshot 可能返回 false），不能再拿返回值二次判断是否刷新。
+            await api.syncDirSnapshot(this.activeRootId, abs)
+            try { this._listCache?.clear() } catch {}
+            await this.refreshTree()
+            await this.loadImages()
+          } catch { /* 静默 */ } finally {
+            this._fsSyncing = false
+            try { this._fsPendingDirs?.clear() } catch {}
+          }
+        }
+        try {
+          onFsDirChanged(async (payload) => {
+            const dirs = Array.isArray(payload?.dirs) ? payload.dirs : []
+            if (!dirs.length) return
+            // 内部操作（改名/拖拽同步）期间抑制：否则改名产生的事件会把刚写好的顺序又盖回去
+            if (this._suppressFsSyncUntil && Date.now() < this._suppressFsSyncUntil) return
+            const root = String(this.activeRoot?.path || '')
+            if (!root) return
+            const norm = (x) => String(x).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+            const rn = norm(root)
+            const rels = []
+            for (const d of dirs) {
+              const dn = norm(d)
+              if (dn === rn) rels.push('')
+              else if (dn.startsWith(rn + '/')) rels.push(dn.slice(rn.length + 1))
+            }
+            if (!rels.length) return
+            const cur = this.currentDirRel || ''
+            const affected = rels.some(
+              (r) => r === cur || (cur && cur.startsWith(r + '/')) || (r && r.startsWith(cur + '/')),
+            )
+            if (!affected) return
+            /* 2026-11-15：事件防抖。批量导入/批量改名会打出一串 Create/Remove，
+               每条都跑一遍 sync + refreshTree(3 次 IPC) + loadImages(全量) 的话，
+               就是「用一阵子就卡一下」的来源。合并到 350ms 窗口，只跑最后一次。 */
+            if (!this._fsPendingDirs) this._fsPendingDirs = new Set()
+            for (const r of rels) this._fsPendingDirs.add(r)
+            if (this._fsSyncTimer) clearTimeout(this._fsSyncTimer)
+            this._fsSyncTimer = setTimeout(() => runFsSync(), 350)
+          })
+        } catch { /* 监听失败不影响主流程 */ }
         if (this.roots.length && this.activeRootId == null) {
           /* 记住上次使用的资料库；失效（被移除）则回退第一个 */
           const saved = Number(localStorage.getItem('picnest.activeRootId'))
           this.activeRootId = this.roots.some((r) => r.id === saved) ? saved : this.roots[0].id
           this.syncCollectRoot()
+          const rootIdInit = this.activeRootId
+          diag(`refreshTree(${rootIdInit}) start`)
           await this.refreshTree()
+          diag('refreshTree done')
           /* 恢复上次浏览位置：视图 + 文件夹（目录已不存在则回退全部） */
           const savedView = localStorage.getItem('picnest.lastView') || 'all'
           const savedDir = localStorage.getItem('picnest.lastDirRel') || ''
@@ -213,6 +354,15 @@ export const useLibrary = defineStore('library', {
           if (savedView === 'all' && savedDir && dirExists) await this.openDir(savedDir)
           else if (savedView !== 'all' && ['recent', 'random', 'trash', 'uncategorized'].includes(savedView)) await this.switchView(savedView)
           else await this.openDir(null)
+          /* 元数据兼容/同步放后台异步执行，不阻塞首屏出图 */
+          setTimeout(() => {
+            window.picrand?.picnestRootMetaEnsure?.(rootIdInit)?.then((res) => {
+              if (res?.imported && this.activeRootId === rootIdInit) {
+                this.refreshTree().catch(() => {})
+                this.refreshTags().catch(() => {})
+              }
+            }).catch(() => {})
+          }, 1200)
         }
         // 重启后恢复所有根的文件监听 + 后台增量同步（外部变动/录入永远可见）
         for (const r of this.roots) {
@@ -220,10 +370,10 @@ export const useLibrary = defineStore('library', {
           if (!this._watchStarted.has(r.path)) {
             this._watchStarted.add(r.path)
             api.startWatcher(r.path).catch(() => {})
-            api.syncFolderSnapshot(r.path).then(() => { this.refreshTree(); this.loadImages() }).catch(() => {})
+            api.syncFolderSnapshot(r.path).then((changed) => {
+              if (changed) { this.refreshTree(); this.loadImages() }
+            }).catch(() => {})
           }
-          /* 根目录没有 .picnest/meta.json 就自动建一个（有则不动） */
-          try { window.picrand?.picnestRootMetaEnsure?.(r.id) } catch { /* 静默 */ }
         }
         this.refreshTags().catch(() => {})
         // 主进程推送种子导入（验收钩子）：走正常导入链路
@@ -276,8 +426,8 @@ export const useLibrary = defineStore('library', {
           if (!this.dupFinder.open || !this.dupFinder.ai.loading) return
           this.dupFinder.ai.progress = { ...this.dupFinder.ai.progress, ...(d || {}) }
         })
-        // 色板后台构建/回填（颜色筛选与详情色板共用；此前无调用点=颜色筛选恒空，已修）
-        this.ensurePalettes().catch(() => {})
+        // 色板后台构建/回填（若 loadImages 尚未启动才兜底拉起）
+        if (!this.paletteBuild.running) this.ensurePalettes().catch(() => {})
       } catch (e) { this.error = String(e?.message || e) }
     },
 
@@ -443,6 +593,14 @@ export const useLibrary = defineStore('library', {
       await this.loadImages()
       this.refreshTags().catch(() => {})
       if (opts.record !== false) this.recordNav(this.currentLocation())
+      setTimeout(() => {
+        window.picrand?.picnestRootMetaEnsure?.(id)?.then((res) => {
+          if (res?.imported && this.activeRootId === id) {
+            this.refreshTree().catch(() => {})
+            this.refreshTags().catch(() => {})
+          }
+        }).catch(() => {})
+      }, 1000)
     },
 
     /* ---- 资料库文件夹管理 ---- */
@@ -564,7 +722,7 @@ export const useLibrary = defineStore('library', {
         })
         if (!ok) return { ok: false, canceled: true }
       }
-      const agg = { ok: true, copied: 0, skipped: 0, failed: 0, unsupported: 0, replaced: 0, dirs: [], errors: [] }
+      const agg = { ok: true, copied: 0, registered: 0, skipped: 0, failed: 0, unsupported: 0, replaced: 0, dirs: [], errors: [] }
       try {
         if (clip.kind === 'dirs') {
           for (const src of clip.paths) {
@@ -573,6 +731,7 @@ export const useLibrary = defineStore('library', {
             if (r?.ok) {
               agg.dirs.push(r)
               agg.copied += r.copied || 0
+              agg.registered += r.registered || 0
               agg.skipped += r.skipped || 0
               agg.failed += r.failed || 0
               agg.unsupported += r.unsupported || 0
@@ -595,15 +754,16 @@ export const useLibrary = defineStore('library', {
             agg.errors.push(r?.error || '复制失败')
           }
         }
-        if (agg.copied > 0 || agg.dirs.length > 0) {
+        if (agg.copied > 0 || agg.registered > 0 || agg.dirs.length > 0) {
           const rootRec = this.roots.find((x) => x.id === t.rootId)
           if (rootRec) await api.syncFolderSnapshot(rootRec.path).catch(() => {})
           if (t.rootId === this.activeRootId) { await this.refreshTree(); await this.loadImages() }
         }
         const parts = []
         if (agg.copied) parts.push(`粘贴 ${agg.copied} 张`)
+        if (agg.registered) parts.push(`补录 ${agg.registered} 张`)
         if (agg.dirs.length) parts.push(`文件夹 ${agg.dirs.length} 个`)
-        if (agg.skipped) parts.push(`跳过 ${agg.skipped}`)
+        if (agg.skipped) parts.push(`已在库中（跳过重复） ${agg.skipped} 张`)
         if (agg.replaced) parts.push(`替换旧图 ${agg.replaced}`)
         if (agg.failed) parts.push(`失败 ${agg.failed}`)
         if (agg.canceled) parts.push('已取消')
@@ -655,6 +815,17 @@ export const useLibrary = defineStore('library', {
       return r
     },
 
+    async resetDirOrder(rootId, rel) {
+      const rid = rootId || this.activeRootId
+      try {
+        await api.dirOrderSet(rid, rel || '', [])
+        await this.refreshTree()
+        this.showNote('已重置文件夹为 01_ 02_ 自然顺序', [], 'ok')
+      } catch (e) {
+        this.showNote(String(e?.message || e), [], 'error')
+      }
+    },
+
     async sortDirRecursive(rel, mode) {
       const r = await api.dirSortRecursive(this.absPathOf(rel), rel || '', mode)
       if (r?.ok) { await this.refreshTree(); this.scheduleRootMetaSave() }
@@ -662,8 +833,8 @@ export const useLibrary = defineStore('library', {
       return r
     },
 
-    async exportDir(rel) {
-      const r = await api.exportDir(this.absPathOf(rel))
+    async exportDir(rel, stripPrefix = false) {
+      const r = await api.exportDir(this.absPathOf(rel), stripPrefix)
       return r
     },
     /* 资料库区的绝对路径操作（不依赖当前活动库） */
@@ -690,10 +861,10 @@ export const useLibrary = defineStore('library', {
       if (r?.ok && rootId === this.activeRootId) await this.refreshTree()
       return r
     },
-    async exportLibrary(rootId) {
+    async exportLibrary(rootId, stripPrefix = false) {
       const root = this.roots.find((r) => r.id === rootId)
       if (!root) return { ok: false, error: '根文件不存在' }
-      return api.exportDir(root.path)
+      return api.exportDir(root.path, stripPrefix)
     },
 
     /* 文件夹统计（详情面板）：当前库 + 若干 rel，union 去重 */
@@ -722,21 +893,185 @@ export const useLibrary = defineStore('library', {
       if (this.activeRootId == null) return null
       try { return await window.picrand?.picnestRootMetaSave?.(this.activeRootId) } catch { return null }
     },
-    /* 物理排序开关：手动排序时把顺序写进文件名前缀（默认关闭；改名会真实改磁盘文件） */
+    /* 同步到文件夹（库 → 磁盘）：把当前文件夹（含所有子文件夹）的图片顺序写成文件名前缀。
+       手动触发、先预览。这是旧「排序同步文件名」的正确形态。 */
+    async syncFolderToDisk(rel, opts = {}) {
+      if (this.activeRootId == null) return { ok: false, error: '未选资料库' }
+      const target = rel == null ? (this.currentDirRel || '') : rel
+      if (!target) return { ok: false, error: '请先选一个文件夹（库根不支持）' }
+      let plan = null
+      try {
+        plan = await window.picrand.picnestSyncFolderToDisk(this.activeRootId, target, true)
+      } catch (e) {
+        return { ok: false, error: String(e?.message || e) }
+      }
+      if (!plan?.ok) return { ok: false, error: plan?.error || '预览失败' }
+      if (!plan.changed) {
+        this.showNote('这个文件夹里的文件名已经是库里的顺序，不需要同步')
+        return { ok: true, changed: 0 }
+      }
+      const sample = (plan.preview || []).slice(0, 4).map((x) => `${x.old}  →  ${x.new}`)
+      const details = [...sample]
+      if (plan.changed > sample.length) details.push(`…共 ${plan.changed} 个（此处只列前 ${sample.length} 个）`)
+      details.push(`扫描了 ${plan.dirs} 个子文件夹`)
+      details.push('只改文件名前的数字前缀；缩略图缓存会一起迁移，不会变灰卡')
+      const ok = await this.askConfirm({
+        title: `把库里的顺序写入磁盘文件名？（${plan.changed} 张）`,
+        message: '这是「库 → 磁盘」：按图巢里当前的排列，给文件加上 01_ 数字前缀，让资源管理器里看到的顺序和图巢一致。',
+        details,
+        confirmText: '写入文件名',
+      })
+      if (!ok) return { ok: false, canceled: true }
+      this.taskProgress = { visible: true, kind: 'rename', label: '正在同步到文件夹', done: 0, total: plan.changed, cancelable: false, canceling: false }
+      try {
+        const r = await window.picrand.picnestSyncFolderToDisk(this.activeRootId, target, false)
+        try { this._listCache?.clear() } catch {}
+        await this.refreshTree()
+        await this.loadImages()
+        const parts = [`已改 ${r?.renamed || 0} 个文件名`]
+        if (r?.failed) parts.push(`失败 ${r.failed}`)
+        this.showNote(parts.join(' · '), (r?.errors || []).slice(0, 3).map((t) => ({ label: '失败', text: t })), r?.failed ? 'error' : 'ok')
+        return r || { ok: false }
+      } catch (e) {
+        this.showNote(String(e?.message || e), [], 'error')
+        return { ok: false, error: String(e?.message || e) }
+      } finally {
+        this.taskProgress.visible = false
+      }
+    },
+
+    /* 把当前顺序写进文件名（手动触发，先预览再执行）。
+       这是替代旧「排序同步文件名」开关的正路：低频、可控、带缩略图缓存迁移。 */
+    async writeOrderToFilenames() {
+      if (this.activeRootId == null) return { ok: false, error: '未选资料库' }
+      const dirRel = this.currentDirRel || ''
+      if (!dirRel) return { ok: false, error: '请先进一个文件夹（库根不支持写文件名）' }
+      const paths = this.images.map((i) => i.file_path).filter(Boolean)
+      if (!paths.length) return { ok: false, error: '当前视图没有图片' }
+
+      // 1) 预览（不碰磁盘）
+      let plan = null
+      try {
+        plan = await window.picrand.picnestWriteOrderToFilenames(this.activeRootId, dirRel, paths, true)
+      } catch (e) {
+        return { ok: false, error: String(e?.message || e) }
+      }
+      if (!plan?.ok) return { ok: false, error: plan?.error || '预览失败' }
+      if (!plan.changed) {
+        this.showNote('文件名已经是当前顺序，不需要修改')
+        return { ok: true, changed: 0 }
+      }
+
+      // 2) 确认
+      const sample = (plan.preview || []).slice(0, 4).map((x) => `${x.old}  →  ${x.new}`)
+      const details = [...sample]
+      if (plan.changed > sample.length) details.push(`…共 ${plan.changed} 个（此处只列前 ${sample.length} 个）`)
+      details.push('只改文件名前的数字前缀；缩略图缓存会一起迁移，不会变灰卡')
+      const ok = await this.askConfirm({
+        title: `把顺序写进文件名？（${plan.changed} / ${plan.total}）`,
+        message: '文件内容不动，只调整名字前面的 01_ 数字前缀，让资源管理器里看到的顺序和图巢一致。',
+        details,
+        confirmText: '写入文件名',
+      })
+      if (!ok) return { ok: false, canceled: true }
+
+      // 3) 执行
+      this.taskProgress = { visible: true, kind: 'rename', label: '正在写入文件名', done: 0, total: plan.changed, cancelable: false, canceling: false }
+      try {
+        const r = await window.picrand.picnestWriteOrderToFilenames(this.activeRootId, dirRel, paths, false)
+        // 路径全变了：目录列表 LRU 必须作废，否则会继续展示旧文件名
+        try { this._listCache?.clear() } catch {}
+        await this.refreshTree()
+        await this.loadImages()
+        const parts = [`已改 ${r?.renamed || 0} 个文件名`]
+        if (r?.failed) parts.push(`失败 ${r.failed}`)
+        this.showNote(parts.join(' · '), (r?.errors || []).slice(0, 3).map((t) => ({ label: '失败', text: t })), r?.failed ? 'error' : 'ok')
+        return r || { ok: false }
+      } catch (e) {
+        this.showNote(String(e?.message || e), [], 'error')
+        return { ok: false, error: String(e?.message || e) }
+      } finally {
+        this.taskProgress.visible = false
+      }
+    },
+
+    /* 物理排序开关（默认关）：开启后，拖动排序停下来 800ms 会自动把顺序写成文件名数字前缀。
+       注意：只改文件名、不动内容；缩略图缓存会跟着迁移；只处理当前这一层。 */
     togglePhysicalOrder() {
       this.physicalOrder = !this.physicalOrder
       localStorage.setItem('picnest.physicalOrder', this.physicalOrder ? '1' : '0')
-      this.showNote(this.physicalOrder
-        ? '已开启：手动排序会同步改文件名（数字前缀）'
-        : '已关闭：排序只存在 PicNest 元数据里')
+      this.showNote(
+        this.physicalOrder
+          ? '已开启：拖动排序后会自动把顺序写成文件名数字前缀（只改名字，不动内容）'
+          : '已关闭：排序只存在图巢里，不改磁盘文件名',
+      )
     },
-    async applyImageOrderPhysical(paths) {
-      if (!this.physicalOrder || this.activeRootId == null) return null
-      try { return await window.picrand.picnestPhysicalOrderImages(this.activeRootId, [...paths]) } catch { return null }
+    /* 拖完顺序或新图入库 → 防抖 800ms → 自动写文件名。打断、出错都静默，不影响拖拽体验。 */
+    schedulePhysicalSync(targetRootId = null, targetRel = null) {
+      if (!this.physicalOrder) return
+      clearTimeout(this._physSyncTimer)
+      this._physSyncTimer = setTimeout(() => {
+        this.syncOrderToFilesSilent(targetRootId, targetRel).catch(() => {})
+      }, 800)
     },
-    async applyDirOrderPhysical(parentRel, names) {
-      if (!this.physicalOrder || this.activeRootId == null) return null
-      try { return await window.picrand.picnestPhysicalOrderDirs(this.activeRootId, parentRel || '', [...names]) } catch { return null }
+    /* 静默版：不弹预览不弹确认（开关已授权）。
+       关键：改名后**不能整表 loadImages**（会清选中、重置滚动、重放入场波），
+       而是用后端返回的 map 在本地替换路径字段——旧版纪律里的「增量优先」。 */
+    async syncOrderToFilesSilent(targetRootId = null, targetRel = null) {
+      if (!this.physicalOrder) return null
+      const rid = targetRootId ?? this.activeRootId
+      const rel = targetRel !== null && targetRel !== undefined ? targetRel : (this.currentDirRel ?? '')
+      if (rid == null) return null
+      /* 库根/未分类/回收站不做自动改名：那里一次会重编所有子目录的号，
+         而且没有“所属文件夹”这个概念，改了反而奇怪。 */
+      if (!rel) return null
+      if (this.view === 'trash' || this.selectionView) return null
+
+      const isCurrentView = rid === this.activeRootId && (rel || '') === (this.currentDirRel || '')
+      let paths = []
+      if (isCurrentView) {
+        paths = this.images.map((i) => i.file_path).filter(Boolean)
+      } else {
+        try {
+          const list = await api.imagesByDir(rid, rel, 0, 10000, 'id', false, false)
+          paths = (list || []).map((x) => x.file_path).filter(Boolean)
+        } catch {
+          return null
+        }
+      }
+      if (!paths.length) return null
+      try {
+        // 改名会触发大量文件事件；期间屏蔽 watcher 回写，避免“写完又被旧顺序覆盖”
+        this._suppressFsSyncUntil = Date.now() + 6000
+        const r = await window.picrand.picnestWriteOrderToFilenames(rid, rel, paths, false)
+        const map = Array.isArray(r?.map) ? r.map : []
+        if (!map.length) return r
+        if (isCurrentView) {
+          // 本地增量：只改 file_path / thumbnail_path，不动数组顺序、不清选中
+          const byOld = new Map(map.map((x) => [x.old, x]))
+          let touched = false
+          for (const img of this.images) {
+            const hit = byOld.get(img.file_path)
+            if (!hit) continue
+            img.file_path = hit.new
+            // 文件名/显示名也得跟着换，否则界面上还是旧名字（要等重进目录才刷新）
+            img.file_name = String(hit.new).split(/[\\/]/).pop()
+            if (hit.thumb) img.thumbnail_path = hit.thumb
+            touched = true
+          }
+          if (touched) {
+            this.suppressWaveUntil = Date.now() + 700
+            this.layoutTick++
+          }
+        }
+        // 列表缓存里存的是旧路径，必须作废（下次进目录重新查）
+        try { this._listCache?.clear() } catch {}
+        return r
+      } catch {
+        return null
+      } finally {
+        this._suppressFsSyncUntil = Date.now() + 1500
+      }
     },
     fixRelsAfterDirRename(map) {
       if (!Array.isArray(map) || !map.length) return
@@ -752,23 +1087,8 @@ export const useLibrary = defineStore('library', {
       this.selectedDirs = this.selectedDirs.map(fix)
       if (this.dirAnchor != null) this.dirAnchor = fix(this.dirAnchor)
     },
-    /* 拖拽/插入后的文件夹顺序 → 可选物理改名；改名后整批刷新（路径全变了） */
-    async syncDirOrderPhysical(parentRel, names) {
-      const pr = await this.applyDirOrderPhysical(parentRel, names)
-      if (!pr) return null
-      if (pr.map?.length) {
-        this.fixRelsAfterDirRename(pr.map)
-        this.suppressSyncUntil = Date.now() + 2500
-        this.suppressWaveUntil = Date.now() + 1500
-        await this.refreshTree()
-        await this.loadImages()
-        this.scheduleRootMetaSave()
-        this.showNote(`文件夹顺序已同步到文件名（改名 ${pr.renamed} 个${pr.ok ? '' : '，部分失败'}）`)
-      } else if (!pr.ok) {
-        this.showNote(`顺序已存，但文件夹改名失败：${pr.errors?.[0] || pr.error || ''}`, [], 'error')
-      }
-      return pr
-    },
+    /* 文件夹顺序已改为纯元数据（picnest_dir_order）；以前的「同步到文件名」已废弃。 */
+    async syncDirOrderPhysical() { return null },
     /* 缩略图批量修复（缺图/缓存被清）：后台生成，进度浮条可停止 */
     async repairThumbs(rootId = this.activeRootId) {
       const rid = rootId
@@ -799,39 +1119,11 @@ export const useLibrary = defineStore('library', {
         this.taskProgress.visible = false
       }
     },
-    /* 一键清除整个根文件里我们加的 01_ 排序前缀（文件+文件夹；不改 sort_order） */
-    async stripOrderPrefixes(rootId = this.activeRootId) {
-      const rid = rootId
-      const root = this.roots.find((r) => r.id === rid)
-      if (!root) return { ok: false, error: '根文件不存在' }
-      const ok = await this.askConfirm({
-        title: '清除整个根文件的排序编号？',
-        message: '会扫描根文件下所有文件和文件夹，把名称里我们加的 01_ 前缀去掉；重名会自动加 (2)。手动排序值保留，但磁盘文件名会真实改变。',
-        details: [
-          root.path || '',
-          '物理排序开关仍开启时，下次手动拖拽会重新加编号',
-        ],
-        confirmText: '清除编号',
-        danger: true,
-      })
-      if (!ok) return { ok: false, canceled: true }
-      this.taskProgress = { visible: true, kind: 'stripPrefix', label: '正在清除排序编号', done: 0, total: 0, cancelable: false, canceling: false }
-      try {
-        const r = await window.picrand.picnestStripOrderPrefixes(rid)
-        if (!r?.ok) { this.showNote(r?.error || '清除失败', [], 'error'); return r }
-        if (rid === this.activeRootId) { await this.refreshTree(); await this.loadImages() }
-        this.scheduleRootMetaSave()
-        const parts = [`清除 ${r.renamed || 0} 个名称前缀（文件 ${r.files || 0} · 文件夹 ${r.dirs || 0}）`]
-        if (r.failed) parts.push(`失败 ${r.failed}`)
-        const details = Array.isArray(r.errors) && r.errors.length ? [{ label: '失败样本', text: r.errors.join('；') }] : []
-        this.showNote(parts.join(' · '), details, r.failed ? 'error' : 'ok')
-        return r
-      } catch (e) {
-        this.showNote(String(e?.message || e), [], 'error')
-        return { ok: false, error: String(e?.message || e) }
-      } finally {
-        this.taskProgress.visible = false
-      }
+    /* 清除 01_ 排序编号的功能已废弃（2026-11-14）：排序不再写进文件名，也就无需清除。
+       保留空实现，避免旧引用报错。 */
+    async stripOrderPrefixes() {
+      this.showNote('排序已不再修改文件名，「清除排序编号」已移除', [], 'muted')
+      return { ok: false, removed: true }
     },
     /* 把图片设为其所在文件夹的封面（子文件夹卡片用；库根散图没有卡片） */
     async setFolderCover(filePath, thumbPath) {
@@ -883,14 +1175,20 @@ export const useLibrary = defineStore('library', {
       }).catch(() => {})
       return r
     },
-    /* 从正文进入子文件夹：把左侧树的祖先层（含库根）展开，选中行随即可见 */
-    async revealDir(rel) {
+    /* 从正文进入子文件夹：把左侧树的祖先层（含库根）展开，选中行随即可见（内存即时生效，后台静默持久化，不阻塞出图） */
+    revealDir(rel) {
       if (!rel) return
-      if (this.dirMemory['']?.expanded === false) await this.patchDirMemory('', { expanded: true })
+      if (this.dirMemory['']?.expanded === false) {
+        this.dirMemory[''] = { ...this.dirMemory[''], expanded: true }
+        this.patchDirMemory('', { expanded: true }).catch(() => {})
+      }
       const parts = String(rel).split('/')
       for (let i = 1; i < parts.length; i++) {
         const p = parts.slice(0, i).join('/')
-        if (!this.dirMemory[p]?.expanded) await this.patchDirMemory(p, { expanded: true })
+        if (!this.dirMemory[p]?.expanded) {
+          this.dirMemory[p] = { ...this.dirMemory[p], expanded: true }
+          this.patchDirMemory(p, { expanded: true }).catch(() => {})
+        }
       }
     },
 
@@ -933,40 +1231,185 @@ export const useLibrary = defineStore('library', {
     },
 
     async openDir(rel, opts = {}) {
+      diagLog(`openDir rel=${rel || '(root)'}`)
       // 树上点文件夹 = 离开大图模式和特殊视图，跳进该目录浏览
       if (this.lightbox.open) this.closeLightbox()
-      collectiveShake()
       this.selectionView = false
       this.view = 'all'
-      localStorage.setItem('picnest.lastView', 'all')
-      localStorage.setItem('picnest.lastDirRel', rel || '')
       this.currentDirRel = rel ?? null
-      if (rel) await this.revealDir(rel)
+      /* 集体晃动 + lastDirRel 持久化不影响这一帧的内容：前者会同步唤醒树上每个图标
+         的 watcher，后者是同步 storage 写。挪到导航启动之后跑，点击到首帧之间不再有它们。 */
+      const shakeAndRemember = () => {
+        /* 2026-11-14：切目录时不再调 collectiveShake()。
+           实测：它让树上 60+ 个 AnimIcon 同时重启动画，宿主（Tauri 主线程）CPU 被烧到 70–80%，
+           Win32 消息泵阻塞 0.6–3s，真实鼠标点击延迟 1.3–3.3s（就是「连续换几次文件夹就变慢」）。
+           卡片入场波（.wi）不需要它，保留不动。 */
+        try {
+          localStorage.setItem('picnest.lastView', 'all')
+          localStorage.setItem('picnest.lastDirRel', rel || '')
+        } catch {}
+      }
+      if (typeof requestAnimationFrame === 'function') requestAnimationFrame(shakeAndRemember)
+      else setTimeout(shakeAndRemember, 0)
+      if (rel) this.revealDir(rel)
       await this.loadImages()
       if (opts.record !== false) this.recordNav(this.currentLocation())
+      clearTimeout(this._syncDirTimer)
+      const syncRootId = this.activeRootId
+      const syncRel = rel ?? null
+      const absDir = syncRel
+        ? this.absPathOf(syncRel)
+        : (this.roots.find((x) => x.id === syncRootId)?.path || '')
+      if (syncRootId != null && absDir) {
+        /* 1.2 秒后的补偿同步：用户此时往往已经开始滚动/看图了，
+           一跑就是 sync + 可能 refreshTree + 全量取数，那就卡一下。
+           改成 3 秒，并且在用户正在交互（最近 1.5 秒内有滚动）时再往后推。 */
+        const runSync = (delay) => {
+          this._syncDirTimer = setTimeout(() => {
+            const busy = this._lastInteractAt && Date.now() - this._lastInteractAt < 1500
+            if (busy) { runSync(800); return }
+            api.syncDirSnapshot?.(syncRootId, absDir).then((changed) => {
+              if (changed && this.activeRootId === syncRootId && this.view === 'all' && (this.currentDirRel ?? null) === syncRel) {
+                this.refreshTree()
+                this.loadImages()
+              }
+            }).catch(() => {})
+          }, delay)
+        }
+        runSync(3000)
+      }
+    },
+    async syncActiveRootOnFocus() {
+      const now = Date.now()
+      // 回窗全库快照代价很高（一次 sync + 可能 3 次 IPC + 全量取数）。
+      // 原来 6 秒节流意味着“切出去再回来”几乎必跑；放宽到 30 秒，
+      // 且页面不可见时不跑。
+      if (this._focusSyncBusy || (this._lastFocusSyncAt && now - this._lastFocusSyncAt < 30000)) return
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+      const root = this.roots.find((x) => x.id === this.activeRootId)
+      if (!root?.path) return
+      this._focusSyncBusy = true
+      this._lastFocusSyncAt = now
+      try {
+        const changed = await api.syncFolderSnapshot(root.path)
+        if (changed && this.activeRootId === root.id) {
+          await this.refreshTree()
+          await this.loadImages()
+        }
+      } catch { /* 静默 */ }
+      finally { this._focusSyncBusy = false }
     },
 
     async switchView(v, opts = {}) {
-      if (this.lightbox.open) this.closeLightbox()
-      collectiveShake()
-      this.clearDirSelection()
-      this.selectionView = false
-      this.view = v
-      localStorage.setItem('picnest.lastView', v)
-      if (v !== 'all') localStorage.setItem('picnest.lastDirRel', '')
-      this.currentDirRel = null
-      this.searchQuery = ''
-      await this.loadImages()
-      if (opts.record !== false) this.recordNav(this.currentLocation())
+      /* 防连点：视图切换会触发全库取数（实测 10774 张约 70ms）。
+         连点 10 次就是 10 次全量查询，消息泵直接被砸出 200ms。
+         同视图直接返回；不同视图做 160ms 防抖，只跑最后一次。 */
+      if (this.view === v && !opts.force) return
+      if (this._switchTimer) clearTimeout(this._switchTimer)
+      // 被取消的上一次调用必须 resolve，否则外部的 await 会永久挂着
+      if (this._switchResolve) {
+        const prev = this._switchResolve
+        this._switchResolve = null
+        prev()
+      }
+      const run = async () => {
+        this._switchTimer = null
+        if (this.lightbox.open) this.closeLightbox()
+        // 切视图后用户会立刻滚动，不再叠一层图标动画
+        this.clearDirSelection()
+        this.selectionView = false
+        this.view = v
+        localStorage.setItem('picnest.lastView', v)
+        if (v !== 'all') localStorage.setItem('picnest.lastDirRel', '')
+        this.currentDirRel = null
+        this.searchQuery = ''
+        // 平滑无感过渡：不强制置空 this.images，保留现有视觉渲染直至新数据到达
+        this.selectedPath = null
+        this.selectedPaths = []
+        this.selectionAnchor = null
+        await this.loadImages()
+        if (opts.record !== false) this.recordNav(this.currentLocation())
+      }
+      // 首屏/程序化切换（带 record:false）不等防抖窗口，立刻执行
+      if (opts.immediate || opts.record === false) return run()
+      await new Promise((resolve) => {
+        this._switchResolve = resolve
+        this._switchTimer = setTimeout(() => {
+          this._switchResolve = null
+          run().then(resolve, resolve)
+        }, 160)
+      })
     },
 
-    async loadImages() {
+    /* 目录列表缓存（LRU，最多 12 个位置） */
+    _lcGet(key) {
+      const c = this._listCache
+      if (!c || !c.has(key)) return null
+      const v = c.get(key)
+      c.delete(key)
+      c.set(key, v)
+      return v
+    },
+    _lcSet(key, list) {
+      const c = this._listCache
+      if (!c) return list
+      c.delete(key)
+      c.set(key, list)
+      while (c.size > 12) c.delete(c.keys().next().value)
+      return list
+    },
+    _lcHas(key) { return !!(this._listCache && this._listCache.has(key)) },
+
+    /* 先把首屏需要的缩略图解码好，再换屏。
+       直接换数据会让新格子先以灰底占位出现（图还没解码完），
+       原版之所以“点一下图就跟着出”，就是因为它从来没有这个中间态。 */
+    async _preloadFirst(items, n = 24, budgetMs = 450) {
+      const urls = []
+      for (const it of (items || []).slice(0, n)) {
+        const p = it && it.thumbnail_path
+        if (p && p !== 'SKIP') urls.push(fileUrl(p))
+      }
+      if (!urls.length) return
+      const jobs = urls.map((u) => new Promise((res) => {
+        const im = new Image()
+        im.onload = () => res()
+        im.onerror = () => res()
+        im.src = u
+      }))
+      await Promise.race([Promise.all(jobs), new Promise((r) => setTimeout(r, budgetMs))])
+    },
+
+    loadImages(opts = {}) {
+      if (this.activeRootId == null) return Promise.resolve()
+      clearTimeout(this._loadImagesDebounceTimer)
+      /* 原版就是直接 await，不经过 setTimeout。
+         套一层定时器会让整次导航排在主线程空闲之后（实测被拖 715ms），
+         而取数本身只需要 0–2ms。去掉。 */
+      return this._doLoadImages()
+    },
+
+    async _doLoadImages() {
       if (this.activeRootId == null) return
+      const diag = diagLog
       const gen = (this._loadGen = (this._loadGen || 0) + 1)
+      const tLoadStart = performance.now()
+      const reqKey = locKeyOf(this) // 这次请求代表的到底是哪个位置
+      /* 新一次切换先把上一次没跑完的请求打掉，否则快速连点会堆成一队，
+         最后那一次只能排在后面（实测会拖到 1 秒以上） */
+      try { this._inflightAbort && this._inflightAbort.abort() } catch {}
+      const ac = new AbortController()
+      this._inflightAbort = ac
+      clearTimeout(this._slowPendingTimer)
+      this.pendingSlow = false
+      this._slowPendingTimer = setTimeout(() => {
+        if (gen === this._loadGen) this.pendingSlow = true
+      }, 200)
       this.loading = true
+      diag(`loadImages start gen=${gen} view=${this.view} dir=${this.currentDirRel}`)
       try {
         let next = []
-        if (this.view !== 'trash' && this.trashFolders.length) this.trashFolders = []
+        let deltaCached = false // 命中缓存时已经画过了，不必再预解码
+        if (this.view !== 'trash' && this.trashFolders?.length) this.trashFolders = []
         if (this.selectionView && this.selectedDirs.length > 1) {
           /* 多选文件夹 = 合并内容视图（union 去重，全局排序） */
           next = await this.imagesInDirs(this.selectedDirs)
@@ -975,9 +1418,15 @@ export const useLibrary = defineStore('library', {
         } else if (this.view === 'random') {
           next = await window.picrand.picnestRandom(this.activeRootId, 300)
         } else if (this.view === 'trash') {
-          this.trashFolders = await api.trashFolders(this.activeRootId)
-          this.counts = await window.picrand.picnestViewCounts(this.activeRootId)
-          next = await window.picrand.picnestTrashList(this.activeRootId)
+          const [tFolders, tCounts, tList] = await Promise.all([
+            api.trashFolders(this.activeRootId),
+            window.picrand.picnestViewCounts(this.activeRootId),
+            window.picrand.picnestTrashList(this.activeRootId),
+          ])
+          if (gen !== this._loadGen) { diag(`loadImages stale gen=${gen} cur=${this._loadGen}`); return }
+          this.trashFolders = tFolders || []
+          this.counts = tCounts
+          next = tList
         } else if (this.view === 'uncategorized') {
           /* 未分类 = 库根层散图（不在任何子文件夹），排序面板可用 */
           next = await api.imagesByDir(this.activeRootId, '__loose__', 0, 100000, this.sortMode, this.sortAsc)
@@ -989,23 +1438,98 @@ export const useLibrary = defineStore('library', {
           const manualAll = inAll && this.sortMode === 'manual'
           const mode = manualAll ? 'manual' : (inAll ? 'added' : this.sortMode)
           const asc = manualAll ? this.sortAsc : (inAll ? false : this.sortAsc)
-          next = await api.imagesByDir(this.activeRootId, this.currentDirRel, 0, 100000, mode, asc, this.showSubfolderContent)
+          /* 首屏优先：先取前 60 行立刻出图，全量再补。
+             用户点开文件夹第一眼只看得到头顶几张，等 6000 行没有意义。 */
+          const cached = this._lcGet(reqKey)
+          if (cached && cached.length) {
+            /* 回切：先把上次的全量摆上去（零延迟、不跳动）
+               核对请求不阻塞——实测它偶尔会被浏览器那端卡 1～2 秒，
+               不能让一次“确认无变化”把整个加载挂在那里等。 */
+            this.images = cached
+            this.loadedLocKey = reqKey
+            this.loading = false
+            next = cached
+            deltaCached = true
+            api.imagesByDir(this.activeRootId, this.currentDirRel, 0, 100000, mode, asc, this.showSubfolderContent, ac.signal)
+              .then((fresh) => {
+                if (gen !== this._loadGen) return
+                if (!Array.isArray(fresh) || !fresh.length) return
+                const same = fresh.length === cached.length
+                  && fresh[0]?.id === cached[0]?.id && fresh[fresh.length - 1]?.id === cached[cached.length - 1]?.id
+                if (same) return
+                this.images = fresh.map(markRaw)
+                this._lcSet(reqKey, this.images)
+              })
+              .catch(() => {})
+          } else {
+          /* 单次全量，不再“先 60 再补”：那个中间态会让列表条数从 60 跳到 N，
+             网格和滚动条跟着重排一次，观感上就是“跳一下”。
+             我们取全量本来就只要几毫秒（全部视图 88ms），不值得为省那点首屏而换来一次重排。 */
+          const full = await api.imagesByDir(this.activeRootId, this.currentDirRel, 0, 100000, mode, asc, this.showSubfolderContent, ac.signal)
+          if (gen !== this._loadGen) { diag(`loadImages stale gen=${gen} cur=${this._loadGen}`); return }
+          if (!Array.isArray(full)) return // 被取消
+          next = full
+          }
+          if (!Array.isArray(next) || !next.length) this._lcSet(reqKey, [])
+          else if (!this._lcHas(reqKey)) this._lcSet(reqKey, next)
         }
-        if (gen !== this._loadGen) return // 快速切换时丢弃过期结果
-        this.images = next || []
+        if (gen !== this._loadGen) { diag(`loadImages stale gen=${gen} cur=${this._loadGen}`); return } // 快速切换时丢弃过期结果
+        diag(`loadImages got ${next?.length ?? 0} items gen=${gen}`)
+        // 预解码交给网格层的换屏闸门，store 不再阻塞（否则点击后要等半秒才跳）
+        this.images = (next || []).map(markRaw)
+        this.loadedLocKey = reqKey // 数据已就位，网格现在可以重新画了
         this.selectedPath = null
         this.selectedPaths = []
         this.selectionAnchor = null
         this.randomNonce++
-        this.fillDimsInBackground()
-        /* 色板索引跟随当前视图：切换文件夹/根/视图后必须补建，否则颜色筛选恒空（init 只覆盖启动时的文件夹） */
-        this.ensurePalettes().catch(() => {})
-        this.harvestThumbs().then(() => this.fillAllThumbsInBackground()) // 先收割存量，再单张串行补缺
+        clearTimeout(this._bgTasksTimer)
+        this._bgTasksTimer = setTimeout(() => {
+          if (gen !== this._loadGen) return
+          /* 后台补全挪到浏览器空闲时做：进场瞬间只负责把数据画出来，
+             尺寸回填/色板/缩略图不许和用户抢主线程——否则「切个文件夹」要等一两秒才落定。 */
+          const idle = window.requestIdleCallback || ((cb) => setTimeout(() => cb({ timeRemaining: () => 8 }), 300))
+          try { if (this._bgIdleId && window.cancelIdleCallback) window.cancelIdleCallback(this._bgIdleId) } catch {}
+          this._bgIdleId = idle(() => {
+            if (gen !== this._loadGen) return
+            this.fillDimsInBackground()
+            /* 色板：每轮要改 600 条响应式数据，而每次修改都会让 masonry 重算网格；
+               实测 2000 张里只有 10 张缺尺寸 —— 大目录默认不算色板，只在开了颜色筛选时才算 */
+            if (this.images.length <= 800 || this.filters.color.on || this.filters.color.gray) {
+              this.ensurePalettes().catch(() => {})
+            }
+            /* 不再做全局缩略图预填：网格已按可见区自行补图，全局预填只会
+               把 IPC 连接占满、拖慢导航（实测 images_by_dir 从 20ms 排到 2s）。 */
+            this.harvestThumbs()
+          }, { timeout: 2500 })
+        }, 600)
       } catch (e) {
-        if (gen === this._loadGen) this.error = String(e?.message || e)
+        diag(`loadImages ERROR: ${e?.message || e}`)
+        if (gen === this._loadGen) {
+          this.error = String(e?.message || e)
+          // 失败也要结束「待载入」态，否则骨架会永远停在那里
+          this.loadedLocKey = reqKey
+        }
       } finally {
-        if (gen === this._loadGen) this.loading = false
+        if (gen === this._loadGen) {
+          const cost = Math.round(performance.now() - tLoadStart)
+          if (cost > 400) diag(`SLOW load ${cost}ms dir=${this.currentDirRel} images=${this.images.length} head=${this._lcHas(reqKey) ? 'cached' : 'fresh'}`)
+          clearTimeout(this._slowPendingTimer)
+          this.pendingSlow = false
+          this.loading = false
+          diag(`loadImages finally loading=false gen=${gen}`)
+        }
       }
+    },
+
+    /* 网格重排合并器：尺寸回填 / 缩略图收割 / 加载降级都会改 layoutTick，
+       逐次自增会让万图网格反复全量重排（实测一次几十毫秒 × 数十次 = 数秒卡顿），
+       窗口期内只触发一次。 */
+    bumpLayout(delay = 220) {
+      if (this._layoutBumpTimer) return
+      this._layoutBumpTimer = setTimeout(() => {
+        this._layoutBumpTimer = null
+        this.layoutTick++
+      }, delay)
     },
 
     /* 标签：当前根的全量标签 + 图片关联；筛选面板与详情共用 */
@@ -1360,7 +1884,7 @@ export const useLibrary = defineStore('library', {
     },
     async saveAiConfig(opts = {}) {
       const ai = this.dupFinder.ai
-      if (ai.testing) return { ok: false }
+      if (ai.testing) return { ok: false, error: '正在测试连接，请稍候再保存' }
       ai.testing = true
       ai.noteErr = false
       ai.note = '保存中…'
@@ -1390,6 +1914,31 @@ export const useLibrary = defineStore('library', {
         ai.noteErr = true
         return { ok: false, error: ai.note }
       } finally { ai.testing = false }
+    },
+    persistAiAllowed(v) {
+      this.dupFinder.ai.allowed = !!v
+      try { localStorage.setItem('picnest.aiDupAllowed', v ? '1' : '0') } catch {}
+    },
+    /* 在已有扫描结果上继续查下一批（不重扫全库、不重算哈希） */
+    async aiFindDuplicatesMore() {
+      const f = this.dupFinder
+      const ai = f.ai
+      if (ai.loading || ai.testing) return
+      if (!ai.hasKey) { ai.error = '请先在 AI 设置里保存 API Key'; return }
+      ai.loading = true
+      ai.error = ''
+      const rid = f.rootId, rel = f.rel
+      try {
+        const r = await window.picrand.picnestAiDupContinue(rid, rel, ai.maxPairs)
+        if (!this.dupFinder.open || this.dupFinder.rootId !== rid || this.dupFinder.rel !== rel) return
+        if (!r?.ok) { ai.error = r?.error || '继续查重失败'; return }
+        ai.groups = r.groups || []
+        ai.stats = r.stats || null
+      } catch (e) {
+        ai.error = String(e?.message || e)
+      } finally {
+        ai.loading = false
+      }
     },
     async aiFindDuplicates() {
       const f = this.dupFinder
@@ -1566,34 +2115,65 @@ export const useLibrary = defineStore('library', {
       return false
     },
     colorMatch(img) {
-      /* 对齐 Eagle 搜索窗实时版 $scope.colorFilter（用户体感那套，比主进程严格版宽）：
-         ① 主色占比 <25% 淘汰 → ② pal[0]/pal[1] 精确相等 → ③ ratio>33 主色 DeltaE 双阈值
-         → ④ 白底特例（主色>50 且近白，次色>8 即可参与）→ ⑤ 次色 ratio>33 DeltaE 双阈值 */
-      const pal = this.palettes[img.file_path]
+      /* 合并旧版未聚类的细桶色板，并在归一化占比后按准确度 (5..40) 做 CIEDE2000 + DeltaE76 匹配 */
+      const rawPal = this.palettes[img.file_path]
       const c = this.filters.color
-      if (!pal || !pal.length) return false
-      if (c.gray && isGrayPalettes(pal)) return true
+      if (!rawPal || !rawPal.length) return false
+      if (c.gray && isGrayPalettes(rawPal)) return true
       if (!c.value) return false
       const v = c.value
       /* 精确命中任意色板（点图自身色板/吸到同色）——不受占比门槛限制，原图必保 */
-      for (const p of pal) {
+      for (const p of rawPal) {
         if (p.r === v[0] && p.g === v[1] && p.b === v[2]) { this.colorDist[img.file_path] = 0.01; return true }
       }
+      /* 兼容旧 SQLite 中未合并的 24-step 细桶色板（主色 < 22%）：按欧氏距离 < 48 贪心合并并按可观测总占比归一化 */
+      let pal = rawPal
+      if ((rawPal[0]?.percent ?? 0) < 22 && rawPal.length > 1) {
+        const sorted = [...rawPal].sort((a, b) => (b.percent ?? 0) - (a.percent ?? 0))
+        const totalObserved = sorted.reduce((s, x) => s + (x.percent ?? 0), 0)
+        const clusters = []
+        for (const p of sorted) {
+          const pct = p.percent ?? 0
+          let hit = null
+          for (const cl of clusters) {
+            const dr = p.r - cl.r, dg = p.g - cl.g, db = p.b - cl.b
+            if (dr * dr + dg * dg + db * db < 48 * 48) { hit = cl; break }
+          }
+          if (hit) {
+            const w = hit.percent + pct
+            if (w > 0) {
+              hit.r = Math.round((hit.r * hit.percent + p.r * pct) / w)
+              hit.g = Math.round((hit.g * hit.percent + p.g * pct) / w)
+              hit.b = Math.round((hit.b * hit.percent + p.b * pct) / w)
+              hit.percent = w
+            }
+          } else {
+            clusters.push({ r: p.r, g: p.g, b: p.b, percent: pct })
+          }
+        }
+        clusters.sort((a, b) => b.percent - a.percent)
+        const scale = totalObserved > 5 && totalObserved < 65 ? 85 / totalObserved : 1
+        pal = clusters.map((cl) => ({ r: cl.r, g: cl.g, b: cl.b, percent: Math.min(100, cl.percent * scale) }))
+      }
       const r0 = pal[0]?.percent ?? 0
-      if (r0 < 25) return false
       const acc = c.accuracy ?? 20
+      const d76Limit = acc * 2.2 + 25
       const test = (p, extra) => {
         const d2000 = deltaE2000(v, [p.r, p.g, p.b])
         const d76 = deltaE76(v, [p.r, p.g, p.b])
-        if (d2000 < acc && d76 < acc + 50) { this.colorDist[img.file_path] = d76 + (extra || 0); return true }
+        if (d2000 < acc && d76 < d76Limit) {
+          this.colorDist[img.file_path] = d76 + (extra || 0)
+          return true
+        }
         return false
       }
-      if (r0 > 33 && test(pal[0])) return true
-      if (r0 > 50 && pal[1] && (pal[1].percent ?? 0) > 8) {
+      if (r0 > 20 && test(pal[0])) return true
+      if (r0 > 45 && pal[1] && (pal[1].percent ?? 0) > 6) {
         const white = deltaE2000([255, 255, 255], [pal[0].r, pal[0].g, pal[0].b])
-        if (white < 5 && test(pal[1], 5)) return true
+        if (white < 8 && test(pal[1], 5)) return true
       }
-      if (pal[1] && (pal[1].percent ?? 0) > 33 && test(pal[1])) return true
+      if (pal[1] && (pal[1].percent ?? 0) > 20 && test(pal[1], 4)) return true
+      if (acc >= 26 && pal[2] && (pal[2].percent ?? 0) >= 12 && test(pal[2], 10)) return true
       return false
     },
     applyFilters(images) {
@@ -1611,7 +2191,7 @@ export const useLibrary = defineStore('library', {
         const picked = new Set(f.tags)
         arr = arr.filter((i) => (this.imageTags[i.id] || []).some((id) => picked.has(id)))
       }
-      if ((f.color.on || f.color.gray)) {
+      if (f.color && (f.color.on || f.color.gray)) {
         this.colorDist = {}
         arr = arr.filter((i) => this.colorMatch(i))
       }
@@ -1640,43 +2220,61 @@ export const useLibrary = defineStore('library', {
     },
 
     // ---- 色板索引：渐进构建（分步防挂起）----
-    async ensurePalettes() {      if (this.paletteBuild.running) return
+    async ensurePalettes() {
+      const myGen = (this._palGen = (this._palGen || 0) + 1)
       this.paletteBuild.running = true
       try {
-        for (let i = 0; i < 400; i++) {
-          /* 文本没有色板：直接跳过（否则每轮都算一次、白耗 400 轮 IPC） */
-          const missing = this.images.filter((x) => !this.palettes[x.file_path] && !isTextPath(x.file_path)).map((x) => x.file_path)
-          if (!missing.length) { this.paletteBuild.done = this.paletteBuild.total = this.images.length; break }
-          /* DB 真缺（NULL）的才现算；DB 里已有（含 SKIP）的直接回填内存。
-             终止不依赖 processed——DB 全量时 build-step 返回 0 会误断循环（曾只剩 40/6673） */
-          await window.picrand.picnestBuildPalettesStep(this.activeRootId, 40).catch(() => {})
-          const got = await window.picrand.picnestGetPalettes(missing.slice(0, 40))
-          Object.assign(this.palettes, got)
-          /* 本批没回来的（提取失败 SKIP 等）标空数组，保证单调推进不绕圈 */
-          for (const p of missing.slice(0, 40)) if (!this.palettes[p]) this.palettes[p] = []
-          this.paletteBuild.done = Object.keys(this.palettes).length
-          this.paletteBuild.total = this.images.length
-          this.layoutTick++
+        const todo = this.images.filter((x) => !this.palettes[x.file_path] && !isTextPath(x.file_path))
+        if (!todo.length) { this.paletteBuild.done = this.paletteBuild.total = this.images.length; return }
+        const waitFrame = () => new Promise((r) => setTimeout(r, 80))
+        let doneCount = this.images.length - todo.length
+        this.paletteBuild.total = this.images.length
+        this.paletteBuild.done = doneCount
+        for (let pos = 0; pos < Math.min(todo.length, 600); pos += 100) {
+          if (myGen !== this._palGen) break
+          const batchItems = todo.slice(pos, pos + 100)
+          const batchPaths = batchItems.map((x) => x.file_path)
+          /* 色板不改变卡片尺寸/排布，绝对不要触发 layoutTick++ 造成上万格瀑布流反复重排！ */
+          await window.picrand.picnestBuildPalettesStep(this.activeRootId, 100).catch(() => {})
+          if (myGen !== this._palGen) break
+          const got = await window.picrand.picnestGetPalettes(batchPaths)
+          if (myGen !== this._palGen) break
+          const patch = {}
+          for (const item of batchItems) {
+            const p = got?.[item.file_path]
+            if (p) patch[item.file_path] = p
+            else if (item.thumbnail_path) patch[item.file_path] = []
+          }
+          if (Object.keys(patch).length) Object.assign(this.palettes, patch)
+          doneCount += batchItems.length
+          this.paletteBuild.done = Math.min(this.images.length, doneCount)
+          await waitFrame()
         }
-      } finally { this.paletteBuild.running = false }
+      } finally {
+        if (myGen === this._palGen) this.paletteBuild.running = false
+      }
     },
 
     // 缺宽高比的批量回填（自适应布局的原料），分批避免长阻塞
     async fillDimsInBackground() {
       if (this.dimsFilling) return
+      const gen = this._loadGen
       this.dimsFilling = true
       try {
-        for (let pass = 0; pass < 40; pass++) {
+        for (let pass = 0; pass < 4; pass++) {
+          if (gen !== this._loadGen) break
           /* 文本没有宽高（用缩略图 400×520 排版），别让尺寸回填空转 */
-          const need = this.images.filter((i) => (!i.width || !i.height) && !isTextPath(i.file_path)).slice(0, 500).map((i) => i.file_path)
+          const need = this.images.filter((i) => (!i.width || !i.height) && !isTextPath(i.file_path)).slice(0, 120).map((i) => i.file_path)
           if (!need.length) break
           const got = await api.fillImageDims(need)
+          if (gen !== this._loadGen) break
+          let changed = false
           for (const img of this.images) {
             const d = got[img.file_path]
-            if (d) { img.width = d.width; img.height = d.height }
+            if (d) { img.width = d.width; img.height = d.height; changed = true }
           }
-          this.layoutTick++ // 触发重排
-          await new Promise((r) => setTimeout(r, 30))
+          if (changed) this.bumpLayout() // 仅尺寸真有变化时触发重排（合并触发）
+          await new Promise((r) => setTimeout(r, 50))
         }
       } catch { /* 尺寸回填失败不阻塞 */ } finally {
         this.dimsFilling = false
@@ -1685,47 +2283,70 @@ export const useLibrary = defineStore('library', {
 
     // 存量收割：缩略图文件可能已在缓存目录（PicRand md5 寻址），找回登记即可，零生成
     async harvestThumbs() {
+      const gen = this._loadGen
       try {
-        const missing = this.images.filter((i) => !i.thumbnail_path)
+        const missing = this.images.filter((i) => !i.thumbnail_path).slice(0, 2000)
         for (let i = 0; i < missing.length; i += 500) {
+          if (gen !== this._loadGen) break // 用户已切走，停止收割
           const chunk = missing.slice(i, i + 500)
           const found = await window.picrand.picnestThumbLookup(chunk.map((c) => c.file_path))
           let hit = 0
-          for (const img of this.images) {
-            const t = found[img.file_path]
+          for (const img of chunk) {
+            const t = found?.[img.file_path]
             if (t && !img.thumbnail_path) { img.thumbnail_path = t; hit++ }
           }
-          this.layoutTick++
-          if (!hit && i + 500 < missing.length) continue
+          if (hit > 0) this.bumpLayout()
         }
       } catch { /* 静默 */ }
     },
 
-    // 后台补缺：单张串行 + 超时兜底（PicRand 子进程管线偶发挂起会卡死信号量，单张只毒自己）
+    // 后台补缺：批量生成 + 非响应式跳过记录，防止万图逐个改写触发 Vue 全量重排卡死
     async fillAllThumbsInBackground() {
       if (this.thumbsFilling) return
+      const gen = this._loadGen
       this.thumbsFilling = true
+      if (!this._thumbSkipSet) this._thumbSkipSet = new Set()
       const timeout = (ms) => new Promise((_, rej) => setTimeout(() => rej(new Error('thumb timeout')), ms))
+      let dirty = 0
       try {
-        for (let round = 0; round < 8000; round++) {
-          const one = this.images.find((i) => !i.thumbnail_path)
-          if (!one) break
+        const queue = this.images.filter(
+          (i) => !i.thumbnail_path && !isTextPath(i.file_path) && !this._thumbSkipSet.has(i.file_path),
+        )
+        const byPath = new Map(queue.map((i) => [i.file_path, i]))
+        for (let idx = 0; idx < queue.length && idx < 160; idx += 8) {
+          if (gen !== this._loadGen) break
+          const batch = queue.slice(idx, idx + 8).filter((one) => one && !one.thumbnail_path)
+          if (!batch.length) continue
+          const paths = batch.map((one) => one.file_path)
           try {
-            const gen = isTextPath(one.file_path)
-              ? api.generateTextThumbnails([one.file_path])
-              : api.generateThumbnailsBatch([one.file_path])
-            const res = await Promise.race([gen, timeout(20000)])
-            const r = (res?.results || [])[0]
-            if (r?.thumbnail_path) {
-              one.thumbnail_path = r.thumbnail_path
-              if (r.width && (!one.width || !one.height)) { one.width = r.width; one.height = r.height }
-            } else {
-              one.thumbnail_path = 'SKIP' // 生成失败（毒文件/不支持格式）：标记跳过，避免死循环
+            const res = await Promise.race([api.generateThumbnailsBatch(paths), timeout(25000)])
+            if (gen !== this._loadGen) break
+            const gotMap = new Map()
+            for (const r of res?.results || []) {
+              if (r?.file_path && r?.thumbnail_path) gotMap.set(r.file_path, r)
             }
-          } catch { /* 超时：留在队列，下一轮轮到它时再试一次的机会由 SKIP 机制平衡 */ }
-          this.layoutTick++
+            for (const p of paths) {
+              const r = gotMap.get(p)
+              const item = byPath.get(p)
+              if (r && item) {
+                item.thumbnail_path = r.thumbnail_path
+                if (r.width && (!item.width || !item.height)) { item.width = r.width; item.height = r.height }
+                dirty++
+              } else {
+                this._thumbSkipSet.add(p)
+              }
+            }
+          } catch { /* 超时：下轮跳过，不影响其余 */ }
+          if (dirty >= 24) {
+            this.layoutTick++
+            dirty = 0
+          }
+          await new Promise((r) => setTimeout(r, 60))
         }
-      } finally { this.thumbsFilling = false }
+      } finally {
+        if (dirty > 0 && gen === this._loadGen) this.layoutTick++
+        this.thumbsFilling = false
+      }
     },
 
     async renameImage(oldPath, newName) {
@@ -1799,6 +2420,12 @@ export const useLibrary = defineStore('library', {
         this.suppressWaveUntil = Date.now() + 1200
         await this.refreshTree()
         this.scheduleRootMetaSave()
+        if (this.physicalOrder) {
+          this.schedulePhysicalSync()
+          if (targetRel != null) {
+            this.schedulePhysicalSync(this.activeRootId, targetRel)
+          }
+        }
       }
       return { ok: failed === 0, moved, failed }
     },
@@ -1909,17 +2536,15 @@ export const useLibrary = defineStore('library', {
       const rid = this.activeRootId
       const filtered = this.activeFilterCount() > 0 || !!this.searchQuery
       const total = paths.length
-      /* 这个动作会真实改文件名（加 01_ 前缀），必须先确认 */
+      /* 把当前显示顺序固化成手动排序。只写 images.sort_order，磁盘文件名一动不动。 */
       const ok = await this.askConfirm({
-        title: '应用为手动排序并重命名原文件？',
-        message: '会按当前显示顺序写入手动排序，并把文件真实重命名为 01_原名、02_原名…（按所在文件夹分组）。这会修改磁盘上的原始文件名。',
+        title: '应用为手动排序？',
+        message: '按当前显示顺序写入手动排序，只存在图巢的元数据里，不会改磁盘文件名。',
         details: [
           `共 ${total} 张${filtered ? '（当前筛选/搜索只处理这些）' : ''}`,
-          this.physicalOrder ? '物理排序开关：开' : '物理排序开关：关（本次仍会改名）',
-          '原有 01_ 前缀会被替换；改名不会自动写入 Windows 撤销记录，需要时可手动改回',
+          '原有 01_ 这类文件名前缀不会再被添加或替换',
         ],
-        confirmText: '应用并改名',
-        danger: true,
+        confirmText: '应用',
       })
       if (!ok) return { ok: false, canceled: true }
       const rootPath = String(this.tree?.rootPath || this.activeRoot?.path || '')
@@ -1938,15 +2563,10 @@ export const useLibrary = defineStore('library', {
         if (!groups.has(rel)) groups.set(rel, [])
         groups.get(rel).push(p)
       }
-      /* 物理排序 handler 会按目录分组改名，同时写 sort_order；失败再退回只写顺序 */
-      let pr = null
-      try { pr = await window.picrand.picnestPhysicalOrderImages(rid, paths) } catch { /* 静默 */ }
-      let applied = 0, failed = 0, renamed = 0
-      if (pr?.ok || pr?.map?.length) {
-        applied = total
-        renamed = pr.renamed || 0
-        failed = pr.failed || 0
-      } else {
+      /* 纯 DB 写 sort_order；不再有物理改名这条路 */
+      let applied = 0, failed = 0
+      const renamed = 0
+      {
         for (const [rel, list] of groups) {
           try {
             const r = await api.imagesReorder(rid, rel, list)
@@ -1955,15 +2575,12 @@ export const useLibrary = defineStore('library', {
           } catch { failed++ }
         }
       }
-      if (!applied) return { ok: false, error: pr?.error || '写入手动排序失败' }
+      if (!applied) return { ok: false, error: '写入手动排序失败' }
       this.sortMode = 'manual'
       localStorage.setItem('picnest.sortMode', 'manual')
       await this.loadImages()
-      if (renamed || pr?.ok) {
-        this.showNote(`已应用为手动排序并改名 ${renamed} 张${failed ? ` · 失败 ${failed}` : ''}`)
-      } else {
-        this.showNote(`已写入手动排序（改名未完成：${pr?.error || '物理排序不可用'}）`, [], 'error')
-      }
+      this.showNote(`已应用为手动排序 ${applied} 张${failed ? ` · 失败 ${failed}` : ''}`)
+      this.schedulePhysicalSync()
       return { ok: failed === 0, applied, renamed, failed }
     },
     /* 图片拖动排序：仅文件夹视图；写入 sort_order 并切到手动排序 */
@@ -1985,20 +2602,12 @@ export const useLibrary = defineStore('library', {
       else if (!before) idx += 1
       rest.splice(idx, 0, ...moving)
       const keep = this.selectedPaths.slice()
+      // 拖拽后的自动改名也会产生文件事件，同步期间先抑制 watcher 回写
+      this._suppressFsSyncUntil = Date.now() + 6000
       try {
         const r = await api.imagesReorder(this.activeRootId, this.currentDirRel, rest)
         if (!r?.ok) { if (r?.error) this.error = r.error; return r }
-        /* 物理排序开关：把顺序写进文件名前缀；路径变了 → 整表重载（不再走本地增量） */
-        if (this.physicalOrder) {
-          const pr = await this.applyImageOrderPhysical(rest)
-          if (pr?.map?.length) {
-            await this.loadImages()
-            this.scheduleRootMetaSave()
-            this.showNote(`已调整顺序并同步文件名（改名 ${pr.renamed || 0} 张${pr.ok ? '' : '，部分失败'}）`)
-            return pr
-          }
-          if (pr && !pr.ok) this.showNote(`顺序已存，但改名失败：${pr.errors?.[0] || pr.error || ''}`, [], 'error')
-        }
+        /* 只存顺序；文件名不再被程序动 */
         /* 本地增量换序：只替换数组与排序模式，不整表 loadImages（不重放入场波、不清选中） */
         const map = new Map(this.images.map((i) => [i.file_path, i]))
         const nextOrder = rest.map((p) => map.get(p)).filter(Boolean)
@@ -2013,6 +2622,8 @@ export const useLibrary = defineStore('library', {
         this.selectionAnchor = this.selectedPath
         this.showNote('已调整顺序（手动排序）')
         this.scheduleRootMetaSave()
+        /* 开关开着就自动落地到文件名（防抖 800ms，连续拖拽只跑最后一次） */
+        this.schedulePhysicalSync()
         return r
       } catch (e) {
         const err = { ok: false, error: String(e?.message || e) }
@@ -2024,16 +2635,16 @@ export const useLibrary = defineStore('library', {
       this.layout = key
       localStorage.setItem('picnest.layout', key)
     },
-    /* 显示名：物理排序给文件/文件夹加的 01_ 前缀默认在界面隐藏，磁盘名不动 */
+    /* 显示名：隐藏排序编号时把 01_ 前缀藏起来（磁盘名不变） */
     dispName(name) {
       const s = String(name || '')
-      return this.hideOrderNumbers ? s.replace(/^(?:\d{1,3}|0\d{3})_+/, '') : s
+      return this.hideOrderNumbers ? s.replace(/^(?:\d{2,3})_+/, '') : s
     },
     orderPrefix(name) {
-      const m = /^((?:\d{1,3}|0\d{3})_+)/.exec(String(name || ''))
+      const m = /^((?:\d{2,3})_+)/.exec(String(name || ''))
       return m ? m[1] : ''
     },
-    /* 重命名目标名：隐藏编号时把旧前缀接回去；关闭隐藏时按用户输入原样 */
+    /* 重命名目标名：隐藏编号时把旧前缀接回去，否则重命名会把排序编号弄丢 */
     renameTarget(oldName, name) {
       const n = String(name || '')
       return this.hideOrderNumbers ? this.orderPrefix(oldName) + n : n
@@ -2101,9 +2712,10 @@ export const useLibrary = defineStore('library', {
     reportImport(r, t) {
       const parts = []
       if (r.copied) parts.push(`录入 ${r.copied} 张`)
+      if (r.registered) parts.push(`补录 ${r.registered} 张`)
       if (r.downloaded) parts.push(`下载 ${r.downloaded} 张`)
       if (r.dirs?.length) parts.push(`文件夹 ${r.dirs.length} 个`)
-      if (r.skipped) parts.push(`跳过 ${r.skipped}`)
+      if (r.skipped) parts.push(`已在库中（跳过重复） ${r.skipped} 张`)
       if (r.replaced) parts.push(`替换旧图 ${r.replaced}`)
       if (r.unsupported) parts.push(`不支持 ${r.unsupported}`)
       if (r.failed) parts.push(`失败 ${r.failed}`)
@@ -2112,7 +2724,8 @@ export const useLibrary = defineStore('library', {
       for (const d of r.dirs || []) {
         const bits = []
         if (d.copied) bits.push(`录入 ${d.copied}`)
-        if (d.skipped) bits.push(`跳过 ${d.skipped}`)
+        if (d.registered) bits.push(`补录 ${d.registered}`)
+        if (d.skipped) bits.push(`已在库中 ${d.skipped}`)
         if (d.replaced) bits.push(`替换 ${d.replaced}`)
         if (d.unsupported) bits.push(`不支持 ${d.unsupported}`)
         if (d.failed) bits.push(`失败 ${d.failed}`)
@@ -2140,6 +2753,13 @@ export const useLibrary = defineStore('library', {
         details,
         tone: r.ok ? (parts.length ? 'ok' : 'muted') : 'error',
       }
+      /* 新图落地 → 把目标文件夹提到同级第一位（只改 picnest_dir_order，不改文件名）。
+         以前这件事只能靠给文件夹名加 01_ 前缀，现在不需要了。 */
+      const landed = (r.copied || 0) + (r.registered || 0) + (r.downloaded || 0) + (r.replaced || 0)
+      // t.index 不为空 = 用户明确拖到了某个缝隙位置，那个位置比“置顶”优先
+      if (landed > 0 && t?.rel && t.index == null) {
+        this.pinDirAfterImport(t.rootId, t.rel).catch(() => {})
+      }
     },
     /* 缝隙落点：把新文件夹名插到指定序号（仅当前资料库可排序——dirOrder 以 rel 为键） */
     async insertOrderAt(parentRel, name, index) {
@@ -2152,6 +2772,62 @@ export const useLibrary = defineStore('library', {
       await this.refreshTree()
       this.scheduleRootMetaSave()
       await this.syncDirOrderPhysical(parentRel, names)
+    },
+
+    /* 把某个目录提到同级第一位：只写 picnest_dir_order，一行文件名都不动。
+       这是替代「给文件夹名加 01_ 前缀」的正路。 */
+    async pinDir(parentRel, name, opts = {}) {
+      if (!name || this.activeRootId == null) return null
+      await this.refreshTree()
+      const node = parentRel ? this.findNode(this.tree?.tree, parentRel) : this.tree?.tree
+      const siblings = (node?.children || []).map((c) => c.name)
+      if (!siblings.length) return null
+      // 名字必须和树上完全一致（磁盘是大写 SR、rel 是小写 sr，不能拿 rel 猜）
+      if (!siblings.includes(name)) return null
+      if (siblings[0] === name) return siblings // 已在首位，不用写库
+      const names = siblings.filter((n) => n !== name)
+      names.unshift(name)
+      try {
+        await window.picrand.picnestDirOrderSet(this.activeRootId, parentRel || '__root__', names)
+      } catch { return null }
+      await this.refreshTree()
+      if (opts.notify) this.showNote(`已把「${this.dispName(name)}」置顶（只改顺序元数据，未动文件名）`)
+      return names
+    },
+
+    /* 新图落地后把目标文件夹置顶（autoPinOnImport 可关）。失败不影响导入结果。 */
+    async pinDirAfterImport(rootId, rel) {
+      if (!this.autoPinOnImport || !rel) return null
+      if (rootId != null && rootId !== this.activeRootId) return null
+      try {
+        await this.refreshTree()
+        /* 用树里的真实节点名（磁盘大小写为准）。注意 t.rel 常来自 DB 的 dir_rel，
+           而那个是小写（06_gbf/sr），树里是 06_GBF/SR —— 所以先精确，再不区分大小写。 */
+        const tree = this.tree?.tree
+        let node = this.findNode(tree, rel)
+        if (!node) {
+          const want = String(rel).toUpperCase()
+          const walk = (n) => {
+            if (!n) return null
+            if (String(n.rel || '').toUpperCase() === want) return n
+            for (const c of n.children || []) {
+              const r = walk(c)
+              if (r) return r
+            }
+            return null
+          }
+          node = walk(tree)
+        }
+        const name = node?.name
+        if (!name) return null
+        /* parentRel 必须从节点的真实 rel 派生：传入的 t.rel 常是 DB 的 dir_rel（全小写），
+           拿它去用 findNode 找父节点会找不到，导致置顶静默失效。
+           picnest_dir_order 的 key 也是用磁盘真实大小写 rel 拼的（dir_tree 里 format!("{}|{}")）。 */
+        const nodeRel = String(node.rel || '')
+        const cut = nodeRel.lastIndexOf('/')
+        const parentRel = cut < 0 ? '' : nodeRel.slice(0, cut)
+        return await this.pinDir(parentRel, name)
+      } catch { return null }
     },
 
     async importUrls(urls, target) {
@@ -2169,7 +2845,19 @@ export const useLibrary = defineStore('library', {
         if (agg.downloaded) {
           const rootRec = this.roots.find((x) => x.id === t.rootId)
           if (rootRec) await api.syncFolderSnapshot(rootRec.path).catch(() => {})
-          if (t.rootId === this.activeRootId) { await this.refreshTree(); await this.loadImages() }
+          if (t.rootId === this.activeRootId) {
+            await this.refreshTree()
+            await this.loadImages()
+            if (this.physicalOrder) {
+              if ((t.rel || '') === (this.currentDirRel || '')) {
+                this.schedulePhysicalSync()
+              } else {
+                this.schedulePhysicalSync(t.rootId, t.rel || '')
+              }
+            }
+          } else if (this.physicalOrder) {
+            this.schedulePhysicalSync(t.rootId, t.rel || '')
+          }
         }
         this.reportImport(agg, t)
         return agg
@@ -2241,8 +2929,8 @@ export const useLibrary = defineStore('library', {
           this.reportImport(fail, t)
           return fail
         }
-        // Eagle 式：先查重，有冲突先弹对比卡
-        const check = await window.picrand.picnestImportCheck(paths, t.rootId)
+        // Eagle 式：先查重，有冲突先弹对比卡（带上当前 targetDir 以便盘查未录入本地幽灵文件）
+        const check = await window.picrand.picnestImportCheck(paths, t.rootId, targetDir)
         let finalPaths = check?.clean || []
         const conflicts = check?.conflicts || []
         const dirs = check?.dirs || []
@@ -2251,17 +2939,24 @@ export const useLibrary = defineStore('library', {
           choice = await new Promise((resolve) => {
             this.dupDialog = { open: true, mode: 'files', items: conflicts, count: conflicts.length, targetRel: t.rel || null, resolve }
           })
-          if (choice === 'keep-both') finalPaths = finalPaths.concat(conflicts.map((c) => c.path))
+          if (choice === 'keep-both' || choice === 'use-new') {
+            finalPaths = finalPaths.concat(conflicts.map((c) => c.path))
+          }
         }
         const agg = {
-          ok: true, copied: 0, downloaded: 0, skipped: 0, failed: 0, unsupported: 0,
+          ok: true, copied: 0, registered: 0, downloaded: 0, skipped: 0, replaced: 0, failed: 0, unsupported: 0,
           unsupportedNames: [], dirs: [], errors: [], missing: check?.missing || [],
         }
         if (finalPaths.length) {
-          const r = await window.picrand.picnestImportFiles(finalPaths, targetDir)
+          const replaceOld = choice === 'use-new'
+            ? conflicts.map((c) => c.existing?.file_path).filter(Boolean)
+            : null
+          const r = await window.picrand.picnestImportFiles(finalPaths, targetDir, replaceOld)
           if (r?.ok) {
             agg.copied += r.copied || 0
+            agg.registered += r.registered || 0
             agg.skipped += r.skipped || 0
+            agg.replaced += r.replaced || 0
             agg.failed += r.failed || 0
             agg.unsupported += r.unsupported || 0
             if (r.unsupportedNames?.length) agg.unsupportedNames.push(...r.unsupportedNames)
@@ -2279,6 +2974,7 @@ export const useLibrary = defineStore('library', {
           if (r?.ok) {
             agg.dirs.push(r)
             agg.copied += r.copied || 0
+            agg.registered += r.registered || 0
             agg.skipped += r.skipped || 0
             agg.failed += r.failed || 0
             agg.unsupported += r.unsupported || 0
@@ -2293,11 +2989,23 @@ export const useLibrary = defineStore('library', {
             agg.errors.push(`${(d.split(/[\\/]/).pop() || d)}：${r?.error || '复制失败'}`)
           }
         }
-        const touched = agg.copied > 0
+        const touched = agg.copied > 0 || agg.registered > 0 || agg.replaced > 0
         if (touched) {
           const rootRec = this.roots.find((x) => x.id === t.rootId)
           if (rootRec) await api.syncFolderSnapshot(rootRec.path).catch(() => {})
-          if (t.rootId === this.activeRootId) { await this.refreshTree(); await this.loadImages() }
+          if (t.rootId === this.activeRootId) {
+            await this.refreshTree()
+            await this.loadImages()
+            if (this.physicalOrder) {
+              if ((t.rel || '') === (this.currentDirRel || '')) {
+                this.schedulePhysicalSync()
+              } else {
+                this.schedulePhysicalSync(t.rootId, t.rel || '')
+              }
+            }
+          } else if (this.physicalOrder) {
+            this.schedulePhysicalSync(t.rootId, t.rel || '')
+          }
         }
         this.reportImport(agg, t)
         return agg
@@ -2393,14 +3101,33 @@ export const useLibrary = defineStore('library', {
       await this.syncDirOrderPhysical(parentRel, names)
     },
 
+    /* 树上按 rel 找节点。先精确匹配（绝大多数情况），找不到再做一次不区分大小写的回退：
+       DB 的 dir_rel 是全小写（06_gbf/sr），而树节点 rel 来自磁盘真实大小写（06_GBF/SR），
+       拿 DB 风格 rel 来查会静默落到 null（曾经导致新建文件夹插序、置顶全部无效）。 */
     findNode(root, rel) {
-      if (!root) return null
-      if (root.rel === rel) return root
-      for (const c of root.children || []) {
-        const hit = this.findNode(c, rel)
-        if (hit) return hit
+      if (!root || rel == null) return null
+      const exact = (n) => {
+        if (!n) return null
+        if (n.rel === rel) return n
+        for (const c of n.children || []) {
+          const h = exact(c)
+          if (h) return h
+        }
+        return null
       }
-      return null
+      const hit = exact(root)
+      if (hit) return hit
+      const want = String(rel).toUpperCase()
+      const ci = (n) => {
+        if (!n) return null
+        if (String(n.rel || '').toUpperCase() === want) return n
+        for (const c of n.children || []) {
+          const h = ci(c)
+          if (h) return h
+        }
+        return null
+      }
+      return ci(root)
     },
 
     /* 图片多选：单击=单选；Shift=按当前可见顺序范围选；Alt/Ctrl=加选/减选（可与 Shift 叠加） */
@@ -2588,14 +3315,22 @@ export const useLibrary = defineStore('library', {
       this.viewer.rot = 0; this.viewer.flopX = false
       this.viewer.cropMode = false
       this.viewer.fitNonce++
-      collectiveShake() // 进入大图：全体图标同步手势（与退出对称）
+      /* 进入大图不再 collectiveShake()：紧接着就是看图/缩放，
+         图标全体动画会把首帧拖到几十毫秒。 */
     },
     closeLightbox() {
       const closedPath = this.lightbox.path
       this.lightbox = { open: false, path: null }
       this.viewer.cropMode = false
+      /* 退出大图时重置视图状态。之前 scale/tx/ty 留着上次的值（实测关完后 scale 停在 0.58），
+         下次打开会用错位缩放做动画，也让 FLIP 起点算不准。 */
+      this.viewer.scale = 1
+      this.viewer.tx = 0
+      this.viewer.ty = 0
       if (closedPath) emitPluginEvent('image-closed', { path: closedPath })
-      collectiveShake()
+      /* 2026-11-15：退出大图不再调 collectiveShake()。
+         实测关闭瞬间消息泵会有 3×28ms 的卡（图标全体重播 640ms 动画造成），
+         而退出后用户往往立刻拖窗口/滚网格，那阵卡就直接被感知为“拖拽发滞”。 */
     },
 
     /* ---- 简报模式（全屏演示，Eagle 语义） / 黑白预览（全局显示开关） ---- */
@@ -2606,12 +3341,10 @@ export const useLibrary = defineStore('library', {
     toggleCardTilt3D() {
       this.cardTilt3D = !this.cardTilt3D
       localStorage.setItem('picnest.cardTilt3D', this.cardTilt3D ? '1' : '0')
-      collectiveShake()
     },
     toggleDocPrivacyMode() {
       this.docPrivacyMode = !this.docPrivacyMode
       localStorage.setItem('picnest.docPrivacyMode', this.docPrivacyMode ? '1' : '0')
-      collectiveShake()
     },
     openBrief(path, fromLightbox = false) {
       this.closeContextMenu()
@@ -2800,11 +3533,10 @@ export const useLibrary = defineStore('library', {
     toggleSidebar() {
       this.sidebarCollapsed = !this.sidebarCollapsed
       localStorage.setItem('picnest.sidebarCollapsed', this.sidebarCollapsed ? '1' : '0')
-      collectiveShake() // 左栏收起/放出 → 集体晃动
+      // 侧栏开合靠自身宽度动画表达，不再叠图标手势（连点时会被感知为发滞）
     },
     toggleInspector() {
       this.viewer.showInspector = !this.viewer.showInspector
-      collectiveShake() // 详情展开/褪去 → 集体晃动
     },
     lightboxNav(dir) {
       const list = this.gridOrder?.length ? this.gridOrder : this.filteredImages.map((x) => x.file_path)

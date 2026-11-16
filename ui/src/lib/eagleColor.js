@@ -56,6 +56,8 @@ export function deltaE2000(c1, c2) {
     if (Math.abs(h1p - h2p) > 180) {
       if (h1p + h2p < 360) hbp = (h1p + h2p + 360) / 2
       else hbp = (h1p + h2p - 360) / 2
+    } else {
+      hbp = (h1p + h2p) / 2
     }
   } else {
     hbp = h1p + h2p

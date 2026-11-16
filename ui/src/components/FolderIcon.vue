@@ -23,6 +23,8 @@ const phase = ref(-1)
 let raf = 0
 let cancelAmbient = null
 function play() {
+  // 窗口在后台/最小化时不画：环境自弹是定时器驱动的，隐藏时还画就是白烧 GPU
+  if (typeof document !== 'undefined' && document.hidden) return
   cancelAnimationFrame(raf)
   const t0 = performance.now()
   const tick = (now) => {

@@ -212,7 +212,7 @@ pub fn window_toggle_always_on_top(window: tauri::Window) -> Result<bool, String
 
 #[tauri::command]
 pub fn app_version() -> String {
-    "0.1.0-rust-alpha".to_string()
+    "1.0.0".to_string()
 }
 
 #[tauri::command]
@@ -1646,26 +1646,94 @@ fn find_ffprobe_exe() -> String {
     find_media_tool_exe("ffprobe.exe", "ffprobe")
 }
 
+/// 带硬超时的子进程执行：到点直接 kill。
+///
+/// 为什么必须有：ffmpeg/ffprobe 遇到损坏文件、网络流、异常容器时会无限期挂在解码里，
+/// `.output()` 等它一等就是永远——既留下孤儿进程持续烧 CPU/GPU（本机发热、风扇狂转），
+/// 又把 spawn_blocking 线程和文件句柄一起占死。超时或启动失败返回 None。
+pub(crate) fn output_with_timeout(
+    cmd: &mut std::process::Command,
+    timeout: std::time::Duration,
+) -> Option<std::process::Output> {
+    use std::io::Read;
+    use std::process::Stdio;
+
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = cmd.spawn().ok()?;
+    let mut out_pipe = child.stdout.take();
+    let mut err_pipe = child.stderr.take();
+    // 异步排空两根管道：不读的话子进程写满 64KB 就会阻塞，反而造成“假卡死”
+    let t_out = std::thread::spawn(move || {
+        let mut v = Vec::new();
+        if let Some(p) = out_pipe.as_mut() {
+            let _ = p.read_to_end(&mut v);
+        }
+        v
+    });
+    let t_err = std::thread::spawn(move || {
+        let mut v = Vec::new();
+        if let Some(p) = err_pipe.as_mut() {
+            let _ = p.read_to_end(&mut v);
+        }
+        v
+    });
+
+    let deadline = std::time::Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(s)) => break Some(s),
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    // 只杀直接子进程不够：`cmd /c start`、批处理这类会留孙进程继承管道句柄，
+                    // 反过来把读取线程拖住。Windows 上用 taskkill /T 连整棵树一起收。
+                    #[cfg(windows)]
+                    {
+                        use std::os::windows::process::CommandExt;
+                        const CREATE_NO_WINDOW: u32 = 0x08000000;
+                        let _ = std::process::Command::new("taskkill")
+                            .args(["/PID", &child.id().to_string(), "/T", "/F"])
+                            .creation_flags(CREATE_NO_WINDOW)
+                            .output();
+                    }
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break None;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(_) => break None,
+        }
+    };
+
+    // 超时/异常：不再 join 读取线程（孙进程可能还握着管道），立即返回，不留阻塞
+    let status = status?;
+    let stdout = t_out.join().unwrap_or_default();
+    let stderr = t_err.join().unwrap_or_default();
+    Some(std::process::Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
 pub(crate) fn extract_video_dims(video_path: &Path) -> Option<(u32, u32)> {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x08000000;
     let ffprobe = find_ffprobe_exe();
     let v_str = video_path.to_string_lossy().to_string();
-    let out = std::process::Command::new(&ffprobe)
-        .creation_flags(CREATE_NO_WINDOW)
-        .args([
-            "-v",
-            "error",
-            "-select_streams",
-            "v:0",
-            "-show_entries",
-            "stream=width,height",
-            "-of",
-            "csv=s=x:p=0",
-            &v_str,
-        ])
-        .output()
-        .ok()?;
+    let mut cmd = std::process::Command::new(&ffprobe);
+    cmd.creation_flags(CREATE_NO_WINDOW).args([
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=width,height",
+        "-of",
+        "csv=s=x:p=0",
+        &v_str,
+    ]);
+    let out = output_with_timeout(&mut cmd, std::time::Duration::from_secs(15))?;
     if !out.status.success() {
         return None;
     }
@@ -1712,7 +1780,7 @@ pub(crate) fn extract_video_poster(video_path: &Path, thumb_path: &Path) -> bool
             "-an",
             &t_str,
         ]);
-        if let Ok(out) = cmd.output() {
+        if let Some(out) = output_with_timeout(&mut cmd, std::time::Duration::from_secs(25)) {
             if out.status.success() && tmp_jpg.exists() {
                 if let Ok(meta) = std::fs::metadata(&tmp_jpg) {
                     if meta.len() > 100 {
@@ -1756,10 +1824,9 @@ pub async fn generate_thumbnails_batch(
                         return None;
                     }
                     let hash = format!("{:x}", fnv1a_hash(file_path.as_bytes()));
-                    // 有损 JPEG：image crate 的 webp 只有无损模式，400px 也要 ~200KB，
-                    // 一屏 20 张就是 4MB，解码也按无损图像算——这是“刷新慢”的主因。
-                    let thumb_path = thumbs_dir.join(format!("{}-q80.jpg", hash));
-                    if !thumb_path.exists() {
+                    // 有透明的图写无损 WebP（保透明），其余写 q80 JPEG——
+                    // JPEG 没 alpha，透明区里藏的 RGB 会被暴露成彩色毛刺。
+                    if existing_thumb(&thumbs_dir, &hash).is_none() {
                         let ext = p
                             .extension()
                             .and_then(|e| e.to_str())
@@ -1770,25 +1837,24 @@ pub async fn generate_thumbnails_batch(
                             if psd_cached.exists() {
                                 if let Ok(img) = image::open(&psd_cached) {
                                     let thumb = img.resize(400, 400, image::imageops::FilterType::Triangle);
-                                    let _ = save_thumb_jpeg(&thumb, &thumb_path);
+                                    let _ = save_thumb_smart(&thumb, &thumbs_dir, &hash);
                                 }
                             }
-                            if !thumb_path.exists() {
+                            if existing_thumb(&thumbs_dir, &hash).is_none() {
                                 if let Some(img) = extract_psd_image(p) {
                                     let thumb = img.resize(400, 400, image::imageops::FilterType::Triangle);
-                                    let _ = save_thumb_jpeg(&thumb, &thumb_path);
+                                    let _ = save_thumb_smart(&thumb, &thumbs_dir, &hash);
                                 }
                             }
                         } else if is_video_ext(&ext) {
-                            let _ = extract_video_poster(p, &thumb_path);
+                            let poster = thumbs_dir.join(format!("{}-q80.jpg", hash));
+                            let _ = extract_video_poster(p, &poster);
                         } else if let Ok(img) = image::open(p) {
                             let thumb = img.resize(400, 400, image::imageops::FilterType::Triangle);
-                            let _ = save_thumb_jpeg(&thumb, &thumb_path);
+                            let _ = save_thumb_smart(&thumb, &thumbs_dir, &hash);
                         }
                     }
-                    if !thumb_path.exists() {
-                        return None;
-                    }
+                    let thumb_path = existing_thumb(&thumbs_dir, &hash)?;
                     let thumb_str = thumb_path.to_string_lossy().to_string();
                     Some(ThumbItem {
                         file_path: file_path.clone(),
@@ -1838,6 +1904,11 @@ fn save_thumb_jpeg(img: &image::DynamicImage, path: &Path) -> bool {
         .encode(rgb.as_raw(), rgb.width(), rgb.height(), image::ExtendedColorType::Rgb8)
         .is_ok();
     drop(enc);
+    /* 必须显式 flush 再 rename：BufWriter 没 flush 就改名，
+       改名后文件是半截的，浏览器可能读到截断的 JPEG（早期缩略图异常的一个隐患）。 */
+    use std::io::Write;
+    let _ = w.flush();
+    drop(w);
     if ok {
         let _ = std::fs::rename(&tmp, path);
         true
@@ -1845,6 +1916,78 @@ fn save_thumb_jpeg(img: &image::DynamicImage, path: &Path) -> bool {
         let _ = std::fs::remove_file(&tmp);
         false
     }
+}
+
+/// 图片里是否真的用到了透明（有 alpha 通道且存在 < 250 的像素）。
+/// PNG 在“全透明”的像素里照样存 RGB；一旦丢掉 alpha 转 JPEG，
+/// 那些本该隐藏的颜色就会变成彩色毛刺。
+fn has_visible_alpha(img: &image::DynamicImage) -> bool {
+    if !img.color().has_alpha() {
+        return false;
+    }
+    let rgba = img.to_rgba8();
+    rgba.pixels().any(|p| p[3] < 250)
+}
+
+/// 无损 WebP（保留透明通道）。体积比 JPEG 大几倍，但只有“真透明”的图才会走这里。
+fn write_webp_lossless(img: &image::DynamicImage, path: &Path) -> bool {
+    let tmp = path.with_extension("tmp");
+    let rgba = img.to_rgba8();
+    let Ok(f) = std::fs::File::create(&tmp) else {
+        return false;
+    };
+    let mut w = std::io::BufWriter::new(f);
+    let ok = image::codecs::webp::WebPEncoder::new_lossless(&mut w)
+        .encode(
+            rgba.as_raw(),
+            rgba.width(),
+            rgba.height(),
+            image::ExtendedColorType::Rgba8,
+        )
+        .is_ok();
+    use std::io::Write;
+    let _ = w.flush();
+    drop(w);
+    if ok {
+        let _ = std::fs::rename(&tmp, path);
+        true
+    } else {
+        let _ = std::fs::remove_file(&tmp);
+        false
+    }
+}
+
+/// 缩略图落盘：有透明 → `{stem}-lossless.webp`（保透明）；无透明 → `{stem}-q80.jpg`。
+/// 返回实际写出的路径。
+fn save_thumb_smart(img: &image::DynamicImage, thumbs_dir: &Path, stem: &str) -> Option<PathBuf> {
+    if has_visible_alpha(img) {
+        let p = thumbs_dir.join(format!("{}-lossless.webp", stem));
+        if write_webp_lossless(img, &p) {
+            return Some(p);
+        }
+        // WebP 写入失败：退回 JPEG（至少别让格子空着）
+        let j = thumbs_dir.join(format!("{}-q80.jpg", stem));
+        return if save_thumb_jpeg(img, &j) { Some(j) } else { None };
+    }
+    let j = thumbs_dir.join(format!("{}-q80.jpg", stem));
+    if save_thumb_jpeg(img, &j) {
+        Some(j)
+    } else {
+        None
+    }
+}
+
+/// 该图现有的缩略图路径（有损 jpg 或 保透明 webp，优先挑已存在的）
+fn existing_thumb(thumbs_dir: &Path, stem: &str) -> Option<PathBuf> {
+    let webp = thumbs_dir.join(format!("{}-lossless.webp", stem));
+    if webp.exists() {
+        return Some(webp);
+    }
+    let jpg = thumbs_dir.join(format!("{}-q80.jpg", stem));
+    if jpg.exists() {
+        return Some(jpg);
+    }
+    None
 }
 
 /// 网格大格高清显示图（1024px）：按需并发生成，有损 JPEG q80 存储
@@ -1874,8 +2017,8 @@ pub async fn generate_display_thumbs_batch(
                         return None;
                     }
                     let hash = format!("{:x}", fnv1a_hash(file_path.as_bytes()));
-                    let display_path = thumbs_dir.join(format!("{}-1024-q80.jpg", hash));
-                    if !display_path.exists() {
+                    let stem = format!("{}-1024", hash);
+                    if existing_thumb(&thumbs_dir, &stem).is_none() {
                         let ext = p
                             .extension()
                             .and_then(|e| e.to_str())
@@ -1886,31 +2029,28 @@ pub async fn generate_display_thumbs_batch(
                             if psd_cached.exists() {
                                 if let Ok(img) = image::open(&psd_cached) {
                                     let thumb = img.resize(1024, 1024, image::imageops::FilterType::Triangle);
-                                    let _ = save_thumb_jpeg(&thumb, &display_path);
+                                    let _ = save_thumb_smart(&thumb, &thumbs_dir, &stem);
                                 }
                             }
-                            if !display_path.exists() {
+                            if existing_thumb(&thumbs_dir, &stem).is_none() {
                                 if let Some(img) = extract_psd_image(p) {
                                     let thumb = img.resize(1024, 1024, image::imageops::FilterType::Triangle);
-                                    let _ = save_thumb_jpeg(&thumb, &display_path);
+                                    let _ = save_thumb_smart(&thumb, &thumbs_dir, &stem);
                                 }
                             }
                         } else if is_video_ext(&ext) {
-                            let thumb_400 = thumbs_dir.join(format!("{}-q80.jpg", hash));
-                            if thumb_400.exists() {
+                            if let Some(t400) = existing_thumb(&thumbs_dir, &hash) {
                                 return Some(DisplayThumbItem {
                                     file_path: file_path.clone(),
-                                    display_path: thumb_400.to_string_lossy().to_string(),
+                                    display_path: t400.to_string_lossy().to_string(),
                                 });
                             }
                         } else if let Ok(img) = image::open(p) {
                             let thumb = img.resize(1024, 1024, image::imageops::FilterType::Triangle);
-                            let _ = save_thumb_jpeg(&thumb, &display_path);
+                            let _ = save_thumb_smart(&thumb, &thumbs_dir, &stem);
                         }
                     }
-                    if !display_path.exists() {
-                        return None;
-                    }
+                    let display_path = existing_thumb(&thumbs_dir, &stem)?;
                     let display_str = display_path.to_string_lossy().to_string();
                     Some(DisplayThumbItem {
                         file_path: file_path.clone(),
@@ -3808,6 +3948,8 @@ pub async fn cleanup_orphan_thumbs(
                     .strip_suffix("-1024-q80.jpg")
                     .or_else(|| name.strip_suffix("-2048-q80.jpg"))
                     .or_else(|| name.strip_suffix("-q80.jpg"))
+                    .or_else(|| name.strip_suffix("-1024-lossless.webp"))
+                    .or_else(|| name.strip_suffix("-lossless.webp"))
                     .or_else(|| name.strip_suffix(".webp"));
                 let Some(h) = h else { continue };
                 if live.contains(h) {
@@ -3840,29 +3982,38 @@ pub(crate) fn migrate_thumb_cache(thumbs_dir: &Path, old_path: &str, new_path: &
     let oh = format!("{:x}", fnv1a_hash(old_path.as_bytes()));
     let nh = format!("{:x}", fnv1a_hash(new_path.as_bytes()));
     if oh == nh {
+        let webp = thumbs_dir.join(format!("{}-lossless.webp", nh));
+        if webp.exists() {
+            return Some(webp.to_string_lossy().to_string());
+        }
         let p = thumbs_dir.join(format!("{}-q80.jpg", nh));
         return Some(p.to_string_lossy().to_string()).filter(|s| Path::new(s).exists());
     }
     let pairs = [
         (format!("{}-q80.jpg", oh), format!("{}-q80.jpg", nh)),
+        (format!("{}-lossless.webp", oh), format!("{}-lossless.webp", nh)),
         (format!("{}-1024-q80.jpg", oh), format!("{}-1024-q80.jpg", nh)),
+        (format!("{}-1024-lossless.webp", oh), format!("{}-1024-lossless.webp", nh)),
         (format!("{}-2048-q80.jpg", oh), format!("{}-2048-q80.jpg", nh)),
         (format!("{}.webp", oh), format!("{}.webp", nh)),
         (format!("psd-{}.webp", oh), format!("psd-{}.webp", nh)),
         (format!("view-{}.webp", oh), format!("view-{}.webp", nh)),
     ];
-    let mut jpg: Option<String> = None;
+    let mut found: Option<String> = None;
     for (a, b) in pairs {
         let pa = thumbs_dir.join(&a);
         let pb = thumbs_dir.join(&b);
         if pa.exists() && !pb.exists() {
             let _ = std::fs::rename(&pa, &pb);
         }
-        if b.ends_with("-q80.jpg") && pb.exists() {
-            jpg = Some(pb.to_string_lossy().to_string());
+        // 保透明的 webp 优先（有它就用它），否则退回 jpg
+        if b.ends_with("-lossless.webp") && pb.exists() {
+            found = Some(pb.to_string_lossy().to_string());
+        } else if b.ends_with("-q80.jpg") && pb.exists() && found.is_none() {
+            found = Some(pb.to_string_lossy().to_string());
         }
     }
-    jpg
+    found
 }
 
 pub(crate) fn db_move_image_path(
@@ -4653,12 +4804,13 @@ pub async fn video_compat(
 
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x08000000;
-        let tmp_path = vid_dir.join(format!("compat-{}.tmp.mp4", hash));
         let ffmpeg = find_ffmpeg_exe();
-        let status = std::process::Command::new(&ffmpeg)
-            .creation_flags(CREATE_NO_WINDOW)
+        let tmp_path = vid_dir.join(format!("compat-{}.tmp.mp4", hash));
+        let mut cmd = std::process::Command::new(&ffmpeg);
+        cmd.creation_flags(CREATE_NO_WINDOW)
+            // -nostats + loglevel error：别把进度刷到 stderr（刷得越多、超时监控越容易被淹）
+            .args(["-y", "-loglevel", "error", "-nostats"])
             .args([
-                "-y",
                 "-i",
                 &file_path,
                 "-c:v",
@@ -4676,18 +4828,19 @@ pub async fn video_compat(
                 "-movflags",
                 "+faststart",
             ])
-            .arg(&tmp_path)
-            .output();
+            .arg(&tmp_path);
+        // 转码最长给 10 分钟：超时直接 kill，宁可这张图没海报，也不留一个吃 GPU 的孤儿 ffmpeg
+        let status = output_with_timeout(&mut cmd, std::time::Duration::from_secs(600));
 
         match status {
-            Ok(out) if out.status.success() && tmp_path.exists() => {
+            Some(out) if out.status.success() && tmp_path.exists() => {
                 let _ = std::fs::rename(&tmp_path, &out_path);
                 Ok(serde_json::json!({
                     "ok": true,
                     "path": out_path.to_string_lossy().to_string()
                 }))
             }
-            Ok(out) => {
+            Some(out) => {
                 let _ = std::fs::remove_file(&tmp_path);
                 let err = String::from_utf8_lossy(&out.stderr);
                 Ok(serde_json::json!({
@@ -4695,12 +4848,14 @@ pub async fn video_compat(
                     "error": format!("ffmpeg 转码失败: {}", err.chars().take(200).collect::<String>())
                 }))
             }
-            Err(e) => {
+            None => {
                 let _ = std::fs::remove_file(&tmp_path);
-                Ok(serde_json::json!({ "ok": false, "error": format!("未找到 ffmpeg: {}", e) }))
+                Ok(serde_json::json!({
+                    "ok": false,
+                    "error": "ffmpeg 超时（10 分钟）已被中止，避免留下长时间吃 GPU 的进程"
+                }))
             }
-        }
-    })
+        }    })
     .await
     .map_err(|e| e.to_string())?
 }
@@ -6047,6 +6202,55 @@ pub async fn ai_dup_cancel() -> Result<serde_json::Value, String> {
 mod tests {
     use super::*;
 
+    /// 透明图必须走无损 WebP（否则 JPEG 会暴露 alpha=0 里藏的 RGB，变成彩色毛刺）
+    #[test]
+    fn save_thumb_smart_keeps_transparency() {
+        let dir = crate::testutil::TempDir::new("picnest_webp_test");
+        let rgba = image::RgbaImage::from_pixel(16, 16, image::Rgba([12, 34, 56, 0]));
+        let img = image::DynamicImage::ImageRgba8(rgba);
+        let out = save_thumb_smart(&img, dir.path(), "abc").expect("应该写出缩略图");
+        assert!(
+            out.to_string_lossy().ends_with("-lossless.webp"),
+            "透明图没走 webp: {}",
+            out.display()
+        );
+        assert!(std::fs::metadata(&out).map(|m| m.len() > 0).unwrap_or(false));
+    }
+
+    /// 不含透明的不该多花体积走无损
+    #[test]
+    fn save_thumb_smart_uses_jpeg_when_opaque() {
+        let dir = crate::testutil::TempDir::new("picnest_webp_test2");
+        let rgb = image::RgbImage::from_pixel(16, 16, image::Rgb([200, 100, 50]));
+        let img = image::DynamicImage::ImageRgb8(rgb);
+        let out = save_thumb_smart(&img, dir.path(), "opq").expect("应该写出缩略图");
+        assert!(out.to_string_lossy().ends_with("-q80.jpg"), "{}", out.display());
+    }
+
+    /// 硬件友好度的底线：卡住的子进程必须被准点杀掉，不能留在后台吃 CPU
+    #[test]
+    fn output_with_timeout_kills_hanging_child() {
+        let mut cmd = std::process::Command::new("powershell");
+        cmd.args(["-Command", "Start-Sleep -Seconds 10"]);
+        let t0 = std::time::Instant::now();
+        let out = output_with_timeout(&mut cmd, std::time::Duration::from_millis(400));
+        assert!(out.is_none(), "应超时返回 None");
+        assert!(
+            t0.elapsed().as_secs() < 5,
+            "必须及时中止，实际耗时 {:?}",
+            t0.elapsed()
+        );
+    }
+
+    #[test]
+    fn output_with_timeout_returns_fast_child_output() {
+        let mut cmd = std::process::Command::new("cmd");
+        cmd.args(["/c", "echo", "picnest"]);
+        let out = output_with_timeout(&mut cmd, std::time::Duration::from_secs(15)).expect("应正常返回");
+        assert!(out.status.success());
+        assert!(String::from_utf8_lossy(&out.stdout).contains("picnest"));
+    }
+
     #[test]
     fn text_read_and_save_handles_utf8_bom_and_gb18030() {
         let tmp = std::env::temp_dir().join(format!("picnest_txt_test_{}", std::process::id()));
@@ -6081,9 +6285,8 @@ mod tests {
 
     #[test]
     fn bench_10k_queries_do_not_deadlock() {
-        let tmp = std::env::temp_dir().join(format!("picnest_test_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).unwrap();
+        // TempDir 的 Drop 守卫负责清理：断言 panic 也不会在 %TEMP% 里留垃圾
+        let tmp = crate::testutil::TempDir::new("picnest_test");
         let db_path = tmp.join("test.db");
         let conn = crate::db::init_db(&db_path).unwrap();
         conn.execute("INSERT INTO folders (path) VALUES (?1)", ["D:\\DummyRoot"]).unwrap();
@@ -6114,13 +6317,11 @@ mod tests {
             .count();
         assert_eq!(count, 10800);
         println!("10800 images_by_dir SQL took {}ms", t0.elapsed().as_millis());
-        let _ = trash::delete(&tmp);
     }
 
     #[test]
     fn group_a_crop_memory_rename_sort_and_export_work() {
-        let tmp = std::env::temp_dir().join(format!("picnest_group_a_{}", std::process::id()));
-        let _ = trash::delete(&tmp);
+        let tmp = crate::testutil::TempDir::new("picnest_group_a");
         let root = tmp.join("lib");
         let sub_a = root.join("02_Beta");
         let sub_a_nested = sub_a.join("Child");
@@ -6231,6 +6432,5 @@ mod tests {
         assert!(export_target.join("02_Beta").join("art.png").exists());
 
         drop(conn);
-        let _ = trash::delete(&tmp);
     }
 }
