@@ -2,9 +2,9 @@
 name = "app"
 version = "1.0.0"
 description = "A Tauri App"
-authors = ["you"]
-license = ""
-repository = ""
+authors = ["Ranbow29"]
+license = "GPL-3.0"
+repository = "https://github.com/Ranbow29/PicNest"
 edition = "2024"
 rust-version = "1.90"
 
