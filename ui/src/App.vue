@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useLibrary } from './stores/library'
 import { handleExternalDrop } from './lib/dropExtract'
 import { isExternalDT, isNativeDragOutActive, markNativeDragOut, endNativeDragOut } from './lib/dnd'
@@ -8,23 +8,25 @@ import TitleBar from './components/TitleBar.vue'
 import SideBar from './components/SideBar.vue'
 import ImageGrid from './components/ImageGrid.vue'
 import Inspector from './components/Inspector.vue'
-import Lightbox from './components/Lightbox.vue'
 import ContextMenu from './components/ContextMenu.vue'
-import DuplicateDialog from './components/DuplicateDialog.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
-import DupFinder from './components/DupFinder.vue'
-import BriefMode from './components/BriefMode.vue'
 import TrashMenu from './components/TrashMenu.vue'
 import ImportResultCard from './components/ImportResultCard.vue'
 import TaskProgress from './components/TaskProgress.vue'
-import PluginManager from './components/PluginManager.vue'
-import HelpDialog from './components/HelpDialog.vue'
-import UpdateDialog from './components/UpdateDialog.vue'
-import VisualSearchDialog from './components/VisualSearchDialog.vue'
 import { api } from './api.js'
 import { refreshPluginThemes } from './lib/plugins'
 import ResizeHandle from './components/ResizeHandle.vue'
 import InspResize from './components/InspResize.vue'
+
+// 重型弹窗与全屏视图按需懒加载：独立分包，大幅减轻首屏 bundle 解析与挂载开销
+const Lightbox = defineAsyncComponent(() => import('./components/Lightbox.vue'))
+const DuplicateDialog = defineAsyncComponent(() => import('./components/DuplicateDialog.vue'))
+const DupFinder = defineAsyncComponent(() => import('./components/DupFinder.vue'))
+const BriefMode = defineAsyncComponent(() => import('./components/BriefMode.vue'))
+const PluginManager = defineAsyncComponent(() => import('./components/PluginManager.vue'))
+const HelpDialog = defineAsyncComponent(() => import('./components/HelpDialog.vue'))
+const UpdateDialog = defineAsyncComponent(() => import('./components/UpdateDialog.vue'))
+const VisualSearchDialog = defineAsyncComponent(() => import('./components/VisualSearchDialog.vue'))
 
 // ZCode 式嵌套结构：左栏底层(可拖宽) → 主面板工作区（浏览 ⇄ 大图双模式）→ 详情计划式浮岛(可收起可拖宽)
 // 外部拖入 = 位置即意图：主展示区/树行/缝隙/资料库栏各自高亮 + 跟随光标的落点提示
@@ -118,7 +120,10 @@ function onKeydown(e) {
   }
   if (e.shiftKey && (e.key === 'S' || e.code === 'KeyS') && !e.ctrlKey && !e.metaKey && !e.altKey) {
     if (isTypingTarget(e.target)) return
-    if (lib.selectedPaths?.length || lib.activeImage?.file_path) {
+    const activePath = lib.lightbox?.open && lib.lightbox?.path
+      ? lib.lightbox.path
+      : (lib.selected?.file_path || lib.selectedPath)
+    if (lib.selectedPaths?.length || activePath) {
       e.preventDefault()
       lib.openVisualSearchForSelected()
       return
@@ -269,17 +274,17 @@ const chipStyle = computed(() => {
     <b>松开</b><span>{{ lib.dropHint.label }}</span>
   </div>
   <ContextMenu />
-  <DuplicateDialog />
+  <DuplicateDialog v-if="lib.dupDialog.open" />
   <ConfirmDialog />
-  <DupFinder />
-  <BriefMode />
+  <DupFinder v-if="lib.dupFinder.open" />
+  <BriefMode v-if="lib.brief.open" />
   <TrashMenu />
   <ImportResultCard />
   <TaskProgress />
-  <PluginManager />
-  <HelpDialog />
+  <PluginManager v-if="lib.pluginsOpen" />
+  <HelpDialog v-if="lib.helpOpen" />
   <UpdateDialog ref="updateDialogRef" />
-  <VisualSearchDialog />
+  <VisualSearchDialog v-if="lib.visualSearch?.open" />
 </template>
 
 <style scoped>
@@ -305,7 +310,22 @@ const chipStyle = computed(() => {
   box-shadow: var(--shadow-float), inset 0 1px 0 var(--panel-edge);
   overflow: hidden;
 }
-.main-inner { flex: 1; display: flex; min-height: 0; position: relative; } /* 头块自己让位玻璃顶栏 */
+/* 主画纸底纹：铺在 .main-panel 最底层，留白/缝隙/页头透出纸张触感，z-index:0 绝不盖在作品图片上 */
+.main-panel::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background-image: var(--paper-grain);
+  background-repeat: repeat;
+  background-size: 320px 320px;
+  opacity: var(--paper-opacity, 0.16);
+  mix-blend-mode: var(--paper-blend, multiply);
+  transition: opacity 0.28s ease;
+}
+.main-inner { flex: 1; display: flex; min-height: 0; position: relative; z-index: 1; } /* 头块自己让位玻璃顶栏 */
 .browse { flex: 1; display: flex; min-height: 0; position: relative; --insp-reserve: 0px; }
 .browse.lb-behind { position: absolute; inset: 0; visibility: hidden; pointer-events: none; }
 .browse.insp-open { --insp-reserve: calc(var(--insp-w, 296px) + 16px); }

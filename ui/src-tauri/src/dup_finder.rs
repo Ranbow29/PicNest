@@ -1,4 +1,3 @@
-use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
@@ -32,6 +31,7 @@ pub struct ScannedImg {
 /// 一次 AI 查重的扫描会话：扫描结果和已确认对都留着，
 /// 这样“查完 40 对再接着查”不用重新扫全库、重算哈希。
 pub struct AiScanSession {
+    pub created_at: Instant,
     pub images: Vec<ScannedImg>,
     pub candidates: Vec<(usize, usize, u32)>,
     pub verified: Vec<(usize, usize)>,
@@ -51,6 +51,24 @@ static AI_SESSIONS: std::sync::OnceLock<std::sync::Mutex<HashMap<String, AiScanS
 
 fn sessions() -> &'static std::sync::Mutex<HashMap<String, AiScanSession>> {
     AI_SESSIONS.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
+fn insert_ai_session(key: String, sess: AiScanSession) {
+    if let Ok(mut m) = sessions().lock() {
+        m.insert(key.clone(), sess);
+        while m.len() > 2 {
+            let oldest = m
+                .iter()
+                .filter(|(k, _)| *k != &key)
+                .min_by_key(|(_, v)| v.created_at)
+                .map(|(k, _)| k.clone());
+            if let Some(old_k) = oldest {
+                m.remove(&old_k);
+            } else {
+                break;
+            }
+        }
+    }
 }
 
 pub fn session_key(root_id: i64, rel: Option<&str>) -> String {
@@ -194,7 +212,7 @@ pub fn execute_find_duplicates(
     DUP_CANCEL_FLAG.store(false, Ordering::SeqCst);
     let t0 = Instant::now();
 
-    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+    let conn = crate::db::open_conn_with_pragmas(db_path).map_err(|e| e.to_string())?;
 
     // 获取资料库根路径
     let root_path: String = conn
@@ -924,9 +942,8 @@ pub fn execute_ai_dup_continue(
             "ms": 0,
         }
     });
-    if let Ok(mut m) = sessions().lock() {
-        m.insert(key, sess);
-    }
+    sess.created_at = Instant::now();
+    insert_ai_session(key, sess);
     Ok(out)
 }
 
@@ -982,8 +999,23 @@ fn color_diff(a: &[u8], b: &[u8]) -> usize {
 
 /// 64-bit pHash：32×32 灰度做 DCT，取左上 8×8 低频（去 DC）中位数二值化。
 /// 同时返回水平翻转版本（2D-DCT 翻转后奇数阶 u 反号，用于镜像感知）。
+/// 采用预计算 8×32 余弦表 + 可分离 2D-DCT（先对 32 行做 8 点 1D-DCT 存入 32×8 栈数组，再对 8 列做 8 点 1D-DCT），
+/// 与原三重循环数学完全等价，消除每张图 64,512 次 f64::cos() 调用。
+fn dct_cos_table() -> &'static [[f64; 32]; 8] {
+    static COS_TABLE: std::sync::OnceLock<[[f64; 32]; 8]> = std::sync::OnceLock::new();
+    COS_TABLE.get_or_init(|| {
+        use std::f64::consts::PI;
+        let mut tbl = [[0.0f64; 32]; 8];
+        for u in 0..8 {
+            for x in 0..32 {
+                tbl[u][x] = (((2 * x + 1) as f64) * (u as f64) * PI / 64.0).cos();
+            }
+        }
+        tbl
+    })
+}
+
 fn compute_phash(rgb: &[u8]) -> (Vec<u64>, Vec<u64>) {
-    use std::f64::consts::PI;
     let mut g = [0f64; 1024];
     for i in 0..1024 {
         let r = rgb[i * 3] as f64;
@@ -991,22 +1023,32 @@ fn compute_phash(rgb: &[u8]) -> (Vec<u64>, Vec<u64>) {
         let b = rgb[i * 3 + 2] as f64;
         g[i] = 0.299 * r + 0.587 * gg + 0.114 * b;
     }
-    let cos = |u: usize, x: usize| -> f64 { (((2 * x + 1) as f64) * (u as f64) * PI / 64.0).cos() };
+    let cos_tbl = dct_cos_table();
+    // 第一步：对 32 行做 8 点 1D-DCT，存入 32×8 栈数组 row_dct[y][u]
+    let mut row_dct = [[0.0f64; 8]; 32];
+    for y in 0..32 {
+        let row = &g[y * 32..y * 32 + 32];
+        for u in 0..8 {
+            let cu = &cos_tbl[u];
+            let mut s = 0.0f64;
+            for x in 0..32 {
+                s += row[x] * cu[x];
+            }
+            row_dct[y][u] = s;
+        }
+    }
+    // 第二步：对 8 列做 8 点 1D-DCT
     let mut vals: Vec<f64> = Vec::with_capacity(63);
     let mut flip_vals: Vec<f64> = Vec::with_capacity(63);
     for v in 0..8 {
+        let cv = &cos_tbl[v];
         for u in 0..8 {
             if u == 0 && v == 0 {
                 continue;
             }
-            let mut s = 0f64;
+            let mut s = 0.0f64;
             for y in 0..32 {
-                let row = y * 32;
-                let mut row_sum = 0f64;
-                for x in 0..32 {
-                    row_sum += g[row + x] * cos(u, x);
-                }
-                s += row_sum * cos(v, y);
+                s += row_dct[y][u] * cv[y];
             }
             vals.push(s);
             flip_vals.push(if u % 2 == 1 { -s } else { s });
@@ -1102,7 +1144,7 @@ pub fn execute_ai_dup_scan(
     root_id: i64,
     rel: Option<&str>,
     max_pairs: Option<usize>,
-    progress: Option<&dyn Fn(&str, usize, usize, usize)>,
+    progress: Option<&(dyn Fn(&str, usize, usize, usize) + Sync)>,
 ) -> Result<serde_json::Value, String> {
     // 开扫前先扔掉以前异常退出留下的请求/响应临时文件（里面有 base64 图，不能长期躺在 %TEMP%）
     sweep_stale_ai_temps(&std::env::temp_dir(), 3600);
@@ -1116,7 +1158,7 @@ pub fn execute_ai_dup_scan(
 
     let cfg = load_ai_config(data_dir);
     let max_p = max_pairs.unwrap_or(40).clamp(1, 200);
-    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+    let conn = crate::db::open_conn_with_pragmas(db_path).map_err(|e| e.to_string())?;
     // 哈希阶段的进度分母：先查总数，否则前端显示 “192/0”
     let est_total: usize = conn
         .query_row(
@@ -1143,19 +1185,43 @@ pub fn execute_ai_dup_scan(
         None
     };
 
+    let _ = conn.execute(
+        "CREATE TABLE IF NOT EXISTS picnest_img_hash (
+            file_path TEXT PRIMARY KEY,
+            size INTEGER NOT NULL,
+            mtime INTEGER NOT NULL,
+            dhash INTEGER NOT NULL,
+            dhash_flip INTEGER NOT NULL,
+            color BLOB NOT NULL,
+            phash0 INTEGER NOT NULL,
+            phash1 INTEGER NOT NULL,
+            phash_flip0 INTEGER NOT NULL,
+            phash_flip1 INTEGER NOT NULL
+        )",
+        [],
+    );
+
     let mut stmt = conn
         .prepare(
-            "SELECT id, file_path, size, mtime, width, height, thumbnail_path \
-             FROM images \
-             WHERE folder_id = ?1 AND deleted_at IS NULL",
+            "SELECT i.id, i.file_path, i.size, i.mtime, i.width, i.height, i.thumbnail_path, \
+                    h.dhash, h.dhash_flip, h.color, h.phash0, h.phash1, h.phash_flip0, h.phash_flip1 \
+             FROM images i \
+             LEFT JOIN picnest_img_hash h \
+               ON h.file_path = i.file_path AND h.size = i.size AND h.mtime = i.mtime \
+             WHERE i.folder_id = ?1 AND i.deleted_at IS NULL",
         )
         .map_err(|e| e.to_string())?;
 
     let mut rows = stmt.query([root_id]).map_err(|e| e.to_string())?;
 
-    // ScannedImg 已提到模块级
+    struct RawScanItem {
+        idx: usize,
+        info: FileInfo,
+        aspect: f32,
+        cached: Option<(u64, u64, Vec<u8>, Vec<u64>, Vec<u64>)>,
+    }
 
-    let mut images: Vec<ScannedImg> = Vec::new();
+    let mut raw_items: Vec<RawScanItem> = Vec::with_capacity(est_total);
     let mut total_scanned = 0usize;
 
     while let Some(r) = rows.next().map_err(|e| e.to_string())? {
@@ -1178,11 +1244,8 @@ pub fn execute_ai_dup_scan(
         }
 
         let p = Path::new(&fp);
+        let idx = total_scanned;
         total_scanned += 1;
-        // 哈希阶段进度：每 64 张推一次（旧版 4 张一次，6262 张会发 1500 多次事件）
-        if total_scanned % 64 == 0 {
-            notify("hash", total_scanned, est_total, 0);
-        }
 
         let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
         let rel_of = if let Ok(rel_path) = p.parent().unwrap_or(p).strip_prefix(root_p) {
@@ -1203,34 +1266,33 @@ pub fn execute_ai_dup_scan(
                 }
             });
 
-        let thumb_file = Path::new(&thumb);
-        let img_target = if thumb_file.exists() {
-            thumb_file
-        } else {
-            p
-        };
-
-        let mut dhash = None;
-        let mut dhash_flip = None;
-        let mut color32: Option<Vec<u8>> = None;
-        let mut phash: Option<Vec<u64>> = None;
-        let mut phash_flip: Option<Vec<u64>> = None;
         let aspect = if height > 0 { width as f32 / height as f32 } else { 1.0 };
 
-        if let Ok(bytes) = fs::read(img_target) {
-            if let Ok(d_img) = image::load_from_memory(&bytes) {
-                dhash = Some(compute_dhash(&d_img));
-                dhash_flip = Some(compute_dhash_flip(&d_img));
-                // 色块 + pHash（用于二次预筛，减少 AI 调用）
-                let c = flatten_white_32(&d_img);
-                let (ph, phf) = compute_phash(&c);
-                color32 = Some(c);
-                phash = Some(ph);
-                phash_flip = Some(phf);
+        let cached = match (
+            r.get::<_, Option<i64>>(7).ok().flatten(),
+            r.get::<_, Option<i64>>(8).ok().flatten(),
+            r.get::<_, Option<Vec<u8>>>(9).ok().flatten(),
+            r.get::<_, Option<i64>>(10).ok().flatten(),
+            r.get::<_, Option<i64>>(11).ok().flatten(),
+            r.get::<_, Option<i64>>(12).ok().flatten(),
+            r.get::<_, Option<i64>>(13).ok().flatten(),
+        ) {
+            (Some(dh), Some(dhf), Some(col), Some(p0), Some(p1), Some(pf0), Some(pf1))
+                if col.len() == 32 * 32 * 3 =>
+            {
+                Some((
+                    dh as u64,
+                    dhf as u64,
+                    col,
+                    vec![p0 as u64, p1 as u64],
+                    vec![pf0 as u64, pf1 as u64],
+                ))
             }
-        }
+            _ => None,
+        };
 
-        images.push(ScannedImg {
+        raw_items.push(RawScanItem {
+            idx,
             info: FileInfo {
                 id,
                 path: fp,
@@ -1242,14 +1304,139 @@ pub fn execute_ai_dup_scan(
                 thumb,
                 rel: rel_of,
             },
-            dhash,
-            dhash_flip,
             aspect,
-            color: color32,
-            phash,
-            phash_flip,
+            cached,
         });
     }
+    drop(rows);
+    drop(stmt);
+
+    let mut images: Vec<Option<ScannedImg>> = vec![None; raw_items.len()];
+    let mut uncached: Vec<RawScanItem> = Vec::new();
+    let done_counter = AtomicUsize::new(0);
+
+    for item in raw_items {
+        if let Some((dh, dhf, col, ph, phf)) = item.cached {
+            let cur = done_counter.fetch_add(1, Ordering::Relaxed) + 1;
+            if cur % 64 == 0 {
+                notify("hash", cur, total_scanned.max(est_total), 0);
+            }
+            images[item.idx] = Some(ScannedImg {
+                info: item.info,
+                dhash: Some(dh),
+                dhash_flip: Some(dhf),
+                aspect: item.aspect,
+                color: Some(col),
+                phash: Some(ph),
+                phash_flip: Some(phf),
+            });
+        } else {
+            uncached.push(item);
+        }
+    }
+
+    if !uncached.is_empty() {
+        use rayon::prelude::*;
+        let computed: Vec<(usize, ScannedImg, Option<(String, i64, i64, i64, i64, Vec<u8>, i64, i64, i64, i64)>)> =
+            uncached
+                .into_par_iter()
+                .map(|item| {
+                    if AI_DUP_CANCEL_FLAG.load(Ordering::Relaxed) {
+                        let empty = ScannedImg {
+                            info: item.info,
+                            dhash: None,
+                            dhash_flip: None,
+                            aspect: item.aspect,
+                            color: None,
+                            phash: None,
+                            phash_flip: None,
+                        };
+                        return (item.idx, empty, None);
+                    }
+                    let thumb_file = Path::new(&item.info.thumb);
+                    let orig_file = Path::new(&item.info.path);
+                    let img_target = if thumb_file.exists() { thumb_file } else { orig_file };
+
+                    let mut dhash = None;
+                    let mut dhash_flip = None;
+                    let mut color32: Option<Vec<u8>> = None;
+                    let mut phash: Option<Vec<u64>> = None;
+                    let mut phash_flip: Option<Vec<u64>> = None;
+                    let mut cache_row = None;
+
+                    if let Ok(bytes) = fs::read(img_target) {
+                        if let Ok(d_img) = image::load_from_memory(&bytes) {
+                            let dh = compute_dhash(&d_img);
+                            let dhf = compute_dhash_flip(&d_img);
+                            let c = flatten_white_32(&d_img);
+                            let (ph, phf) = compute_phash(&c);
+                            cache_row = Some((
+                                item.info.path.clone(),
+                                item.info.size as i64,
+                                item.info.mtime,
+                                dh as i64,
+                                dhf as i64,
+                                c.clone(),
+                                ph.first().copied().unwrap_or(0) as i64,
+                                ph.get(1).copied().unwrap_or(0) as i64,
+                                phf.first().copied().unwrap_or(0) as i64,
+                                phf.get(1).copied().unwrap_or(0) as i64,
+                            ));
+                            dhash = Some(dh);
+                            dhash_flip = Some(dhf);
+                            color32 = Some(c);
+                            phash = Some(ph);
+                            phash_flip = Some(phf);
+                        }
+                    }
+
+                    let cur = done_counter.fetch_add(1, Ordering::Relaxed) + 1;
+                    if cur % 64 == 0 {
+                        notify("hash", cur, total_scanned.max(est_total), 0);
+                    }
+
+                    let scanned = ScannedImg {
+                        info: item.info,
+                        dhash,
+                        dhash_flip,
+                        aspect: item.aspect,
+                        color: color32,
+                        phash,
+                        phash_flip,
+                    };
+                    (item.idx, scanned, cache_row)
+                })
+                .collect();
+
+        if AI_DUP_CANCEL_FLAG.load(Ordering::Relaxed) {
+            return Ok(json!({ "ok": true, "canceled": true, "groups": [], "stats": null }));
+        }
+
+        let mut to_cache = Vec::with_capacity(computed.len());
+        for (idx, sc, crow) in computed {
+            images[idx] = Some(sc);
+            if let Some(r) = crow {
+                to_cache.push(r);
+            }
+        }
+
+        if !to_cache.is_empty() {
+            if let Ok(tx) = conn.unchecked_transaction() {
+                if let Ok(mut ins) = tx.prepare(
+                    "INSERT OR REPLACE INTO picnest_img_hash \
+                     (file_path, size, mtime, dhash, dhash_flip, color, phash0, phash1, phash_flip0, phash_flip1) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                ) {
+                    for r in to_cache {
+                        let _ = ins.execute(rusqlite::params![r.0, r.1, r.2, r.3, r.4, r.5, r.6, r.7, r.8, r.9]);
+                    }
+                }
+                let _ = tx.commit();
+            }
+        }
+    }
+
+    let images: Vec<ScannedImg> = images.into_iter().flatten().collect();
 
     notify("hash", total_scanned, total_scanned, 0);
 
@@ -1258,7 +1445,8 @@ pub fn execute_ai_dup_scan(
     //   d = min(直接汉明距离, 镜像汉明距离)
     //   不看宽高比（旧版没有这个条件；加了会砍掉“同版式不同裁切”的候选，
     //   而那正是最需要 AI 判断的）
-    let mut candidate_pairs: Vec<(usize, usize, u32)> = Vec::new();
+    // 筛出候选对时直接把已计算的 color_diff 存入元组第 4 项，避免 sort_by 时重复跑 1024 像素循环
+    let mut candidate_pairs_with_cd: Vec<(usize, usize, u32, usize)> = Vec::new();
     let mut dhash_pairs = 0usize;
     let mut color_filtered = 0usize;
     let mut cd_fail_sum: u64 = 0;
@@ -1301,7 +1489,7 @@ pub fn execute_ai_dup_scan(
                 || ph.is_none()
                 || (cd.unwrap_or(usize::MAX) <= COLOR_LIMIT && ph.unwrap_or(u32::MAX) <= PHASH_LIMIT);
             if pass {
-                candidate_pairs.push((i, j, d));
+                candidate_pairs_with_cd.push((i, j, d, cd.unwrap_or(9999)));
             } else {
                 color_filtered += 1;
                 if let Some(v) = cd {
@@ -1321,14 +1509,12 @@ pub fn execute_ai_dup_scan(
         }
     }
 
-    // 排序：dHash 距离，其次色块差异（旧版口径）
-    candidate_pairs.sort_by(|a, b| {
-        a.2.cmp(&b.2).then_with(|| {
-            let ca = images[a.0].color.as_ref().zip(images[a.1].color.as_ref()).map(|(x, y)| color_diff(x, y)).unwrap_or(9999);
-            let cb = images[b.0].color.as_ref().zip(images[b.1].color.as_ref()).map(|(x, y)| color_diff(x, y)).unwrap_or(9999);
-            ca.cmp(&cb)
-        })
-    });
+    // 排序：dHash 距离，其次色块差异（直接复用已计算的 cd，消除排序比较中的重复像素循环）
+    candidate_pairs_with_cd.sort_by(|a, b| a.2.cmp(&b.2).then_with(|| a.3.cmp(&b.3)));
+    let mut candidate_pairs: Vec<(usize, usize, u32)> = candidate_pairs_with_cd
+        .into_iter()
+        .map(|(i, j, d, _)| (i, j, d))
+        .collect();
     let total_candidates = candidate_pairs.len();
     let all_candidates = candidate_pairs.clone();
     if candidate_pairs.len() > max_p {
@@ -1438,24 +1624,23 @@ pub fn execute_ai_dup_scan(
 
     if verified_pairs.is_empty() {
         // 即使这批没确认任何对，也要存会话，以便“继续查”
-        if let Ok(mut m) = sessions().lock() {
-            m.insert(
-                session_key(root_id, rel),
-                AiScanSession {
-                    images: images.clone(),
-                    candidates: all_candidates.clone(),
-                    verified: Vec::new(),
-                    checked: candidate_pairs_len,
-                    total_candidates,
-                    dhash_pairs,
-                    color_filtered,
-                    scopes: total_scanned,
-                    ai_calls,
-                    ai_fail,
-                    ai_error: ai_error.clone(),
-                },
-            );
-        }
+        insert_ai_session(
+            session_key(root_id, rel),
+            AiScanSession {
+                created_at: Instant::now(),
+                images: images.clone(),
+                candidates: all_candidates.clone(),
+                verified: Vec::new(),
+                checked: candidate_pairs_len,
+                total_candidates,
+                dhash_pairs,
+                color_filtered,
+                scopes: total_scanned,
+                ai_calls,
+                ai_fail,
+                ai_error: ai_error.clone(),
+            },
+        );
         return Ok(json!({
             "ok": true,
             "rootId": root_id,
@@ -1479,27 +1664,26 @@ pub fn execute_ai_dup_scan(
     }
 
     // 并查集聚合（抽成函数，以便“继续查”复用）
-    let (mut ai_groups, mut total_wasted, mut total_files) = build_groups(&images, &verified_pairs);
+    let (ai_groups, total_wasted, total_files) = build_groups(&images, &verified_pairs);
 
     // 保存扫描会话：下次同一目录“继续查”不用重扫全库
-    if let Ok(mut m) = sessions().lock() {
-        m.insert(
-            session_key(root_id, rel),
-            AiScanSession {
-                images: images.clone(),
-                candidates: all_candidates.clone(),
-                verified: verified_pairs.clone(),
-                checked: candidate_pairs_len,
-                total_candidates,
-                dhash_pairs,
-                color_filtered,
-                scopes: total_scanned,
-                ai_calls,
-                ai_fail,
-                ai_error: ai_error.clone(),
-            },
-        );
-    }
+    insert_ai_session(
+        session_key(root_id, rel),
+        AiScanSession {
+            created_at: Instant::now(),
+            images: images.clone(),
+            candidates: all_candidates.clone(),
+            verified: verified_pairs.clone(),
+            checked: candidate_pairs_len,
+            total_candidates,
+            dhash_pairs,
+            color_filtered,
+            scopes: total_scanned,
+            ai_calls,
+            ai_fail,
+            ai_error: ai_error.clone(),
+        },
+    );
 
     let group_count = ai_groups.len();
     Ok(json!({

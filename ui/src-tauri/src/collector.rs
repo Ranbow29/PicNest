@@ -957,7 +957,7 @@ fn handle_client(mut stream: TcpStream) {
         }
     };
 
-    let conn = match rusqlite::Connection::open(db_path) {
+    let conn = match crate::db::open_conn_with_pragmas(db_path) {
         Ok(c) => c,
         Err(e) => {
             send_json(

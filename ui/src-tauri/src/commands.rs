@@ -26,22 +26,22 @@ pub struct CmdTimer {
 impl CmdTimer {
     pub fn new(name: &'static str) -> Self {
         // 把执行线程也打出来：用来实证「sync 命令是不是真的跑在宿主主线程上」
-        crate::media_server::diag_push(&format!(
+        crate::media_server::diag_log!(
             "cmd> {} [{}]",
             name,
             std::thread::current().name().unwrap_or("?")
-        ));
+        );
         Self { name, t0: std::time::Instant::now() }
     }
 }
 
 impl Drop for CmdTimer {
     fn drop(&mut self) {
-        crate::media_server::diag_push(&format!(
+        crate::media_server::diag_log!(
             "cmd< {} {}ms",
             self.name,
             self.t0.elapsed().as_millis()
-        ));
+        );
     }
 }
 
@@ -212,16 +212,25 @@ pub fn window_toggle_always_on_top(window: tauri::Window) -> Result<bool, String
 
 #[tauri::command]
 pub fn app_version() -> String {
-    "1.0.0".to_string()
+    env!("CARGO_PKG_VERSION").to_string()
 }
 
 #[tauri::command]
 pub fn open_external(url: String) -> Result<(), String> {
+    let trimmed = url.trim();
+    if trimmed.is_empty() || trimmed.chars().any(|c| c.is_control()) {
+        return Err("无效的外部链接：含非法控制字符或为空".to_string());
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    if !lower.starts_with("http://") && !lower.starts_with("https://") {
+        return Err("仅支持 http:// 或 https:// 协议链接".to_string());
+    }
     #[cfg(target_os = "windows")]
     {
-        let _ = std::process::Command::new("cmd")
-            .args(["/c", "start", "", &url])
-            .spawn();
+        std::process::Command::new("rundll32")
+            .args(["url.dll,FileProtocolHandler", trimmed])
+            .spawn()
+            .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -242,35 +251,36 @@ pub fn get_paths(state: State<AppState>) -> PathsInfo {
 pub async fn get_all_folders(state: State<'_, AppState>) -> Result<Vec<FolderItem>, String> {
     let db_path = state.db_path.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let conn = open_read_conn(&db_path)?;
-        let mut stmt = conn
-            .prepare("SELECT id, path, COALESCE(display_name, '') FROM folders ORDER BY id ASC")
-            .map_err(|e| e.to_string())?;
+        with_read_conn(&db_path, |conn| {
+            let mut stmt = conn
+                .prepare("SELECT id, path, COALESCE(display_name, '') FROM folders ORDER BY id ASC")
+                .map_err(|e| e.to_string())?;
 
-        let rows = stmt
-            .query_map([], |row| {
-                let id: i64 = row.get(0)?;
-                let path: String = row.get(1)?;
-                let display_name: String = row.get(2)?;
-                let disk_name = Path::new(&path)
-                    .file_name()
-                    .map(|s| s.to_string_lossy().to_string())
-                    .unwrap_or_else(|| path.clone());
-                let name = if !display_name.trim().is_empty() {
-                    display_name.clone()
-                } else {
-                    disk_name.clone()
-                };
-                Ok(FolderItem {
-                    id,
-                    path,
-                    name,
-                    display_name,
+            let rows = stmt
+                .query_map([], |row| {
+                    let id: i64 = row.get(0)?;
+                    let path: String = row.get(1)?;
+                    let display_name: String = row.get(2)?;
+                    let disk_name = Path::new(&path)
+                        .file_name()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_else(|| path.clone());
+                    let name = if !display_name.trim().is_empty() {
+                        display_name.clone()
+                    } else {
+                        disk_name.clone()
+                    };
+                    Ok(FolderItem {
+                        id,
+                        path,
+                        name,
+                        display_name,
+                    })
                 })
-            })
-            .map_err(|e| e.to_string())?;
+                .map_err(|e| e.to_string())?;
 
-        Ok(rows.flatten().collect())
+            Ok(rows.flatten().collect())
+        })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -316,6 +326,9 @@ pub async fn add_folder_by_path(path: String, state: State<'_, AppState>) -> Res
             tx.commit().map_err(|e| e.to_string())?;
         }
 
+        // 运行时新添加的资料库立即纳入文件系统监听，无需重启应用
+        crate::watcher::watch_path(Path::new(&path));
+
         let name = Path::new(&path)
             .file_name()
             .map(|s| s.to_string_lossy().to_string())
@@ -334,40 +347,39 @@ pub async fn add_folder_by_path(path: String, state: State<'_, AppState>) -> Res
 
 #[tauri::command]
 pub async fn dir_tree(folder_id: i64, state: State<'_, AppState>) -> Result<DirTreeResponse, String> {
-    let t0 = std::time::Instant::now();
-    crate::media_server::diag_push(&format!("dir_tree start folder_id={}", folder_id));
+    crate::media_server::diag_log!("dir_tree start folder_id={}", folder_id);
     let db_path = state.db_path.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let conn = open_read_conn(&db_path)?;
-        let root_path: String = conn
-            .query_row("SELECT path FROM folders WHERE id = ?1", [folder_id], |r| r.get(0))
-            .map_err(|_| "资料库不存在".to_string())?;
+        let (root_path, file_rows, order_map) = with_read_conn(&db_path, |conn| {
+            let root_path: String = conn
+                .query_row("SELECT path FROM folders WHERE id = ?1", [folder_id], |r| r.get(0))
+                .map_err(|_| "资料库不存在".to_string())?;
 
-        let mut stmt = conn
-            .prepare("SELECT file_path FROM images WHERE folder_id = ?1 AND deleted_at IS NULL")
-            .map_err(|e| e.to_string())?;
+            let mut stmt = conn
+                .prepare("SELECT file_path FROM images WHERE folder_id = ?1 AND deleted_at IS NULL")
+                .map_err(|e| e.to_string())?;
 
-        let file_rows: Vec<String> = stmt
-            .query_map([folder_id], |r| r.get::<_, String>(0))
-            .map_err(|e| e.to_string())?
-            .flatten()
-            .collect();
+            let file_rows: Vec<String> = stmt
+                .query_map([folder_id], |r| r.get::<_, String>(0))
+                .map_err(|e| e.to_string())?
+                .flatten()
+                .collect();
 
-        let mut order_map: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
-        let prefix = format!("{}|", folder_id);
-        if let Ok(mut ostmt) = conn.prepare("SELECT key, names FROM picnest_dir_order WHERE key LIKE ?1") {
-            if let Ok(rows) = ostmt.query_map([format!("{}%", prefix)], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-            }) {
-                for row in rows.flatten() {
-                    if let Ok(vec) = serde_json::from_str::<Vec<String>>(&row.1) {
-                        order_map.insert(row.0, vec);
+            let mut order_map: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+            let prefix = format!("{}|", folder_id);
+            if let Ok(mut ostmt) = conn.prepare("SELECT key, names FROM picnest_dir_order WHERE key LIKE ?1") {
+                if let Ok(rows) = ostmt.query_map([format!("{}%", prefix)], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                }) {
+                    for row in rows.flatten() {
+                        if let Ok(vec) = serde_json::from_str::<Vec<String>>(&row.1) {
+                            order_map.insert(row.0, vec);
+                        }
                     }
                 }
             }
-        }
-        drop(stmt);
-        drop(conn); // 查完立刻释放 DB 连接，绝不带着锁扫盘！
+            Ok((root_path, file_rows, order_map))
+        })?; // 查完立刻释放 DB 连接回池，绝不带着连接扫盘！
 
         let root_norm = root_path.replace('\\', "/");
         let root_name = Path::new(&root_path)
@@ -493,6 +505,10 @@ pub async fn dir_tree(folder_id: i64, state: State<'_, AppState>) -> Result<DirT
 /// 的 `_` 会当通配符，统计/封面串到兄弟目录去。
 /// 逐字符处理，避免“先转 `%` 再转 `\`”这种二次转义。
 fn escape_like_pattern(s: &str) -> String {
+    escape_like(s)
+}
+
+pub(crate) fn escape_like(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 8);
     for c in s.chars() {
         match c {
@@ -510,42 +526,58 @@ pub async fn dir_stats(folder_id: i64, rels: Vec<String>, state: State<'_, AppSt
     let _timer = CmdTimer::new("dir_stats");
     let db_path = state.db_path.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let conn = open_read_conn(&db_path)?;
-        let root_path: String = conn
-            .query_row("SELECT path FROM folders WHERE id = ?1", [folder_id], |r| r.get(0))
-            .map_err(|_| "资料库不存在".to_string())?;
+        with_read_conn(&db_path, |conn| {
+            let _: String = conn
+                .query_row("SELECT path FROM folders WHERE id = ?1", [folder_id], |r| r.get(0))
+                .map_err(|_| "资料库不存在".to_string())?;
 
-        let sep = if root_path.contains('\\') { '\\' } else { '/' };
-        let list = if rels.is_empty() { vec![String::new()] } else { rels };
+            let list = if rels.is_empty() { vec![String::new()] } else { rels };
 
-        let mut total_count = 0;
-        let mut total_size = 0;
+            let mut total_count = 0;
+            let mut total_size = 0;
 
-        for rel in &list {
-            let pattern = if rel.is_empty() {
-                format!("{}{}", root_path, sep)
-            } else {
-                let r = rel.trim_matches('/').replace('/', &sep.to_string());
-                format!("{}{}{}{}", root_path, sep, r, sep)
-            };
-
-            let (c, s): (i64, i64) = conn
-                .query_row(
-                    "SELECT COUNT(*), COALESCE(SUM(size), 0) FROM images WHERE folder_id = ?1 AND deleted_at IS NULL AND file_path LIKE ?2 || '%' ESCAPE '\\'",
-                    rusqlite::params![folder_id, escape_like_pattern(&pattern)],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
+            let mut sub_stmt = conn
+                .prepare(
+                    "SELECT COUNT(*), COALESCE(SUM(size), 0)
+                     FROM images
+                     WHERE folder_id = ?1 AND deleted_at IS NULL
+                       AND (dir_rel = ?2 OR (dir_rel >= ?3 AND dir_rel < ?4))",
                 )
-                .unwrap_or((0, 0));
+                .map_err(|e| e.to_string())?;
 
-            total_count += c;
-            total_size += s;
-        }
+            for rel in &list {
+                let rel_low = rel
+                    .trim_matches(|c| c == '/' || c == '\\')
+                    .replace('\\', "/")
+                    .to_lowercase();
+                let (c, s): (i64, i64) = if rel_low.is_empty() {
+                    conn.query_row(
+                        "SELECT COUNT(*), COALESCE(SUM(size), 0) FROM images WHERE folder_id = ?1 AND deleted_at IS NULL",
+                        [folder_id],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .unwrap_or((0, 0))
+                } else {
+                    let sub_low = format!("{}/", rel_low);
+                    let sub_high = format!("{}0", rel_low);
+                    sub_stmt
+                        .query_row(
+                            rusqlite::params![folder_id, rel_low, sub_low, sub_high],
+                            |row| Ok((row.get(0)?, row.get(1)?)),
+                        )
+                        .unwrap_or((0, 0))
+                };
 
-        Ok(DirStatsResult {
-            ok: true,
-            count: total_count,
-            size: total_size,
-            created_at: 0,
+                total_count += c;
+                total_size += s;
+            }
+
+            Ok(DirStatsResult {
+                ok: true,
+                count: total_count,
+                size: total_size,
+                created_at: 0,
+            })
         })
     })
     .await
@@ -569,10 +601,10 @@ pub async fn images_by_dir(
     if my_seq > 0 {
         LATEST_IMG_REQ.fetch_max(my_seq, Ordering::Relaxed);
     }
-    crate::media_server::diag_push(&format!(
+    crate::media_server::diag_log!(
         "images_by_dir start folder={} rel={:?} limit={} sort={:?} seq={}",
         folder_id, dir_rel, limit, sort_mode, my_seq
-    ));
+    );
     let db_path = state.db_path.clone();
     let thumbs_dir = state.data_dir.join("cache").join("thumbs");
     let dir_rel_log = dir_rel.clone();
@@ -581,109 +613,21 @@ pub async fn images_by_dir(
         if my_seq > 0 && my_seq < LATEST_IMG_REQ.load(Ordering::Relaxed) {
             return Ok(Vec::new());
         }
-        let conn = open_read_conn(&db_path)?;
-        let root_path: String = conn
-            .query_row("SELECT path FROM folders WHERE id = ?1", [folder_id], |r| r.get(0))
-            .map_err(|_| "资料库不存在".to_string())?;
-
-        let sep = if root_path.contains('\\') { '\\' } else { '/' };
-        let root_norm = if root_path.ends_with(sep) {
-            root_path.clone()
-        } else {
-            format!("{}{}", root_path, sep)
-        };
-
-        let loose_only = dir_rel == "__loose__";
-        let is_recursive = recursive.unwrap_or(true);
-
-        let base_pattern = if dir_rel.is_empty() || dir_rel == "__loose__" {
-            root_norm.clone()
-        } else {
-            let rel_normalized = dir_rel.replace('/', &sep.to_string());
-            format!("{}{}{}", root_norm, rel_normalized, sep)
-        };
-
-        let asc_str = if sort_asc.unwrap_or(false) { "ASC" } else { "DESC" };
-        let order_by = match sort_mode.as_deref() {
-            Some("name") => format!("file_path COLLATE NOCASE {}", asc_str),
-            Some("mtime") => format!("mtime {}", asc_str),
-            Some("size") => format!("size {}", asc_str),
-            Some("rating") => format!("COALESCE(rating, 0) {}, id DESC", asc_str),
-            Some("added") => format!("id {}", asc_str),
-            // 默认与手动排序：未分配序号的新入文件（sort_order = 0）优先置顶！新入文件内部按 id DESC（最新入库优先）！
-            _ => "(sort_order = 0) DESC, sort_order ASC, id DESC".to_string(),
-        };
-
-        let sql = if loose_only {
-            format!(
-                "SELECT id, folder_id, file_path, size, mtime, width, height, thumbnail_path, last_opened_at, annotation, url, deleted_at, COALESCE(rating, 0), COALESCE(is_favorite, 0)
-                 FROM images
-                 WHERE folder_id = ?1 AND deleted_at IS NULL
-                   AND file_path LIKE ?2 || '%'
-                   AND file_path NOT LIKE ?2 || '%{}%'
-                 ORDER BY {} LIMIT ?3 OFFSET ?4",
-                sep, order_by
-            )
-        } else if !is_recursive {
-            format!(
-                "SELECT id, folder_id, file_path, size, mtime, width, height, thumbnail_path, last_opened_at, annotation, url, deleted_at, COALESCE(rating, 0), COALESCE(is_favorite, 0)
-                 FROM images
-                 WHERE folder_id = ?1 AND deleted_at IS NULL
-                   AND file_path LIKE ?2 || '%'
-                   AND file_path NOT LIKE ?2 || '%{}%'
-                 ORDER BY {} LIMIT ?3 OFFSET ?4",
-                sep, order_by
-            )
-        } else {
-            format!(
-                "SELECT id, folder_id, file_path, size, mtime, width, height, thumbnail_path, last_opened_at, annotation, url, deleted_at, COALESCE(rating, 0), COALESCE(is_favorite, 0)
-                 FROM images
-                 WHERE folder_id = ?1 AND deleted_at IS NULL
-                   AND file_path LIKE ?2 || '%'
-                 ORDER BY {} LIMIT ?3 OFFSET ?4",
-                order_by
-            )
-        };
-
-        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
-        let rows = stmt
-            .query_map(rusqlite::params![folder_id, base_pattern, limit, offset], |r| {
-                let file_path: String = r.get(2)?;
-                let file_name = Path::new(&file_path)
-                    .file_name()
-                    .map(|s| s.to_string_lossy().to_string())
-                    .unwrap_or_else(|| file_path.clone());
-                let raw_tp: Option<String> = r.get(7)?;
-                let thumbnail_path = resolve_existing_thumb(raw_tp, &file_path, &thumbs_dir);
-
-                Ok(ImageItem {
-                    id: r.get(0)?,
-                    folder_id: r.get(1)?,
-                    file_path,
-                    file_name,
-                    file_size: r.get(3)?,
-                    modify_time: r.get(4)?,
-                    width: r.get(5)?,
-                    height: r.get(6)?,
-                    thumbnail_path,
-                    rating: r.get(12)?,
-                    is_favorite: r.get::<_, i64>(13).unwrap_or(0) != 0,
-                    last_opened_at: r.get(8)?,
-                    annotation: r.get(9)?,
-                    url: r.get(10)?,
-                    deleted_at: r.get(11)?,
-                })
-            })
-            .map_err(|e| e.to_string())?;
-
+        let list = query_images_http(
+            &db_path,
+            &thumbs_dir,
+            folder_id,
+            &dir_rel,
+            offset,
+            limit,
+            sort_mode.as_deref(),
+            sort_asc,
+            recursive,
+        )?;
         // 查完再确认一次：扫描/序列化已经花了时间，若此刻已被后发的请求顶掉，
         // 就不必再把整页数据搬过 IPC。
         if my_seq > 0 && my_seq < LATEST_IMG_REQ.load(Ordering::Relaxed) {
             return Ok(Vec::new());
-        }
-        let mut list = Vec::new();
-        for item in rows.flatten() {
-            list.push(item);
         }
         Ok(list)
     })
@@ -691,20 +635,20 @@ pub async fn images_by_dir(
     .map_err(|e| e.to_string())?;
     if let Ok(ref v) = res {
         if v.is_empty() && my_seq > 0 && my_seq < LATEST_IMG_REQ.load(Ordering::Relaxed) {
-            crate::media_server::diag_push(&format!(
+            crate::media_server::diag_log!(
                 "images_by_dir stale-skip rel={:?} seq={}",
                 dir_rel_log, my_seq
-            ));
+            );
         } else {
-            crate::media_server::diag_push(&format!(
+            crate::media_server::diag_log!(
                 "images_by_dir done rel={:?} count={} in {}ms",
                 dir_rel_log,
                 v.len(),
                 t0.elapsed().as_millis()
-            ));
+            );
         }
     } else if let Err(ref e) = res {
-        crate::media_server::diag_push(&format!("images_by_dir err: {}", e));
+        crate::media_server::diag_log!("images_by_dir err: {}", e);
     }
     res
 }
@@ -725,72 +669,91 @@ pub async fn dir_covers(
     let t0 = std::time::Instant::now();
     let rels_log = (folder_id, rels.len());
     tauri::async_runtime::spawn_blocking(move || {
-        let conn = open_read_conn(&db_path)?;
-        let root_path: String = conn
-            .query_row("SELECT path FROM folders WHERE id = ?1", [folder_id], |r| r.get(0))
-            .map_err(|_| "资料库不存在".to_string())?;
-        let sep = if root_path.contains('\\') { '\\' } else { '/' };
-        let root_norm = format!("{}{}", root_path.trim_end_matches(&['\\', '/'][..]), sep);
-        let sep_s = sep.to_string();
+        with_read_conn(&db_path, |conn| {
+            let _: String = conn
+                .query_row("SELECT path FROM folders WHERE id = ?1", [folder_id], |r| r.get(0))
+                .map_err(|_| "资料库不存在".to_string())?;
 
-        let mut stmt = conn
-            .prepare(
-                "SELECT id, folder_id, file_path, size, mtime, width, height, thumbnail_path, last_opened_at, annotation, url, deleted_at, COALESCE(rating, 0), COALESCE(is_favorite, 0)
-                 FROM images
-                 WHERE folder_id = ?1 AND deleted_at IS NULL
-                   AND file_path LIKE ?2 || '%' ESCAPE '\\'
-                 ORDER BY (sort_order = 0) DESC, sort_order ASC, id DESC
-                 LIMIT ?3",
-            )
-            .map_err(|e| e.to_string())?;
-
-        let mut out: std::collections::HashMap<String, Vec<ImageItem>> =
-            std::collections::HashMap::with_capacity(rels.len());
-        for rel in rels {
-            let clean = rel.trim_matches(|c| c == '/' || c == '\\').replace('/', &sep_s);
-            let pattern = if clean.is_empty() {
-                root_norm.clone()
-            } else {
-                format!("{}{}{}", root_norm, clean, sep)
-            };
-            let rows = stmt
-                .query_map(rusqlite::params![folder_id, escape_like_pattern(&pattern), take], |r| {
-                    let file_path: String = r.get(2)?;
-                    let file_name = Path::new(&file_path)
-                        .file_name()
-                        .map(|s| s.to_string_lossy().to_string())
-                        .unwrap_or_else(|| file_path.clone());
-                    let raw_tp: Option<String> = r.get(7)?;
-                    let thumbnail_path = resolve_existing_thumb(raw_tp, &file_path, &thumbs_dir);
-                    Ok(ImageItem {
-                        id: r.get(0)?,
-                        folder_id: r.get(1)?,
-                        file_path,
-                        file_name,
-                        file_size: r.get(3)?,
-                        modify_time: r.get(4)?,
-                        width: r.get(5)?,
-                        height: r.get(6)?,
-                        thumbnail_path,
-                        rating: r.get(12)?,
-                        is_favorite: r.get::<_, i64>(13).unwrap_or(0) != 0,
-                        last_opened_at: r.get(8)?,
-                        annotation: r.get(9)?,
-                        url: r.get(10)?,
-                        deleted_at: r.get(11)?,
-                    })
-                })
+            const COLS2: &str = "id, folder_id, file_path, size, mtime, width, height, thumbnail_path, last_opened_at, annotation, url, deleted_at, COALESCE(rating, 0), COALESCE(is_favorite, 0), sort_order";
+            let sql_sub = format!(
+                "SELECT * FROM (
+                     SELECT {cols} FROM images WHERE folder_id = ?1 AND deleted_at IS NULL AND dir_rel = ?2
+                     UNION ALL
+                     SELECT {cols} FROM images WHERE folder_id = ?1 AND deleted_at IS NULL AND dir_rel >= ?3 AND dir_rel < ?4
+                 ) ORDER BY (sort_order = 0) DESC, sort_order ASC, id DESC
+                 LIMIT ?5",
+                cols = COLS2
+            );
+            let mut stmt_sub = conn.prepare(&sql_sub).map_err(|e| e.to_string())?;
+            let mut stmt_root = conn
+                .prepare(
+                    "SELECT id, folder_id, file_path, size, mtime, width, height, thumbnail_path, last_opened_at, annotation, url, deleted_at, COALESCE(rating, 0), COALESCE(is_favorite, 0)
+                     FROM images
+                     WHERE folder_id = ?1 AND deleted_at IS NULL
+                     ORDER BY (sort_order = 0) DESC, sort_order ASC, id DESC
+                     LIMIT ?2",
+                )
                 .map_err(|e| e.to_string())?;
-            let list: Vec<ImageItem> = rows.flatten().collect();
-            out.insert(rel, list);
-        }
-        crate::media_server::diag_push(&format!(
-            "dir_covers folder={} rels={} in {}ms",
-            rels_log.0,
-            rels_log.1,
-            t0.elapsed().as_millis()
-        ));
-        Ok(out)
+
+            let map_row = |r: &rusqlite::Row<'_>| -> rusqlite::Result<ImageItem> {
+                let file_path: String = r.get(2)?;
+                let file_name = Path::new(&file_path)
+                    .file_name()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| file_path.clone());
+                let raw_tp: Option<String> = r.get(7)?;
+                let thumbnail_path = resolve_existing_thumb(raw_tp, &file_path, &thumbs_dir);
+                Ok(ImageItem {
+                    id: r.get(0)?,
+                    folder_id: r.get(1)?,
+                    file_path,
+                    file_name,
+                    file_size: r.get(3)?,
+                    modify_time: r.get(4)?,
+                    width: r.get(5)?,
+                    height: r.get(6)?,
+                    thumbnail_path,
+                    rating: r.get(12)?,
+                    is_favorite: r.get::<_, i64>(13).unwrap_or(0) != 0,
+                    last_opened_at: r.get(8)?,
+                    annotation: r.get(9)?,
+                    url: r.get(10)?,
+                    deleted_at: r.get(11)?,
+                })
+            };
+
+            let mut out: std::collections::HashMap<String, Vec<ImageItem>> =
+                std::collections::HashMap::with_capacity(rels.len());
+            for rel in rels {
+                let rel_low = rel
+                    .trim_matches(|c| c == '/' || c == '\\')
+                    .replace('\\', "/")
+                    .to_lowercase();
+                let list: Vec<ImageItem> = if rel_low.is_empty() {
+                    stmt_root
+                        .query_map(rusqlite::params![folder_id, take], map_row)
+                        .map_err(|e| e.to_string())?
+                        .flatten()
+                        .collect()
+                } else {
+                    let sub_low = format!("{}/", rel_low);
+                    let sub_high = format!("{}0", rel_low);
+                    stmt_sub
+                        .query_map(rusqlite::params![folder_id, rel_low, sub_low, sub_high, take], map_row)
+                        .map_err(|e| e.to_string())?
+                        .flatten()
+                        .collect()
+                };
+                out.insert(rel, list);
+            }
+            crate::media_server::diag_log!(
+                "dir_covers folder={} rels={} in {}ms",
+                rels_log.0,
+                rels_log.1,
+                t0.elapsed().as_millis()
+            );
+            Ok(out)
+        })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -837,8 +800,9 @@ pub(crate) fn query_images_http(
     };
 
     // 用 dir_rel + 复合索引定位，取代原来的 file_path LIKE 全表扫。
-    // 递归时子目录用区间 [rel/, rel0)：任何以 "rel/" 开头的串都落在里面。
-    let subtree_like = format!("{}/%", rel_low);
+    // 递归时子目录用区间 [rel/, rel0)：任何以 "rel/" 开头的串都落在里面，且天然避免 `_`/`%` 通配符误伤！
+    let subtree_low = format!("{}/", rel_low);
+    let subtree_high = format!("{}0", rel_low);
     let base_pattern = if rel_low.is_empty() {
         root_norm.clone()
     } else {
@@ -861,7 +825,7 @@ pub(crate) fn query_images_http(
     let sql = if rel_low.is_empty() {
         if is_recursive {
             format!(
-                "SELECT {} FROM images WHERE folder_id = ?1 AND deleted_at IS NULL AND ?5 = '' AND ?6 = '/%' ORDER BY {} LIMIT ?3 OFFSET ?4",
+                "SELECT {} FROM images WHERE folder_id = ?1 AND deleted_at IS NULL AND ?5 = '' AND ?6 IS NOT NULL AND ?7 IS NOT NULL ORDER BY {} LIMIT ?3 OFFSET ?4",
                 COLS, order_by
             )
         } else {
@@ -869,7 +833,7 @@ pub(crate) fn query_images_http(
                那些行才是真散图，只认 `= ''` 会让它们从列表里蒸发
                （表现为「未分类徽章 1、列表 0」）。 */
             format!(
-                "SELECT {} FROM images WHERE folder_id = ?1 AND deleted_at IS NULL AND (dir_rel = '' OR dir_rel IS NULL) AND ?5 = '' AND ?6 IS NOT NULL ORDER BY {} LIMIT ?3 OFFSET ?4",
+                "SELECT {} FROM images WHERE folder_id = ?1 AND deleted_at IS NULL AND (dir_rel = '' OR dir_rel IS NULL) AND ?5 = '' AND ?6 IS NOT NULL AND ?7 IS NOT NULL ORDER BY {} LIMIT ?3 OFFSET ?4",
                 COLS, order_by
             )
         }
@@ -880,20 +844,22 @@ pub(crate) fn query_images_http(
             "SELECT * FROM (
                  SELECT {} FROM images WHERE folder_id = ?1 AND deleted_at IS NULL AND dir_rel = ?5 AND ?2 IS NOT NULL
                  UNION ALL
-                 SELECT {} FROM images WHERE folder_id = ?1 AND deleted_at IS NULL AND dir_rel LIKE ?6 AND ?2 IS NOT NULL
+                 SELECT {} FROM images WHERE folder_id = ?1 AND deleted_at IS NULL AND dir_rel >= ?6 AND dir_rel < ?7 AND ?2 IS NOT NULL
              ) ORDER BY {} LIMIT ?3 OFFSET ?4",
             cols2, cols2, order_by
         )
     } else {
         format!(
-            "SELECT {} FROM images WHERE folder_id = ?1 AND deleted_at IS NULL AND dir_rel = ?5 AND ?6 IS NOT NULL ORDER BY {} LIMIT ?3 OFFSET ?4",
+            "SELECT {} FROM images WHERE folder_id = ?1 AND deleted_at IS NULL AND dir_rel = ?5 AND ?6 IS NOT NULL AND ?7 IS NOT NULL ORDER BY {} LIMIT ?3 OFFSET ?4",
             COLS, order_by
         )
     };
 
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let rows = stmt
-        .query_map(rusqlite::params![folder_id, base_pattern, limit, offset, rel_low, subtree_like], |r| {
+        .query_map(
+            rusqlite::params![folder_id, base_pattern, limit, offset, rel_low, subtree_low, subtree_high],
+            |r| {
             let file_path: String = r.get(2)?;
             let file_name = Path::new(&file_path)
                 .file_name()
@@ -943,17 +909,19 @@ pub(crate) fn explain_images_plan(db_path: &Path, _thumbs: &Path) -> Result<Vec<
 }
 
 #[tauri::command]
-pub async fn count_all(folder_id: i64, state: State<'_, AppState>) -> Result<i64, String> {    let db_path = state.db_path.clone();
+pub async fn count_all(folder_id: i64, state: State<'_, AppState>) -> Result<i64, String> {
+    let db_path = state.db_path.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let conn = open_read_conn(&db_path)?;
-        let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM images WHERE folder_id = ?1 AND deleted_at IS NULL",
-                [folder_id],
-                |r| r.get(0),
-            )
-            .unwrap_or(0);
-        Ok(count)
+        with_read_conn(&db_path, |conn| {
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM images WHERE folder_id = ?1 AND deleted_at IS NULL",
+                    [folder_id],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0);
+            Ok(count)
+        })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -964,48 +932,49 @@ pub async fn recent(folder_id: i64, limit: i64, state: State<'_, AppState>) -> R
     let db_path = state.db_path.clone();
     let thumbs_dir = state.data_dir.join("cache").join("thumbs");
     tauri::async_runtime::spawn_blocking(move || {
-        let conn = open_read_conn(&db_path)?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT id, folder_id, file_path, size, mtime, width, height, thumbnail_path, last_opened_at, annotation, url, deleted_at, COALESCE(rating, 0), COALESCE(is_favorite, 0)
-                 FROM images
-                 WHERE folder_id = ?1 AND deleted_at IS NULL AND last_opened_at > 0
-                 ORDER BY last_opened_at DESC
-                 LIMIT ?2",
-            )
-            .map_err(|e| e.to_string())?;
+        with_read_conn(&db_path, |conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, folder_id, file_path, size, mtime, width, height, thumbnail_path, last_opened_at, annotation, url, deleted_at, COALESCE(rating, 0), COALESCE(is_favorite, 0)
+                     FROM images
+                     WHERE folder_id = ?1 AND deleted_at IS NULL AND last_opened_at > 0
+                     ORDER BY last_opened_at DESC
+                     LIMIT ?2",
+                )
+                .map_err(|e| e.to_string())?;
 
-        let rows = stmt
-            .query_map(rusqlite::params![folder_id, limit], |r| {
-                let file_path: String = r.get(2)?;
-                let file_name = Path::new(&file_path)
-                    .file_name()
-                    .map(|s| s.to_string_lossy().to_string())
-                    .unwrap_or_else(|| file_path.clone());
-                let raw_tp: Option<String> = r.get(7)?;
-                let thumbnail_path = resolve_existing_thumb(raw_tp, &file_path, &thumbs_dir);
+            let rows = stmt
+                .query_map(rusqlite::params![folder_id, limit], |r| {
+                    let file_path: String = r.get(2)?;
+                    let file_name = Path::new(&file_path)
+                        .file_name()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_else(|| file_path.clone());
+                    let raw_tp: Option<String> = r.get(7)?;
+                    let thumbnail_path = resolve_existing_thumb(raw_tp, &file_path, &thumbs_dir);
 
-                Ok(ImageItem {
-                    id: r.get(0)?,
-                    folder_id: r.get(1)?,
-                    file_path,
-                    file_name,
-                    file_size: r.get(3)?,
-                    modify_time: r.get(4)?,
-                    width: r.get(5)?,
-                    height: r.get(6)?,
-                    thumbnail_path,
-                    rating: r.get(12)?,
-                    is_favorite: r.get::<_, i64>(13).unwrap_or(0) != 0,
-                    last_opened_at: r.get(8)?,
-                    annotation: r.get(9)?,
-                    url: r.get(10)?,
-                    deleted_at: r.get(11)?,
+                    Ok(ImageItem {
+                        id: r.get(0)?,
+                        folder_id: r.get(1)?,
+                        file_path,
+                        file_name,
+                        file_size: r.get(3)?,
+                        modify_time: r.get(4)?,
+                        width: r.get(5)?,
+                        height: r.get(6)?,
+                        thumbnail_path,
+                        rating: r.get(12)?,
+                        is_favorite: r.get::<_, i64>(13).unwrap_or(0) != 0,
+                        last_opened_at: r.get(8)?,
+                        annotation: r.get(9)?,
+                        url: r.get(10)?,
+                        deleted_at: r.get(11)?,
+                    })
                 })
-            })
-            .map_err(|e| e.to_string())?;
+                .map_err(|e| e.to_string())?;
 
-        Ok(rows.flatten().collect())
+            Ok(rows.flatten().collect())
+        })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -2988,7 +2957,7 @@ pub async fn crop_image_as(
 #[tauri::command]
 pub async fn images_reorder(
     folder_id: i64,
-    _dir_rel: String,
+    _dir_rel: Option<String>,
     ordered_paths: Vec<String>,
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
@@ -3347,130 +3316,151 @@ fn root_path_for(conn: &rusqlite::Connection, file_path: &str) -> Option<String>
 }
 
 #[tauri::command]
-pub fn move_image(
+pub async fn move_image(
     file_path: String,
     target_dir: String,
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
-    let src = Path::new(&file_path);
-    let dst_dir = Path::new(&target_dir);
-    if !dst_dir.exists() || !dst_dir.is_dir() {
-        return Ok(serde_json::json!({ "ok": false, "error": "目标目录不存在" }));
-    }
-    if !src.exists() {
-        return Ok(serde_json::json!({ "ok": false, "error": "源文件不存在" }));
-    }
-    let name = src.file_name().and_then(|s| s.to_str()).unwrap_or("file");
-    let mut target = dst_dir.join(name);
-    if target.to_string_lossy().eq_ignore_ascii_case(&file_path) {
-        return Ok(serde_json::json!({ "ok": true, "file_path": file_path, "moved": false }));
-    }
-    let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or("file");
-    let ext = src.extension().and_then(|s| s.to_str()).unwrap_or("");
-    let mut n = 1;
-    while target.exists() {
-        let candidate = if ext.is_empty() {
-            format!("{} ({})", stem, n)
-        } else {
-            format!("{} ({}).{}", stem, n, ext)
-        };
-        target = dst_dir.join(candidate);
-        n += 1;
-    }
-    if let Err(e) = std::fs::rename(src, &target) {
-        return Ok(serde_json::json!({ "ok": false, "error": e.to_string() }));
-    }
-    let target_str = target.to_string_lossy().to_string();
-    if let Ok(conn) = state.db.lock() {
-        // dir_rel 必须跟着 file_path 一起算，否则图在目标目录里查不到
-        let dr = root_path_for(&conn, &file_path)
-            .map(|root| crate::db::dir_rel_of(&root, &target_str))
-            .unwrap_or_default();
-        let _ = conn.execute(
-            "UPDATE images SET file_path = ?1, dir_rel = ?2, sort_order = 0 WHERE file_path = ?3",
-            rusqlite::params![target_str, dr, file_path],
-        );
-    }
-    Ok(serde_json::json!({ "ok": true, "file_path": target_str, "moved": true }))
+    let db = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let src = Path::new(&file_path);
+        let dst_dir = Path::new(&target_dir);
+        if !dst_dir.exists() || !dst_dir.is_dir() {
+            return Ok(serde_json::json!({ "ok": false, "error": "目标目录不存在" }));
+        }
+        if !src.exists() {
+            return Ok(serde_json::json!({ "ok": false, "error": "源文件不存在" }));
+        }
+        let name = src.file_name().and_then(|s| s.to_str()).unwrap_or("file");
+        let mut target = dst_dir.join(name);
+        if target.to_string_lossy().eq_ignore_ascii_case(&file_path) {
+            return Ok(serde_json::json!({ "ok": true, "file_path": file_path, "moved": false }));
+        }
+        let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or("file");
+        let ext = src.extension().and_then(|s| s.to_str()).unwrap_or("");
+        let mut n = 1;
+        while target.exists() {
+            let candidate = if ext.is_empty() {
+                format!("{} ({})", stem, n)
+            } else {
+                format!("{} ({}).{}", stem, n, ext)
+            };
+            target = dst_dir.join(candidate);
+            n += 1;
+        }
+        if let Err(e) = std::fs::rename(src, &target) {
+            return Ok(serde_json::json!({ "ok": false, "error": e.to_string() }));
+        }
+        let target_str = target.to_string_lossy().to_string();
+        if let Ok(conn) = db.lock() {
+            // dir_rel 必须跟着 file_path 一起算，否则图在目标目录里查不到
+            let dr = root_path_for(&conn, &file_path)
+                .map(|root| crate::db::dir_rel_of(&root, &target_str))
+                .unwrap_or_default();
+            let _ = conn.execute(
+                "UPDATE images SET file_path = ?1, dir_rel = ?2, sort_order = 0 WHERE file_path = ?3",
+                rusqlite::params![target_str, dr, file_path],
+            );
+        }
+        Ok(serde_json::json!({ "ok": true, "file_path": target_str, "moved": true }))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-pub fn move_dir(
+pub async fn move_dir(
     dir_path: String,
     target_dir: String,
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
-    let src = Path::new(&dir_path);
-    let dst_dir = Path::new(&target_dir);
-    if !src.exists() || !src.is_dir() {
-        return Ok(serde_json::json!({ "ok": false, "error": "源目录不存在" }));
-    }
-    if !dst_dir.exists() || !dst_dir.is_dir() {
-        return Ok(serde_json::json!({ "ok": false, "error": "目标目录不存在" }));
-    }
-    let norm = |s: &str| s.trim_end_matches(&['\\', '/'][..]).to_lowercase();
-    let src_norm = norm(&dir_path);
-    let dst_norm = norm(&target_dir);
-    if src_norm == dst_norm {
-        return Ok(serde_json::json!({ "ok": true, "dir_path": dir_path, "moved": false }));
-    }
-    if dst_norm.starts_with(&(src_norm.clone() + "\\")) || dst_norm.starts_with(&(src_norm.clone() + "/")) {
-        return Ok(serde_json::json!({ "ok": false, "error": "不能移动到自身子目录" }));
-    }
-    let base = src.file_name().and_then(|s| s.to_str()).unwrap_or("dir");
-    let mut target = dst_dir.join(base);
-    if norm(&target.to_string_lossy()) == src_norm {
-        return Ok(serde_json::json!({ "ok": true, "dir_path": dir_path, "moved": false }));
-    }
-    let mut n = 1;
-    while target.exists() {
-        target = dst_dir.join(format!("{} ({})", base, n));
-        n += 1;
-    }
-    if let Err(e) = std::fs::rename(src, &target) {
-        return Ok(serde_json::json!({ "ok": false, "error": e.to_string() }));
-    }
-
-    let from_prefix = dir_path.trim_end_matches(&['\\', '/'][..]).to_string();
-    let to_prefix = target.to_string_lossy().trim_end_matches(&['\\', '/'][..]).to_string();
-    let mut moved_rows = 0i64;
-    if let Ok(mut conn) = state.db.lock() {
-        let sep = if from_prefix.contains('\\') { '\\' } else { '/' };
-        let like_prefix = format!("{}{}%", from_prefix, sep);
-        let paths: Vec<String> = {
-            if let Ok(mut stmt) = conn.prepare("SELECT file_path FROM images WHERE file_path LIKE ?1") {
-                stmt.query_map([like_prefix], |r| r.get::<_, String>(0))
-                    .map(|it| it.flatten().collect())
-                    .unwrap_or_default()
-            } else {
-                Vec::new()
-            }
-        };
-        if let Ok(tx) = conn.transaction() {
-            for old_p in paths {
-                if old_p.len() >= from_prefix.len() {
-                    let np = format!("{}{}", to_prefix, &old_p[from_prefix.len()..]);
-                    // 整棵子树搬家，每一行的 dir_rel 都得按新路径重算
-                    let dr = root_path_for(&tx, &old_p)
-                        .map(|root| crate::db::dir_rel_of(&root, &np))
-                        .unwrap_or_default();
-                    let _ = tx.execute(
-                        "UPDATE images SET file_path = ?1, dir_rel = ?2 WHERE file_path = ?3",
-                        rusqlite::params![np, dr, old_p],
-                    );
-                    moved_rows += 1;
-                }
-            }
-            let _ = tx.commit();
+    let db = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let src = Path::new(&dir_path);
+        let dst_dir = Path::new(&target_dir);
+        if !src.exists() || !src.is_dir() {
+            return Ok(serde_json::json!({ "ok": false, "error": "源目录不存在" }));
         }
-    }
+        if !dst_dir.exists() || !dst_dir.is_dir() {
+            return Ok(serde_json::json!({ "ok": false, "error": "目标目录不存在" }));
+        }
+        let norm = |s: &str| s.trim_end_matches(&['\\', '/'][..]).to_lowercase();
+        let src_norm = norm(&dir_path);
+        let dst_norm = norm(&target_dir);
+        if src_norm == dst_norm {
+            return Ok(serde_json::json!({ "ok": true, "dir_path": dir_path, "moved": false }));
+        }
+        if dst_norm.starts_with(&(src_norm.clone() + "\\")) || dst_norm.starts_with(&(src_norm.clone() + "/")) {
+            return Ok(serde_json::json!({ "ok": false, "error": "不能移动到自身子目录" }));
+        }
+        let base = src.file_name().and_then(|s| s.to_str()).unwrap_or("dir");
+        let mut target = dst_dir.join(base);
+        if norm(&target.to_string_lossy()) == src_norm {
+            return Ok(serde_json::json!({ "ok": true, "dir_path": dir_path, "moved": false }));
+        }
+        let mut n = 1;
+        while target.exists() {
+            target = dst_dir.join(format!("{} ({})", base, n));
+            n += 1;
+        }
+        if let Err(e) = std::fs::rename(src, &target) {
+            return Ok(serde_json::json!({ "ok": false, "error": e.to_string() }));
+        }
 
-    Ok(serde_json::json!({
-        "ok": true,
-        "dir_path": to_prefix,
-        "moved": true,
-        "images": moved_rows
-    }))
+        let from_prefix = dir_path.trim_end_matches(&['\\', '/'][..]).to_string();
+        let to_prefix = target.to_string_lossy().trim_end_matches(&['\\', '/'][..]).to_string();
+        let mut moved_rows = 0i64;
+        if let Ok(mut conn) = db.lock() {
+            let sep = if from_prefix.contains('\\') { '\\' } else { '/' };
+            let raw_prefix = format!("{}{}", from_prefix, sep);
+            let like_prefix = format!("{}%", escape_like(&raw_prefix));
+            let paths: Vec<String> = {
+                if let Ok(mut stmt) = conn.prepare("SELECT file_path FROM images WHERE file_path LIKE ?1 ESCAPE '\\'") {
+                    stmt.query_map([like_prefix], |r| r.get::<_, String>(0))
+                        .map(|it| it.flatten().collect())
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                }
+            };
+            // 同一目录下的图片共享同一个资料库 root_path，移到循环外查一次即可，消除 N+1 查询
+            let shared_root = paths
+                .first()
+                .and_then(|first_p| root_path_for(&conn, first_p))
+                .or_else(|| {
+                    find_folder_id_for_path(&conn, Path::new(&from_prefix)).and_then(|fid| {
+                        conn.query_row("SELECT path FROM folders WHERE id = ?1", [fid], |r| r.get(0))
+                            .ok()
+                    })
+                });
+            if let Ok(tx) = conn.transaction() {
+                for old_p in paths {
+                    if let Some(np) = rebase_path_prefix(&old_p, &from_prefix, &to_prefix) {
+                        // 整棵子树搬家，每一行的 dir_rel 都得按新路径重算
+                        let dr = shared_root
+                            .as_deref()
+                            .map(|root| crate::db::dir_rel_of(root, &np))
+                            .unwrap_or_default();
+                        let _ = tx.execute(
+                            "UPDATE images SET file_path = ?1, dir_rel = ?2 WHERE file_path = ?3",
+                            rusqlite::params![np, dr, old_p],
+                        );
+                        moved_rows += 1;
+                    }
+                }
+                let _ = tx.commit();
+            }
+        }
+
+        Ok(serde_json::json!({
+            "ok": true,
+            "dir_path": to_prefix,
+            "moved": true,
+            "images": moved_rows
+        }))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 // ----------------- 排序同步文件名与重命名 -----------------
@@ -3919,11 +3909,10 @@ pub async fn cleanup_orphan_thumbs(
     let db_path = state.db_path.clone();
     let thumbs_dir = state.data_dir.join("cache").join("thumbs");
     tauri::async_runtime::spawn_blocking(move || {
-        let conn = rusqlite::Connection::open(&db_path).map_err(|e| e.to_string())?;
         let mut live = std::collections::HashSet::with_capacity(12000);
-        {
+        with_read_conn(&db_path, |conn| {
             let mut stmt = conn
-                .prepare("SELECT file_path FROM images WHERE deleted_at IS NULL")
+                .prepare("SELECT file_path FROM images")
                 .map_err(|e| e.to_string())?;
             let rows = stmt
                 .query_map([], |r| r.get::<_, String>(0))
@@ -3931,7 +3920,8 @@ pub async fn cleanup_orphan_thumbs(
             for fp in rows.flatten() {
                 live.insert(format!("{:x}", fnv1a_hash(fp.as_bytes())));
             }
-        }
+            Ok(())
+        })?;
         let max = limit.unwrap_or(400).clamp(1, 5000);
         let (mut checked, mut deleted) = (0usize, 0usize);
         let mut freed: u64 = 0;
@@ -4119,258 +4109,299 @@ pub(crate) fn rebase_path_prefix(full: &str, old_root: &str, new_root: &str) -> 
 }
 
 #[tauri::command]
-pub fn rename_dir(
+pub async fn rename_dir(
     old_path: String,
     new_name: String,
     old_rel: Option<String>,
     parent_rel: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
-    let clean: String = new_name
-        .trim()
-        .chars()
-        .filter(|&c| !"\\/:*?\"<>|".contains(c))
-        .collect();
-    if clean.is_empty() {
-        return Ok(serde_json::json!({ "ok": false, "error": "名称为空" }));
-    }
-    let old_clean = old_path.trim_end_matches(&['\\', '/'][..]).to_string();
-    let src = Path::new(&old_clean);
-    let parent = src.parent().unwrap_or_else(|| Path::new("."));
-    let target = parent.join(&clean);
-    let target_str = target.to_string_lossy().to_string();
-    if !old_clean.eq_ignore_ascii_case(&target_str) && target.exists() {
-        return Ok(serde_json::json!({ "ok": false, "error": "同名文件夹已存在" }));
-    }
-    if old_clean != target_str {
-        if let Err(e) = std::fs::rename(src, &target) {
-            return Ok(serde_json::json!({ "ok": false, "error": e.to_string() }));
+    let db = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let clean: String = new_name
+            .trim()
+            .chars()
+            .filter(|&c| !"\\/:*?\"<>|".contains(c))
+            .collect();
+        if clean.is_empty() {
+            return Ok(serde_json::json!({ "ok": false, "error": "名称为空" }));
         }
-    }
-    let old_name = src.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string();
+        let old_clean = old_path.trim_end_matches(&['\\', '/'][..]).to_string();
+        let src = Path::new(&old_clean);
+        let parent = src.parent().unwrap_or_else(|| Path::new("."));
+        let target = parent.join(&clean);
+        let target_str = target.to_string_lossy().to_string();
+        if !old_clean.eq_ignore_ascii_case(&target_str) && target.exists() {
+            return Ok(serde_json::json!({ "ok": false, "error": "同名文件夹已存在" }));
+        }
+        if old_clean != target_str {
+            if let Err(e) = std::fs::rename(src, &target) {
+                return Ok(serde_json::json!({ "ok": false, "error": e.to_string() }));
+            }
+        }
+        let old_name = src.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string();
 
-    if let Ok(conn) = state.db.lock() {
-        let sep = if old_clean.contains('\\') { '\\' } else { '/' };
-        let like_prefix = format!("{}{}%", old_clean, sep);
-        if let Ok(mut stmt) = conn.prepare("SELECT file_path FROM images WHERE file_path LIKE ?1") {
-            let rows: Vec<String> = stmt
-                .query_map([like_prefix], |r| r.get::<_, String>(0))
-                .map(|it| it.flatten().collect())
-                .unwrap_or_default();
-            for old_fp in rows {
-                if let Some(np) = rebase_path_prefix(&old_fp, &old_clean, &target_str) {
-                    db_move_image_path(&conn, &old_fp, &np, None);
+        if let Ok(conn) = db.lock() {
+            let folder_id_opt = find_folder_id_for_path(&conn, Path::new(&old_clean))
+                .or_else(|| find_folder_id_for_path(&conn, Path::new(&target_str)));
+            let root_path_opt: Option<String> = folder_id_opt.and_then(|fid| {
+                conn.query_row("SELECT path FROM folders WHERE id = ?1", [fid], |r| r.get(0))
+                    .ok()
+            });
+
+            if let Ok(tx) = conn.unchecked_transaction() {
+                let sep = if old_clean.contains('\\') { '\\' } else { '/' };
+                let raw_prefix = format!("{}{}", old_clean, sep);
+                let like_prefix = format!("{}%", escape_like(&raw_prefix));
+                if let Ok(mut stmt) = tx.prepare("SELECT file_path FROM images WHERE file_path LIKE ?1 ESCAPE '\\'") {
+                    let rows: Vec<String> = stmt
+                        .query_map([like_prefix], |r| r.get::<_, String>(0))
+                        .map(|it| it.flatten().collect())
+                        .unwrap_or_default();
+                    drop(stmt);
+                    for old_fp in rows {
+                        if let Some(np) = rebase_path_prefix(&old_fp, &old_clean, &target_str) {
+                            let dr = root_path_opt
+                                .as_deref()
+                                .map(|root| crate::db::dir_rel_of(root, &np))
+                                .unwrap_or_else(|| {
+                                    root_path_for(&tx, &old_fp)
+                                        .map(|root| crate::db::dir_rel_of(&root, &np))
+                                        .unwrap_or_default()
+                                });
+                            let _ = tx.execute(
+                                "UPDATE images SET file_path = ?1, dir_rel = ?2, thumbnail_path = NULL WHERE file_path = ?3",
+                                rusqlite::params![np, dr, old_fp],
+                            );
+                        }
+                    }
                 }
+
+                if let (Some(orel), Some(fid)) = (old_rel, folder_id_opt) {
+                    let prel = parent_rel.unwrap_or_default();
+                    let new_rel = if prel.is_empty() { clean.clone() } else { format!("{}/{}", prel, clean) };
+                    let orel_prefix = format!("{}/", orel);
+                    if let Ok(mut mstmt) = tx.prepare("SELECT rel, patch FROM picnest_dir_memory WHERE root_id = ?1") {
+                        let mems: Vec<(String, String)> = mstmt
+                            .query_map([fid], |r| Ok((r.get(0)?, r.get(1)?)))
+                            .map(|it| it.flatten().collect())
+                            .unwrap_or_default();
+                        drop(mstmt);
+                        for (mrel, mpatch) in mems {
+                            let target_rel = if mrel == orel {
+                                Some(new_rel.clone())
+                            } else if let Some(rest) = mrel.strip_prefix(&orel_prefix) {
+                                Some(format!("{}/{}", new_rel, rest))
+                            } else {
+                                None
+                            };
+                            if let Some(nrel) = target_rel {
+                                let _ = tx.execute(
+                                    "UPDATE picnest_dir_memory SET rel = ?1 WHERE root_id = ?2 AND rel = ?3",
+                                    rusqlite::params![nrel, fid, mrel],
+                                );
+                                let _ = mpatch;
+                            }
+                        }
+                    }
+                    // 更新 picnest_dir_order 里对应的名字（严格限定在当前 folder_id 及父级相对路径下，杜绝跨库误伤）
+                    let exact_order_key = format!("{}|{}", fid, prel);
+                    let key_like = format!("{}|%", escape_like(&fid.to_string()));
+                    if let Ok(mut ostmt) = tx.prepare("SELECT key, names FROM picnest_dir_order WHERE key LIKE ?1 ESCAPE '\\'") {
+                        let items: Vec<(String, String)> = ostmt
+                            .query_map([key_like], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+                            .map(|it| it.flatten().collect())
+                            .unwrap_or_default();
+                        drop(ostmt);
+                        for (k, v) in items {
+                            if k != exact_order_key && !(prel.is_empty() && k == format!("{}|__root__", fid)) {
+                                continue;
+                            }
+                            if let Ok(mut arr) = serde_json::from_str::<Vec<String>>(&v) {
+                                if let Some(pos) = arr.iter().position(|x| x == &old_name) {
+                                    arr[pos] = clean.clone();
+                                    if let Ok(nj) = serde_json::to_string(&arr) {
+                                        let _ = tx.execute(
+                                            "UPDATE picnest_dir_order SET names = ?1 WHERE key = ?2",
+                                            rusqlite::params![nj, k],
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                let _ = tx.commit();
             }
         }
 
-        if let Some(orel) = old_rel {
-            let prel = parent_rel.unwrap_or_default();
-            let new_rel = if prel.is_empty() { clean.clone() } else { format!("{}/{}", prel, clean) };
-            let orel_prefix = format!("{}/", orel);
-            if let Ok(mut mstmt) = conn.prepare("SELECT root_id, rel, patch FROM picnest_dir_memory") {
-                let mems: Vec<(i64, String, String)> = mstmt
-                    .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
-                    .map(|it| it.flatten().collect())
-                    .unwrap_or_default();
-                for (rid, mrel, mpatch) in mems {
-                    let target_rel = if mrel == orel {
-                        Some(new_rel.clone())
-                    } else if let Some(rest) = mrel.strip_prefix(&orel_prefix) {
-                        Some(format!("{}/{}", new_rel, rest))
-                    } else {
-                        None
-                    };
-                    if let Some(nrel) = target_rel {
-                        let _ = conn.execute(
-                            "UPDATE picnest_dir_memory SET rel = ?1 WHERE root_id = ?2 AND rel = ?3",
-                            rusqlite::params![nrel, rid, mrel],
-                        );
-                        let _ = mpatch;
+        Ok(serde_json::json!({ "ok": true, "path": target_str, "name": clean }))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn rename_library(
+    id: i64,
+    name: String,
+    opts: Option<serde_json::Value>,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let db = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let clean: String = name
+            .trim()
+            .chars()
+            .filter(|&c| !"\\/:*?\"<>|".contains(c))
+            .collect();
+        if clean.is_empty() || clean == "." || clean == ".." {
+            return Ok(serde_json::json!({ "ok": false, "error": "名称无效或为空" }));
+        }
+        let display_only = opts
+            .as_ref()
+            .and_then(|o| o.get("displayOnly"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let rename_disk = if display_only {
+            false
+        } else {
+            opts.as_ref()
+                .and_then(|o| o.get("renameDisk"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true)
+        };
+
+        let conn = db.lock().map_err(|e| e.to_string())?;
+        let old_path: String = conn
+            .query_row("SELECT path FROM folders WHERE id = ?1", [id], |r| r.get(0))
+            .map_err(|_| "根文件不存在".to_string())?;
+
+        if !rename_disk {
+            conn.execute(
+                "UPDATE folders SET display_name = ?1 WHERE id = ?2",
+                rusqlite::params![clean, id],
+            )
+            .map_err(|e| e.to_string())?;
+            return Ok(serde_json::json!({
+                "ok": true,
+                "path": old_path,
+                "name": clean,
+                "display_name": clean,
+                "displayOnly": display_only
+            }));
+        }
+
+        let old_clean = old_path.trim_end_matches(&['\\', '/'][..]).to_string();
+        let src = Path::new(&old_clean);
+        let parent = src.parent().unwrap_or_else(|| Path::new("."));
+        let target = parent.join(&clean);
+        let target_str = target.to_string_lossy().to_string();
+
+        if old_clean == target_str {
+            conn.execute(
+                "UPDATE folders SET display_name = ?1 WHERE id = ?2",
+                rusqlite::params![clean, id],
+            )
+            .map_err(|e| e.to_string())?;
+            return Ok(serde_json::json!({
+                "ok": true,
+                "path": target_str,
+                "name": clean,
+                "display_name": clean,
+                "unchanged": true
+            }));
+        }
+
+        if !old_clean.eq_ignore_ascii_case(&target_str) && target.exists() {
+            return Ok(serde_json::json!({ "ok": false, "error": "同名目录已存在" }));
+        }
+
+        if src.exists() {
+            if let Err(e) = std::fs::rename(src, &target) {
+                return Ok(serde_json::json!({ "ok": false, "error": e.to_string() }));
+            }
+        } else if !target.exists() {
+            return Ok(serde_json::json!({ "ok": false, "error": "原根目录在磁盘上不存在" }));
+        }
+
+        let db_res: Result<(), String> = (|| {
+            let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+            tx.execute(
+                "UPDATE folders SET path = ?1, display_name = ?2 WHERE id = ?3",
+                rusqlite::params![&target_str, &clean, id],
+            )
+            .map_err(|e| e.to_string())?;
+
+            let rows: Vec<(i64, String)> = {
+                let mut stmt = tx
+                    .prepare("SELECT id, file_path FROM images WHERE folder_id = ?1")
+                    .map_err(|e| e.to_string())?;
+                stmt.query_map([id], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
+                    .map_err(|e| e.to_string())?
+                    .flatten()
+                    .collect()
+            };
+
+            {
+                let mut ustmt = tx
+                    .prepare("UPDATE images SET file_path = ?1 WHERE id = ?2")
+                    .map_err(|e| e.to_string())?;
+                for (img_id, old_fp) in rows {
+                    if let Some(np) = rebase_path_prefix(&old_fp, &old_clean, &target_str) {
+                        ustmt.execute(rusqlite::params![np, img_id]).map_err(|e| e.to_string())?;
                     }
                 }
             }
-            // 更新 picnest_dir_order 里对应的名字
-            if let Ok(mut ostmt) = conn.prepare("SELECT key, names FROM picnest_dir_order") {
-                let items: Vec<(String, String)> = ostmt
-                    .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
-                    .map(|it| it.flatten().collect())
-                    .unwrap_or_default();
-                for (k, v) in items {
-                    if let Ok(mut arr) = serde_json::from_str::<Vec<String>>(&v) {
-                        if let Some(pos) = arr.iter().position(|x| x == &old_name) {
-                            arr[pos] = clean.clone();
-                            if let Ok(nj) = serde_json::to_string(&arr) {
-                                let _ = conn.execute(
-                                    "UPDATE picnest_dir_order SET names = ?1 WHERE key = ?2",
-                                    rusqlite::params![nj, k],
+
+            // 更新 picnest_dir_memory 里的 coverPath 前缀
+            let mems: Vec<(String, String)> = {
+                let mut mstmt = tx
+                    .prepare("SELECT rel, patch FROM picnest_dir_memory WHERE root_id = ?1")
+                    .map_err(|e| e.to_string())?;
+                mstmt
+                    .query_map([id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+                    .map_err(|e| e.to_string())?
+                    .flatten()
+                    .collect()
+            };
+            for (rel, patch_str) in mems {
+                if let Ok(mut map) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&patch_str) {
+                    if let Some(serde_json::Value::String(cp)) = map.get("coverPath").cloned() {
+                        if let Some(ncp) = rebase_path_prefix(&cp, &old_clean, &target_str) {
+                            map.insert("coverPath".to_string(), serde_json::Value::String(ncp));
+                            if let Ok(s) = serde_json::to_string(&map) {
+                                let _ = tx.execute(
+                                    "UPDATE picnest_dir_memory SET patch = ?1 WHERE root_id = ?2 AND rel = ?3",
+                                    rusqlite::params![s, id, rel],
                                 );
                             }
                         }
                     }
                 }
             }
+
+            tx.commit().map_err(|e| e.to_string())?;
+            Ok(())
+        })();
+
+        if let Err(e) = db_res {
+            if target.exists() && !src.exists() {
+                let _ = std::fs::rename(&target, src);
+            }
+            return Ok(serde_json::json!({ "ok": false, "error": e }));
         }
-    }
 
-    Ok(serde_json::json!({ "ok": true, "path": target_str, "name": clean }))
-}
-
-#[tauri::command]
-pub fn rename_library(
-    id: i64,
-    name: String,
-    opts: Option<serde_json::Value>,
-    state: State<'_, AppState>,
-) -> Result<serde_json::Value, String> {
-    let clean: String = name
-        .trim()
-        .chars()
-        .filter(|&c| !"\\/:*?\"<>|".contains(c))
-        .collect();
-    if clean.is_empty() || clean == "." || clean == ".." {
-        return Ok(serde_json::json!({ "ok": false, "error": "名称无效或为空" }));
-    }
-    let display_only = opts
-        .as_ref()
-        .and_then(|o| o.get("displayOnly"))
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    let rename_disk = if display_only {
-        false
-    } else {
-        opts.as_ref()
-            .and_then(|o| o.get("renameDisk"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true)
-    };
-
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
-    let old_path: String = conn
-        .query_row("SELECT path FROM folders WHERE id = ?1", [id], |r| r.get(0))
-        .map_err(|_| "根文件不存在".to_string())?;
-
-    if !rename_disk {
-        conn.execute(
-            "UPDATE folders SET display_name = ?1 WHERE id = ?2",
-            rusqlite::params![clean, id],
-        )
-        .map_err(|e| e.to_string())?;
-        return Ok(serde_json::json!({
-            "ok": true,
-            "path": old_path,
-            "name": clean,
-            "display_name": clean,
-            "displayOnly": display_only
-        }));
-    }
-
-    let old_clean = old_path.trim_end_matches(&['\\', '/'][..]).to_string();
-    let src = Path::new(&old_clean);
-    let parent = src.parent().unwrap_or_else(|| Path::new("."));
-    let target = parent.join(&clean);
-    let target_str = target.to_string_lossy().to_string();
-
-    if old_clean == target_str {
-        conn.execute(
-            "UPDATE folders SET display_name = ?1 WHERE id = ?2",
-            rusqlite::params![clean, id],
-        )
-        .map_err(|e| e.to_string())?;
-        return Ok(serde_json::json!({
+        Ok(serde_json::json!({
             "ok": true,
             "path": target_str,
             "name": clean,
-            "display_name": clean,
-            "unchanged": true
-        }));
-    }
-
-    if !old_clean.eq_ignore_ascii_case(&target_str) && target.exists() {
-        return Ok(serde_json::json!({ "ok": false, "error": "同名目录已存在" }));
-    }
-
-    if src.exists() {
-        if let Err(e) = std::fs::rename(src, &target) {
-            return Ok(serde_json::json!({ "ok": false, "error": e.to_string() }));
-        }
-    } else if !target.exists() {
-        return Ok(serde_json::json!({ "ok": false, "error": "原根目录在磁盘上不存在" }));
-    }
-
-    let db_res: Result<(), String> = (|| {
-        let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-        tx.execute(
-            "UPDATE folders SET path = ?1, display_name = ?2 WHERE id = ?3",
-            rusqlite::params![&target_str, &clean, id],
-        )
-        .map_err(|e| e.to_string())?;
-
-        let rows: Vec<(i64, String)> = {
-            let mut stmt = tx
-                .prepare("SELECT id, file_path FROM images WHERE folder_id = ?1")
-                .map_err(|e| e.to_string())?;
-            stmt.query_map([id], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
-                .map_err(|e| e.to_string())?
-                .flatten()
-                .collect()
-        };
-
-        {
-            let mut ustmt = tx
-                .prepare("UPDATE images SET file_path = ?1 WHERE id = ?2")
-                .map_err(|e| e.to_string())?;
-            for (img_id, old_fp) in rows {
-                if let Some(np) = rebase_path_prefix(&old_fp, &old_clean, &target_str) {
-                    ustmt.execute(rusqlite::params![np, img_id]).map_err(|e| e.to_string())?;
-                }
-            }
-        }
-
-        // 更新 picnest_dir_memory 里的 coverPath 前缀
-        let mems: Vec<(String, String)> = {
-            let mut mstmt = tx
-                .prepare("SELECT rel, patch FROM picnest_dir_memory WHERE root_id = ?1")
-                .map_err(|e| e.to_string())?;
-            mstmt
-                .query_map([id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
-                .map_err(|e| e.to_string())?
-                .flatten()
-                .collect()
-        };
-        for (rel, patch_str) in mems {
-            if let Ok(mut map) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&patch_str) {
-                if let Some(serde_json::Value::String(cp)) = map.get("coverPath").cloned() {
-                    if let Some(ncp) = rebase_path_prefix(&cp, &old_clean, &target_str) {
-                        map.insert("coverPath".to_string(), serde_json::Value::String(ncp));
-                        if let Ok(s) = serde_json::to_string(&map) {
-                            let _ = tx.execute(
-                                "UPDATE picnest_dir_memory SET patch = ?1 WHERE root_id = ?2 AND rel = ?3",
-                                rusqlite::params![s, id, rel],
-                            );
-                        }
-                    }
-                }
-            }
-        }
-
-        tx.commit().map_err(|e| e.to_string())?;
-        Ok(())
-    })();
-
-    if let Err(e) = db_res {
-        if target.exists() && !src.exists() {
-            let _ = std::fs::rename(&target, src);
-        }
-        return Ok(serde_json::json!({ "ok": false, "error": e }));
-    }
-
-    Ok(serde_json::json!({
-        "ok": true,
-        "path": target_str,
-        "name": clean,
-        "display_name": clean
-    }))
+            "display_name": clean
+        }))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 // ----------------- 右侧详情：图片注释/URL 与色板分析 -----------------
@@ -4929,50 +4960,51 @@ pub async fn picnest_search(
     let thumbs_dir = state.data_dir.join("cache").join("thumbs");
     let lim = limit.unwrap_or(300).clamp(1, 2000);
     tauri::async_runtime::spawn_blocking(move || {
-        let conn = open_read_conn(&db_path)?;
-        let escaped = q.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
-        let pattern = format!("%{}%", escaped);
-        let mut stmt = conn
-            .prepare(
-                "SELECT id, folder_id, file_path, size, mtime, width, height, thumbnail_path, last_opened_at, annotation, url, deleted_at, COALESCE(rating, 0), COALESCE(is_favorite, 0)
-                 FROM images
-                 WHERE folder_id = ?1 AND deleted_at IS NULL
-                   AND (file_path LIKE ?2 ESCAPE '\\' OR EXISTS (
-                     SELECT 1 FROM image_tags it JOIN tags t ON t.id = it.tag_id
-                     WHERE it.image_id = images.id AND t.name LIKE ?2 ESCAPE '\\'
-                   ))
-                 ORDER BY file_path COLLATE NOCASE LIMIT ?3",
-            )
-            .map_err(|e| e.to_string())?;
-        let rows = stmt
-            .query_map(rusqlite::params![folder_id, pattern, lim], |r| {
-                let file_path: String = r.get(2)?;
-                let file_name = Path::new(&file_path)
-                    .file_name()
-                    .map(|s| s.to_string_lossy().to_string())
-                    .unwrap_or_else(|| file_path.clone());
-                let raw_tp: Option<String> = r.get(7)?;
-                let thumbnail_path = resolve_existing_thumb(raw_tp, &file_path, &thumbs_dir);
-                Ok(ImageItem {
-                    id: r.get(0)?,
-                    folder_id: r.get(1)?,
-                    file_path,
-                    file_name,
-                    file_size: r.get(3)?,
-                    modify_time: r.get(4)?,
-                    width: r.get(5)?,
-                    height: r.get(6)?,
-                    thumbnail_path,
-                    rating: r.get(12)?,
-                    is_favorite: r.get::<_, i64>(13).unwrap_or(0) != 0,
-                    last_opened_at: r.get(8)?,
-                    annotation: r.get(9)?,
-                    url: r.get(10)?,
-                    deleted_at: r.get(11)?,
+        with_read_conn(&db_path, |conn| {
+            let escaped = escape_like(&q);
+            let pattern = format!("%{}%", escaped);
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, folder_id, file_path, size, mtime, width, height, thumbnail_path, last_opened_at, annotation, url, deleted_at, COALESCE(rating, 0), COALESCE(is_favorite, 0)
+                     FROM images
+                     WHERE folder_id = ?1 AND deleted_at IS NULL
+                       AND (file_path LIKE ?2 ESCAPE '\\' OR EXISTS (
+                         SELECT 1 FROM image_tags it JOIN tags t ON t.id = it.tag_id
+                         WHERE it.image_id = images.id AND t.name LIKE ?2 ESCAPE '\\'
+                       ))
+                     ORDER BY file_path COLLATE NOCASE LIMIT ?3",
+                )
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map(rusqlite::params![folder_id, pattern, lim], |r| {
+                    let file_path: String = r.get(2)?;
+                    let file_name = Path::new(&file_path)
+                        .file_name()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_else(|| file_path.clone());
+                    let raw_tp: Option<String> = r.get(7)?;
+                    let thumbnail_path = resolve_existing_thumb(raw_tp, &file_path, &thumbs_dir);
+                    Ok(ImageItem {
+                        id: r.get(0)?,
+                        folder_id: r.get(1)?,
+                        file_path,
+                        file_name,
+                        file_size: r.get(3)?,
+                        modify_time: r.get(4)?,
+                        width: r.get(5)?,
+                        height: r.get(6)?,
+                        thumbnail_path,
+                        rating: r.get(12)?,
+                        is_favorite: r.get::<_, i64>(13).unwrap_or(0) != 0,
+                        last_opened_at: r.get(8)?,
+                        annotation: r.get(9)?,
+                        url: r.get(10)?,
+                        deleted_at: r.get(11)?,
+                    })
                 })
-            })
-            .map_err(|e| e.to_string())?;
-        Ok(rows.flatten().collect())
+                .map_err(|e| e.to_string())?;
+            Ok(rows.flatten().collect())
+        })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -4988,44 +5020,45 @@ pub async fn picnest_random(
     let thumbs_dir = state.data_dir.join("cache").join("thumbs");
     let lim = limit.unwrap_or(300).clamp(1, 2000);
     tauri::async_runtime::spawn_blocking(move || {
-        let conn = open_read_conn(&db_path)?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT id, folder_id, file_path, size, mtime, width, height, thumbnail_path, last_opened_at, annotation, url, deleted_at, COALESCE(rating, 0), COALESCE(is_favorite, 0)
-                 FROM images
-                 WHERE folder_id = ?1 AND deleted_at IS NULL
-                 ORDER BY RANDOM() LIMIT ?2",
-            )
-            .map_err(|e| e.to_string())?;
-        let rows = stmt
-            .query_map(rusqlite::params![folder_id, lim], |r| {
-                let file_path: String = r.get(2)?;
-                let file_name = Path::new(&file_path)
-                    .file_name()
-                    .map(|s| s.to_string_lossy().to_string())
-                    .unwrap_or_else(|| file_path.clone());
-                let raw_tp: Option<String> = r.get(7)?;
-                let thumbnail_path = resolve_existing_thumb(raw_tp, &file_path, &thumbs_dir);
-                Ok(ImageItem {
-                    id: r.get(0)?,
-                    folder_id: r.get(1)?,
-                    file_path,
-                    file_name,
-                    file_size: r.get(3)?,
-                    modify_time: r.get(4)?,
-                    width: r.get(5)?,
-                    height: r.get(6)?,
-                    thumbnail_path,
-                    rating: r.get(12)?,
-                    is_favorite: r.get::<_, i64>(13).unwrap_or(0) != 0,
-                    last_opened_at: r.get(8)?,
-                    annotation: r.get(9)?,
-                    url: r.get(10)?,
-                    deleted_at: r.get(11)?,
+        with_read_conn(&db_path, |conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, folder_id, file_path, size, mtime, width, height, thumbnail_path, last_opened_at, annotation, url, deleted_at, COALESCE(rating, 0), COALESCE(is_favorite, 0)
+                     FROM images
+                     WHERE folder_id = ?1 AND deleted_at IS NULL
+                     ORDER BY RANDOM() LIMIT ?2",
+                )
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map(rusqlite::params![folder_id, lim], |r| {
+                    let file_path: String = r.get(2)?;
+                    let file_name = Path::new(&file_path)
+                        .file_name()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_else(|| file_path.clone());
+                    let raw_tp: Option<String> = r.get(7)?;
+                    let thumbnail_path = resolve_existing_thumb(raw_tp, &file_path, &thumbs_dir);
+                    Ok(ImageItem {
+                        id: r.get(0)?,
+                        folder_id: r.get(1)?,
+                        file_path,
+                        file_name,
+                        file_size: r.get(3)?,
+                        modify_time: r.get(4)?,
+                        width: r.get(5)?,
+                        height: r.get(6)?,
+                        thumbnail_path,
+                        rating: r.get(12)?,
+                        is_favorite: r.get::<_, i64>(13).unwrap_or(0) != 0,
+                        last_opened_at: r.get(8)?,
+                        annotation: r.get(9)?,
+                        url: r.get(10)?,
+                        deleted_at: r.get(11)?,
+                    })
                 })
-            })
-            .map_err(|e| e.to_string())?;
-        Ok(rows.flatten().collect())
+                .map_err(|e| e.to_string())?;
+            Ok(rows.flatten().collect())
+        })
     })
     .await
     .map_err(|e| e.to_string())?

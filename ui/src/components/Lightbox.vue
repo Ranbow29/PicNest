@@ -87,13 +87,17 @@ const ambientUrl = computed(() => {
 /* 底部工具条仅在鼠标移到底部按钮区域时才缓慢浮现，其余时刻完全隐身，不抢画面 */
 const dockHover = ref(false)
 function onViewerPointerMove(e) {
+  const fromBottom = window.innerHeight - e.clientY
+  if (fromBottom < 0 || fromBottom > 68) {
+    if (dockHover.value) dockHover.value = false
+    return
+  }
   const el = stageEl.value
-  if (!el) return
-  const r = el.getBoundingClientRect()
-  const fromBottom = r.bottom - e.clientY
-  const fromCenter = Math.abs(e.clientX - (r.left + r.width / 2))
+  const w = el ? el.clientWidth : window.innerWidth
+  const left = el ? el.offsetLeft : 0
+  const fromCenter = Math.abs(e.clientX - (left + w / 2))
   const halfW = kind.value === 'video' ? 340 : 210
-  dockHover.value = fromBottom >= 0 && fromBottom <= 64 && fromCenter <= halfW
+  dockHover.value = fromCenter <= halfW
 }
 function onViewerLeave() {
   onUp()
@@ -396,15 +400,21 @@ watch(() => lib.lightbox.path, () => {
 onMounted(() => {
   nextTick(() => fitToWindow(true))
   window.addEventListener('keydown', onKey)
+  window.addEventListener('mousemove', onWinCropMove)
+  window.addEventListener('mouseup', onWinCropUp)
   /* 调试探针：验证“滚轮打断入场动画”是否生效（不影响功能） */
   window.__picViewer = () => ({ scale: lib.viewer.scale, tx: lib.viewer.tx, ty: lib.viewer.ty, flip: !!flipRaf })
 })
 onBeforeUnmount(() => {
   cleanupVideo()
   if (flipRaf) cancelAnimationFrame(flipRaf)
+  if (pan.raf) { cancelAnimationFrame(pan.raf); pan.raf = 0 }
   window.removeEventListener('keydown', onKey)
   window.removeEventListener('mousemove', onMove)
   window.removeEventListener('mouseup', onUp)
+  window.removeEventListener('mousemove', onWinCropMove)
+  window.removeEventListener('mouseup', onWinCropUp)
+  delete window.__picViewer
 })
 
 function onWheel(e) {
@@ -996,9 +1006,9 @@ function cropPointerMove(e) {
   }
 }
 function cropPointerUp() { cropAction.value = null }
-/* 全局跟踪：鼠标超出图片/裁剪层也不丢事件（工作区概念） */
-window.addEventListener('mousemove', (e) => { if (cropAction.value) cropPointerMove(e) })
-window.addEventListener('mouseup', () => { if (cropAction.value) cropPointerUp() })
+/* 全局跟踪：鼠标超出图片/裁剪层也不丢事件（工作区概念），由 onMounted/onBeforeUnmount 管理生命周期 */
+function onWinCropMove(e) { if (cropAction.value) cropPointerMove(e) }
+function onWinCropUp() { if (cropAction.value) cropPointerUp() }
 
 async function applyCrop() {
   cropAsk.value = false
@@ -1093,7 +1103,7 @@ function onKey(e) {
   <div
     ref="stageEl" class="viewer" :class="{ 'dock-show': dockHover, 'has-ambient': !!ambientUrl }"
     @wheel="onWheel" @contextmenu="onContext"
-    @mousedown="onDown" @mousemove="onMove" @mouseup="onUp" @mouseleave="onViewerLeave"
+    @mousedown="onDown" @mouseleave="onViewerLeave"
     @pointermove="onViewerPointerMove"
     @dblclick="onViewerDblclick"
     :style="canvasMode ? { cursor: dragging ? 'grabbing' : 'grab' } : undefined"
@@ -1283,18 +1293,14 @@ function onKey(e) {
   display: flex; align-items: center; justify-content: center;
   background: var(--panel-strong);
 }
-/* ---- 氛围底（Ambient）：亮色主题克制温润（不抢画面），暗色主题稍微浓郁（由 style.css --amb-* 控制） ---- */
+/* ---- 氛围底（Ambient）：亮色主题克制温润（不抢画面），暗色主题稍微浓郁（由 style.css --amb-* 控制）
+   静态 GPU 纹理缓存，不做无限循环 transform 动画以避免 92px 高斯模糊层持续占用 GPU ---- */
 .ambient {
   position: absolute; inset: -14%; z-index: 0; pointer-events: none;
   background-size: cover; background-position: center;
   filter: blur(var(--amb-blur, 92px)) saturate(var(--amb-sat, 1.16)) brightness(var(--amb-bright, 1.04));
   opacity: var(--amb-opacity, 0.20);
   transform: translateZ(0);
-  animation: amb-drift 28s ease-in-out infinite alternate;
-}
-@keyframes amb-drift {
-  from { transform: translateZ(0) scale(1) translate(0, 0); }
-  to { transform: translateZ(0) scale(1.08) translate(-1.5%, 1%); }
 }
 /* 柔光罩：亮色主题只做极淡暖边晕，不压脏白底 */
 .ambient-veil {

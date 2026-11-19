@@ -78,21 +78,23 @@ pub fn collect_single_dir_files(dir_path: &Path) -> Vec<(String, i64, i64)> {
 
 pub fn scan_and_sync_folder(conn: &mut Connection, folder_id: i64, root_path: &Path) -> Result<usize, String> {
     let files = collect_folder_files(root_path);
+    let root_str = root_path.to_string_lossy().to_string();
 
     let tx = conn.transaction().map_err(|e| e.to_string())?;
     let mut count = 0;
     {
         let mut stmt = tx
             .prepare_cached(
-                "INSERT INTO images (folder_id, file_path, size, mtime)
-                 VALUES (?1, ?2, ?3, ?4)
-                 ON CONFLICT(file_path) DO UPDATE SET size = ?3, mtime = ?4
-                 WHERE deleted_at IS NULL AND (size IS NOT ?3 OR mtime IS NOT ?4)",
+                "INSERT INTO images (folder_id, file_path, size, mtime, dir_rel)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(file_path) DO UPDATE SET size = ?3, mtime = ?4, dir_rel = ?5
+                 WHERE deleted_at IS NULL AND (size IS NOT ?3 OR mtime IS NOT ?4 OR dir_rel IS NULL)",
             )
             .map_err(|e| e.to_string())?;
 
         for (file_path, size, mtime) in &files {
-            count += stmt.execute(params![folder_id, file_path, size, mtime]).unwrap_or(0);
+            let dr = crate::db::dir_rel_of(&root_str, file_path);
+            count += stmt.execute(params![folder_id, file_path, size, mtime, dr]).unwrap_or(0);
         }
     }
 

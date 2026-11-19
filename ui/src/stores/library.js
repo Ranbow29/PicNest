@@ -122,6 +122,9 @@ function locKeyOf(s) {
   return `${s.activeRootId}::${s.view}::${s.currentDirRel ?? ''}::${sel}`
 }
 
+/* 非响应式模块级颜色距离表：避免 filteredImages getter 在计算时改写 Pinia state 引起响应式依赖抖动 */
+let _colorDistMap = Object.create(null)
+
 export const useLibrary = defineStore('library', {
   state: () => ({
     roots: [],            // [{id, path, display_name}]
@@ -168,8 +171,9 @@ export const useLibrary = defineStore('library', {
        网格据此停止渲染旧图（宁可空白骨架，也不能让新标题配旧图）。 */
     loadedLocKey: '',
     /* 最近看过的目录列表缓存（键=根|视图|目录）：切回上一个文件夹时直接秒出，
-       不再走「先 60 行再补全量」的中间态，避免列表条数跳变导致的不跟手 */
-    _listCache: new Map(),
+       不再走「先 60 行再补全量」的中间态，避免列表条数跳变导致的不跟手。
+       使用 markRaw 避免 Pinia 对 LRU Map 做深层响应式代理追踪 */
+    _listCache: markRaw(new Map()),
     _inflightAbort: null,
     /* 切换后超过 200ms 还没拿到数据才算「慢」：快切换时保留旧图无缝替换，
        不让网格闪成骨架屏 */
@@ -221,7 +225,6 @@ export const useLibrary = defineStore('library', {
     palettes: {},            // file_path -> [{r,g,b,percent}]
     displayThumbs: {},       // file_path -> { p: 1024px 显示图路径|'' , m: modify_time }（网格大格用）
     paletteBuild: { running: false, done: 0, total: 0 },
-    colorDist: {},           // file_path -> d76（颜色命中排序用）
     /* v2 布局：文件夹区加宽到 264；旧版存过的窄宽度（<264）一次性迁移抬升，之后尊重用户拖拽值 */
     sidebarWidth: (() => { const w = Number(localStorage.getItem('picnest.sidebarWidth')) || 0; if (localStorage.getItem('picnest.sidebarLayoutV') !== '2') { localStorage.setItem('picnest.sidebarLayoutV', '2'); if (w && w < 264) { localStorage.setItem('picnest.sidebarWidth', '264'); return 264 } } return w || 264 })(),
     sidebarCollapsed: localStorage.getItem('picnest.sidebarCollapsed') === '1', // 左边栏收起态（持久化）
@@ -237,12 +240,15 @@ export const useLibrary = defineStore('library', {
     memoryKey: (s) => (s.activeRootId == null ? '' : `${s.activeRootId}/${s.currentDirRel ?? ''}`),
     canGoBack: (s) => s.navIndex > 0,
     canGoForward: (s) => s.navIndex >= 0 && s.navIndex < s.navHistory.length - 1,
-    selected: (s) => s.images.find((i) => i.file_path === s.selectedPath) || null,
+    imageMap: (s) => new Map((s.images || []).map((img) => [img.file_path, img])),
+    selected(s) {
+      return (s.selectedPath && this.imageMap.get(s.selectedPath)) || null
+    },
     filteredImages(s) {
       let arr = s.applyFilters(s.images)
       const c = s.filters.color
       if ((c.on || c.gray) && c.value && !c.gray) {
-        arr = [...arr].sort((a, b) => (s.colorDist[a.file_path] ?? 100) - (s.colorDist[b.file_path] ?? 100))
+        arr = [...arr].sort((a, b) => (_colorDistMap[a.file_path] ?? 100) - (_colorDistMap[b.file_path] ?? 100))
       }
       return arr
     },
@@ -561,10 +567,17 @@ export const useLibrary = defineStore('library', {
     },
 
     async refreshTree() {
-      if (this.activeRootId == null) return
-      this.tree = await api.dirTree(this.activeRootId)
-      this.counts = await window.picrand.picnestViewCounts(this.activeRootId)
-      this.dirMemory = await api.dirMemoryRootGet(this.activeRootId) // 当前根切片（rel 键）：树渲染读颜色/展开态零 IPC
+      const rootId = this.activeRootId
+      if (rootId == null) return
+      const [tree, counts, dirMemory] = await Promise.all([
+        api.dirTree(rootId),
+        window.picrand.picnestViewCounts(rootId),
+        api.dirMemoryRootGet(rootId),
+      ])
+      if (this.activeRootId !== rootId && this.activeRoot?.id !== rootId) return
+      this.tree = tree
+      this.counts = counts
+      this.dirMemory = dirMemory // 当前根切片（rel 键）：树渲染读颜色/展开态零 IPC
     },
 
     /* 资料库切换：同 id 忽略；全链路键 = activeRootId，tree/counts/images 按 folderId 自动重建 */
@@ -2096,7 +2109,7 @@ export const useLibrary = defineStore('library', {
     },
     clearFilters() {
       this.filters = { shapes: [], customW: 4, customH: 3, ratings: [], formats: [], formatEx: [], folders: [], tags: [], color: { on: false, gray: false, value: null, accuracy: 20 } }
-      this.colorDist = {}
+      _colorDistMap = Object.create(null)
     },
     shapeMatch(img) {
       const w = img.width || 0, h = img.height || 0
@@ -2124,7 +2137,7 @@ export const useLibrary = defineStore('library', {
       const v = c.value
       /* 精确命中任意色板（点图自身色板/吸到同色）——不受占比门槛限制，原图必保 */
       for (const p of rawPal) {
-        if (p.r === v[0] && p.g === v[1] && p.b === v[2]) { this.colorDist[img.file_path] = 0.01; return true }
+        if (p.r === v[0] && p.g === v[1] && p.b === v[2]) { _colorDistMap[img.file_path] = 0.01; return true }
       }
       /* 兼容旧 SQLite 中未合并的 24-step 细桶色板（主色 < 22%）：按欧氏距离 < 48 贪心合并并按可观测总占比归一化 */
       let pal = rawPal
@@ -2162,7 +2175,7 @@ export const useLibrary = defineStore('library', {
         const d2000 = deltaE2000(v, [p.r, p.g, p.b])
         const d76 = deltaE76(v, [p.r, p.g, p.b])
         if (d2000 < acc && d76 < d76Limit) {
-          this.colorDist[img.file_path] = d76 + (extra || 0)
+          _colorDistMap[img.file_path] = d76 + (extra || 0)
           return true
         }
         return false
@@ -2192,7 +2205,7 @@ export const useLibrary = defineStore('library', {
         arr = arr.filter((i) => (this.imageTags[i.id] || []).some((id) => picked.has(id)))
       }
       if (f.color && (f.color.on || f.color.gray)) {
-        this.colorDist = {}
+        _colorDistMap = Object.create(null)
         arr = arr.filter((i) => this.colorMatch(i))
       }
       return arr
@@ -2605,7 +2618,7 @@ export const useLibrary = defineStore('library', {
       // 拖拽后的自动改名也会产生文件事件，同步期间先抑制 watcher 回写
       this._suppressFsSyncUntil = Date.now() + 6000
       try {
-        const r = await api.imagesReorder(this.activeRootId, this.currentDirRel, rest)
+        const r = await api.imagesReorder(this.activeRootId, this.currentDirRel ?? '', rest)
         if (!r?.ok) { if (r?.error) this.error = r.error; return r }
         /* 只存顺序；文件名不再被程序动 */
         /* 本地增量换序：只替换数组与排序模式，不整表 loadImages（不重放入场波、不清选中） */
@@ -3464,10 +3477,13 @@ export const useLibrary = defineStore('library', {
       }
     },
     openVisualSearchForSelected() {
+      const activePath = this.lightbox?.open && this.lightbox?.path
+        ? this.lightbox.path
+        : (this.selected?.file_path || this.selectedPath)
       if (this.selectedPaths.length > 0) {
         this.openVisualSearch(this.selectedPaths)
-      } else if (this.activeImage?.file_path) {
-        this.openVisualSearch([this.activeImage.file_path])
+      } else if (activePath) {
+        this.openVisualSearch([activePath])
       }
     },
     closeVisualSearch() {

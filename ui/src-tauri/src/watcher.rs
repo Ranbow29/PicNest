@@ -7,13 +7,29 @@
 //! 不轮询、不读文件内容，监听整棵树几乎零负担。
 
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, RecvTimeoutError};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use tauri::Emitter;
 use tauri::Manager;
+
+/// 全局 Watcher 句柄，支持运行时动态添加新资料库到监听列表
+static WATCHER: OnceLock<Mutex<RecommendedWatcher>> = OnceLock::new();
+
+/// 运行时动态将新资料库根目录加入监听（无需重启）
+pub fn watch_path(p: &Path) {
+    if !p.exists() {
+        return;
+    }
+    if let Some(lock) = WATCHER.get() {
+        if let Ok(mut w) = lock.lock() {
+            let _ = w.watch(p, RecursiveMode::Recursive);
+        }
+    }
+}
 
 /// 静默这么久之后收口（连续事件会一直延长，但有 2 秒硬上限）
 const QUIET_MS: u64 = 600;
@@ -59,24 +75,34 @@ fn mark_removed(app: &tauri::AppHandle, paths: &[PathBuf]) {
     let Ok(conn) = state.db.lock() else {
         return;
     };
+    let Ok(tx) = conn.unchecked_transaction() else {
+        return;
+    };
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
     for p in paths {
         let s = p.to_string_lossy().to_string();
-        let _ = conn.execute(
-            "UPDATE images SET deleted_at = ?1 \
-             WHERE file_path = ?2 COLLATE NOCASE AND deleted_at IS NULL",
-            rusqlite::params![now, s],
-        );
+        let updated = tx
+            .execute(
+                "UPDATE images SET deleted_at = ?1 \
+                 WHERE file_path = ?2 AND deleted_at IS NULL",
+                rusqlite::params![now, s],
+            )
+            .unwrap_or(0);
+        if updated == 0 {
+            let _ = tx.execute(
+                "UPDATE images SET deleted_at = ?1 \
+                 WHERE file_path = ?2 COLLATE NOCASE AND deleted_at IS NULL",
+                rusqlite::params![now, s],
+            );
+        }
     }
+    let _ = tx.commit();
 }
 
 pub fn start(app: tauri::AppHandle, roots: Vec<PathBuf>) {
-    if roots.is_empty() {
-        return;
-    }
     std::thread::spawn(move || {
         let (tx, rx) = channel::<notify::Result<notify::Event>>();
         let mut watcher = match RecommendedWatcher::new(tx, notify::Config::default()) {
@@ -97,9 +123,7 @@ pub fn start(app: tauri::AppHandle, roots: Vec<PathBuf>) {
             watched,
             roots.len()
         ));
-        if watched == 0 {
-            return;
-        }
+        let _ = WATCHER.set(Mutex::new(watcher));
 
         loop {
             // 先阻塞等第一个事件（没有事件时不占 CPU）

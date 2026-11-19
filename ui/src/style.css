@@ -54,6 +54,10 @@
   --panel-insp-low: rgba(255, 255, 255, 0.86);
   --panel-insp-bot: rgba(255, 255, 255, 0.60);
   --amb-blur: 92px; --amb-sat: 1.16; --amb-bright: 1.04; --amb-opacity: 0.20; --amb-veil: rgba(60, 50, 30, 0.05);
+  /* 细纹棉浆画纸/装帧特种纸肌理：fractalNoise(0.06) + 柔和侧光漫反射(1.15)，320px 无缝平铺，仅光栅化一次 */
+  --paper-grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='320' height='320' viewBox='0 0 320 320'%3E%3Cfilter id='p' x='0' y='0' width='100%25' height='100%25'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.06' numOctaves='5' stitchTiles='stitch' result='noise'/%3E%3CfeDiffuseLighting in='noise' lighting-color='%23ffffff' surfaceScale='1.15' result='paper'%3E%3CfeDistantLight azimuth='45' elevation='60'/%3E%3C/feDiffuseLighting%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23p)'/%3E%3C/svg%3E");
+  --paper-opacity: 0.16;
+  --paper-blend: multiply;
   --radius: 14px;
   --radius-panel: 6px; /* 主面板：锐利小圆角（详情浮岛保持 14px，ZCode 层次） */
   --blur: 22px;
@@ -91,6 +95,8 @@
     --panel-insp-low: rgba(52, 52, 72, 0.84);
     --panel-insp-bot: rgba(52, 52, 72, 0.62);
     --amb-blur: 78px; --amb-sat: 1.36; --amb-bright: 0.88; --amb-opacity: 0.40; --amb-veil: rgba(0, 0, 0, 0.24);
+    --paper-opacity: 0.16;
+    --paper-blend: soft-light;
 }
 
 /* ---- 低饱和黑白 · 灰白（中性灰，强调色也去饱和） ---- */
@@ -123,6 +129,8 @@
     --panel-insp-low: rgba(255, 255, 255, 0.86);
     --panel-insp-bot: rgba(255, 255, 255, 0.60);
   --amb-blur: 92px; --amb-sat: 1.16; --amb-bright: 1.04; --amb-opacity: 0.20; --amb-veil: rgba(60, 50, 30, 0.05);
+  --paper-opacity: 0.13;
+  --paper-blend: multiply;
 }
 
 /* ---- 低饱和黑白 · 炭黑（比墨黑浅一档的中性灰） ---- */
@@ -155,6 +163,8 @@
     --panel-insp-low: rgba(70, 70, 70, 0.84);
     --panel-insp-bot: rgba(70, 70, 70, 0.62);
     --amb-blur: 78px; --amb-sat: 1.36; --amb-bright: 0.88; --amb-opacity: 0.38; --amb-veil: rgba(0, 0, 0, 0.22);
+    --paper-opacity: 0.18;
+    --paper-blend: soft-light;
 }
 
 /* ---- 低饱和黑白 · 墨黑（中性炭灰） ---- */
@@ -187,9 +197,16 @@
     --panel-insp-low: rgba(48, 48, 48, 0.84);
     --panel-insp-bot: rgba(48, 48, 48, 0.62);
     --amb-blur: 78px; --amb-sat: 1.36; --amb-bright: 0.88; --amb-opacity: 0.40; --amb-veil: rgba(0, 0, 0, 0.24);
+    --paper-opacity: 0.16;
+    --paper-blend: soft-light;
 }
 
 * { box-sizing: border-box; }
+
+/* 换主题墨水晕开：关掉默认交叉淡化，只让新主题从点击点圆形铺开（theme.js 驱动 clip-path） */
+::view-transition-old(root),
+::view-transition-new(root) { animation: none; mix-blend-mode: normal; }
+::view-transition-new(root) { z-index: 2; }
 html, body, #app { height: 100%; margin: 0; }
 body {
   font-family: var(--font-sans);
@@ -197,4 +214,22 @@ body {
   background: var(--bg);
   overflow: hidden;
   user-select: none;
+  position: relative;
 }
+/* 关闭纸质肌理时平滑隐去 */
+:root[data-paper="off"] { --paper-opacity: 0 !important; }
+/* 底座装帧纸纹：透在侧栏底子与主面板四周水带上，绝不盖住前景图片 */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image: var(--paper-grain);
+  background-repeat: repeat;
+  background-size: 320px 320px;
+  opacity: var(--paper-opacity, 0.16);
+  mix-blend-mode: var(--paper-blend, multiply);
+  transition: opacity 0.28s ease;
+}
+#app { position: relative; z-index: 1; }

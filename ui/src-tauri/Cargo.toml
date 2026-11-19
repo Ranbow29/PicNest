@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "1.0.0"
+version = "1.0.1"
 description = "A Tauri App"
 authors = ["Ranbow29"]
 license = "GPL-3.0"
@@ -20,10 +20,6 @@ tauri-build = { version = "2.7.4", features = [] }
 [dependencies]
 serde_json = "1.0"
 base64 = "0.22"
-# 视觉检索走 reqwest 而不是 curl.exe：Windows 那套 curl 用的是 schannel（系统 TLS），
-# Pinterest 会直接断这条握手（schannel: server closed abruptly）。
-# 老版 Electron 用的是 Chromium 自带的 BoringSSL + HTTP/2，所以这边必须用 rustls。
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "multipart", "rustls-tls", "socks", "native-tls"] }
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
 # 2026-11-15：必须带 custom-protocol，否则 tauri 内部 cfg(dev)=true，
@@ -41,4 +37,10 @@ psd = "0.3"
 flate2 = "1.0"
 notify = "7"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+
 

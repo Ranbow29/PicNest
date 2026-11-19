@@ -44,7 +44,7 @@
 
 | 文件名 | 文件类型 | 文件大小 | SHA-256 校验和 |
 | :--- | :--- | :--- | :--- |
-| **`PicNest-v1.0.0-windows-x64-portable.zip`** | 便携分发包（含指南） | **5.93 MB** | `7C404FBC3C534026BF6AE2EEA113E73614FF5B4F4A1511C9DA75F3271D9E39F1` |
-| **`PicNest.exe`** | 独立可执行程序 | **18.5 MB** | `7B5511824643607445E9A0FD0DCF2EF3C521F20B25942F9B78C40AC0411ED1CA` |
+| **`PicNest-v1.0.0-windows-x64-portable.zip`** | 便携分发包（含指南） | **5.88 MB** | `E43B6EBE4079A2EE0C59C94C93B1FDEEF3C0F89A6335B1D80D54B4F15512B7C6` |
+| **`PicNest.exe`** | 独立可执行程序 | **17.7 MB** | `B72B67B114163E03F8DC24AD8553EC55165AEAADA9B7C54B6E4329F9F98EFCE5` |
 
 > **使用方法**：解压 `PicNest-v1.0.0-windows-x64-portable.zip` 到任意目录，双击 `PicNest.exe` 即可直接使用，无需任何外部依赖。

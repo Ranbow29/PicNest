@@ -302,8 +302,15 @@ function onBboxChanged() {
 
 /* ================== 网络检索与分页 ================== */
 async function triggerSearch(task, continueSearch = false, isRequery = false) {
-  if (!task || task.loading) return
+  if (!task) return
+  if (task.loading) {
+    if (isRequery || !continueSearch) {
+      task._pendingRequery = true
+    }
+    return
+  }
   task.loading = true
+  task._pendingRequery = false
   task.error = null
 
   try {
@@ -355,6 +362,11 @@ async function triggerSearch(task, continueSearch = false, isRequery = false) {
     task.error = String(err?.message || err)
   } finally {
     task.loading = false
+    if (task._pendingRequery) {
+      task._pendingRequery = false
+      task.bookmark = null
+      triggerSearch(task, false, true)
+    }
   }
 }
 
@@ -728,6 +740,12 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onGlobalKeyDown)
   window.removeEventListener('wheel', onWindowWheel)
+  window.removeEventListener('mousemove', onDragMove)
+  window.removeEventListener('mouseup', onDragEnd)
+  window.removeEventListener('mousemove', onPreviewMouseMove)
+  window.removeEventListener('mouseup', onPreviewMouseUp)
+  if (cropDebounceTimer) { clearTimeout(cropDebounceTimer); cropDebounceTimer = null }
+  if (dockHoverTimer) { clearTimeout(dockHoverTimer); dockHoverTimer = null }
   waterfallResizeObserver?.disconnect()
   if (isAlwaysOnTop.value) {
     api.setAlwaysOnTop(false).catch(() => {})
@@ -2014,7 +2032,7 @@ onBeforeUnmount(() => {
   animation: fadeIn 0.14s ease-out;
 }
 
-/* 顶栏信息与关闭条 */
+/* 顶栏信息与返回条 (退出进入左上角作为返回上一级，右上角放纯单色图钉) */
 .lightbox-topbar {
   position: absolute;
   top: 16px;
@@ -2025,6 +2043,7 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   align-items: center;
   pointer-events: none;
+  -webkit-app-region: drag; /* 支持大图顶栏拖拽窗口 */
 }
 
 .topbar-info {
@@ -2076,20 +2095,6 @@ onBeforeUnmount(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   opacity: 0.9;
-}
-
-/* 顶栏信息与返回条 (退出进入左上角作为返回上一级，右上角放纯单色图钉) */
-.lightbox-topbar {
-  position: absolute;
-  top: 16px;
-  left: 20px;
-  right: 20px;
-  z-index: 10;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  pointer-events: none;
-  -webkit-app-region: drag; /* 支持大图顶栏拖拽窗口 */
 }
 
 .lightbox-topbar .topbar-info,

@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onMounted, ref, watch } from 'vue'
 import { useLibrary } from '../stores/library'
 import { isExternalDT as isDnDExternal } from '../lib/dnd'
 import { handleExternalDrop } from '../lib/dropExtract'
@@ -7,7 +7,8 @@ import DirTreeItem from './DirTreeItem.vue'
 import FolderIcon from './FolderIcon.vue'
 import NamePromptDialog from './NamePromptDialog.vue'
 import DirContextMenu from './DirContextMenu.vue'
-import EagleImportWizard from './EagleImportWizard.vue'
+
+const EagleImportWizard = defineAsyncComponent(() => import('./EagleImportWizard.vue'))
 
 const lib = useLibrary()
 /* 插件宿主只在旧版 Electron 预加载层里真实存在；Rust 版 picrand 的 Proxy 给未知键返回 null 桩，

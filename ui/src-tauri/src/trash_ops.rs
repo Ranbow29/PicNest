@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use tauri::State;
 
 use crate::commands::{
-    now_ms, open_read_conn, rebase_path_prefix, resolve_existing_thumb,
+    now_ms, rebase_path_prefix, resolve_existing_thumb, with_read_conn,
     AppState, ImageItem,
 };
 
@@ -536,8 +536,7 @@ pub async fn trash_list(
     let db_path = state.db_path.clone();
     let thumbs_dir = state.data_dir.join("cache").join("thumbs");
     tauri::async_runtime::spawn_blocking(move || {
-        let conn = open_read_conn(&db_path)?;
-        trash_list_inner(&conn, folder_id, &thumbs_dir)
+        with_read_conn(&db_path, |conn| trash_list_inner(conn, folder_id, &thumbs_dir))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -635,8 +634,7 @@ pub async fn trash_folders(
 ) -> Result<Vec<TrashFolderRow>, String> {
     let db_path = state.db_path.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let conn = open_read_conn(&db_path)?;
-        trash_folders_inner(&conn, folder_id)
+        with_read_conn(&db_path, |conn| trash_folders_inner(conn, folder_id))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -760,7 +758,7 @@ pub async fn trash_purge_all(
         if !single_paths.is_empty() {
             let disk_paths: Vec<PathBuf> = single_paths.iter().map(PathBuf::from).collect();
             let batch_ok = send_paths_to_recycle_bin(&disk_paths).is_ok();
-            let conn = db.lock().map_err(|e| e.to_string())?;
+            let mut ok_list = Vec::with_capacity(single_paths.len());
             for fp in single_paths {
                 let p = Path::new(&fp);
                 let ok_disk = if batch_ok {
@@ -771,14 +769,25 @@ pub async fn trash_purge_all(
                     true
                 };
                 if ok_disk {
-                    // 单图永久删：缩略图一并清，不留孤儿
-                    remove_thumbs_for(&thumbs_dir, &fp);
-                    if db_delete_image_rows_by_path(&conn, &fp).unwrap_or(false) {
-                        purged_images += 1;
-                    }
+                    ok_list.push(fp);
                 } else {
                     failed += 1;
                 }
+            }
+            let mut to_remove_thumbs = Vec::with_capacity(ok_list.len());
+            {
+                let mut conn = db.lock().map_err(|e| e.to_string())?;
+                let tx = conn.transaction().map_err(|e| e.to_string())?;
+                for fp in ok_list {
+                    if db_delete_image_rows_by_path(&tx, &fp).unwrap_or(false) {
+                        purged_images += 1;
+                    }
+                    to_remove_thumbs.push(fp);
+                }
+                tx.commit().map_err(|e| e.to_string())?;
+            } // 释放 state.db.lock() 后再删磁盘缩略图
+            for fp in to_remove_thumbs {
+                remove_thumbs_for(&thumbs_dir, &fp);
             }
         }
 

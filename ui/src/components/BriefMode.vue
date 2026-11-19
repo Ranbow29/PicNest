@@ -1,7 +1,7 @@
 <script setup>
 // 简报模式：全屏黑底演示（Eagle 语义）——单击下一张 / 右键菜单 / 滚轮缩放 / 拖拽平移 / ←→ / Esc 退出
 // 视频全屏增强：视频上点击播放/暂停，视频外点击下一张，底部自动隐藏高质感播放控制栏，默认循环，支持快进退与倍速
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useLibrary } from '../stores/library'
 import { fileUrl, api } from '../api'
 import { isTextPath, isVideoPath, extOf } from '../lib/fileKinds'
@@ -554,15 +554,14 @@ onBeforeUnmount(() => {
   padding: 5px 10px; border-radius: 8px; pointer-events: none;
   background: rgba(20, 18, 14, 0.62); color: #e8e2d6; font-size: 11.5px;
 }
-/* ---- 氛围底：黑场里透出当前图的色彩光晕（影院 Ambilight 式），切图交叉淡化 ---- */
+/* ---- 氛围底：黑场里透出当前图的色彩光晕（影院 Ambilight 式），切图交叉淡化，静态驻留省 GPU ---- */
 .brief-amb {
   position: absolute; inset: -15%; z-index: 0; pointer-events: none;
   background-size: cover; background-position: center;
   filter: blur(90px) saturate(1.6) brightness(0.55);
   opacity: 0.85;
-  animation: bamb-breathe 22s ease-in-out infinite alternate;
+  transform: translateZ(0);
 }
-@keyframes bamb-breathe { from { transform: scale(1); } to { transform: scale(1.1) rotate(1.5deg); } }
 .bamb-enter-active, .bamb-leave-active { transition: opacity 0.9s ease; }
 .bamb-enter-from, .bamb-leave-to { opacity: 0 !important; }
 .brief-vignette {
@@ -573,8 +572,9 @@ onBeforeUnmount(() => {
 .brief-stage-wrap {
   position: absolute; inset: 0; z-index: 1;
   display: flex; align-items: center; justify-content: center;
-  pointer-events: auto; will-change: transform;
+  pointer-events: auto;
 }
+.brief-stage-wrap.kb { will-change: transform; }
 .brief-stage-wrap.kb-0 { animation: kb-move-0 14s cubic-bezier(0.22, 0.6, 0.36, 1) forwards; }
 .brief-stage-wrap.kb-1 { animation: kb-move-1 14s cubic-bezier(0.22, 0.6, 0.36, 1) forwards; }
 .brief-stage-wrap.kb-2 { animation: kb-move-2 14s cubic-bezier(0.22, 0.6, 0.36, 1) forwards; }

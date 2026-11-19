@@ -12,7 +12,7 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue.svg" alt="License: GPL-3.0"></a>
   <img src="https://img.shields.io/badge/platform-Windows%2010%2F11%20x64-brightgreen.svg" alt="Platform">
-  <img src="https://img.shields.io/badge/version-v1.0.0-orange.svg" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.0.1-orange.svg" alt="Version">
   <img src="https://img.shields.io/badge/rust-1.80%2B-dea584.svg" alt="Rust">
   <img src="https://img.shields.io/badge/tauri-v2-24c8db.svg" alt="Tauri v2">
   <img src="https://img.shields.io/badge/vue-3.5-brightgreen.svg" alt="Vue">
@@ -111,7 +111,7 @@
 PicNest 是专为创作者打造的绿色便携软件：
 
 1. 前往 [Releases 页面](https://github.com/Ranbow29/PicNest/releases) 下载最新的便携包：  
-   `PicNest-v1.0.0-windows-x64-portable.zip`
+   `PicNest-v1.0.1-windows-x64-portable.zip`
 2. 解压到你的电脑任意目录（如 `D:\PicNest`）。
 3. 双击运行 `PicNest.exe`，点击左侧添加你的本地图片文件夹，即刻开启极致看图体验！
 4. **一键热更新**：软件自带静默检测与帮助窗「检查新版本」入口，支持自动下载 GitHub Release 并完成 **SHA-256 校验与免安装热替换**（全自动保留你的本地配置与用户数据）。

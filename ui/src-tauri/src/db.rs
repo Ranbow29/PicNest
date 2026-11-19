@@ -1,6 +1,15 @@
 use rusqlite::{Connection, Result};
 use std::path::Path;
 
+pub fn open_conn_with_pragmas(db_path: &Path) -> Result<Connection> {
+    let conn = Connection::open(db_path)?;
+    conn.execute_batch("
+        PRAGMA busy_timeout = 5000;
+        PRAGMA foreign_keys = ON;
+    ")?;
+    Ok(conn)
+}
+
 pub fn init_db(db_path: &Path) -> Result<Connection> {
     if let Some(parent) = db_path.parent() {
         let _ = std::fs::create_dir_all(parent);
@@ -12,6 +21,7 @@ pub fn init_db(db_path: &Path) -> Result<Connection> {
         PRAGMA journal_mode = WAL;
         PRAGMA synchronous = NORMAL;
         PRAGMA busy_timeout = 5000;
+        PRAGMA foreign_keys = ON;
         PRAGMA cache_size = -8000;
         PRAGMA temp_store = MEMORY;
     ")?;
@@ -44,11 +54,10 @@ pub fn init_db(db_path: &Path) -> Result<Connection> {
             FOREIGN KEY (folder_id) REFERENCES folders(id) ON DELETE CASCADE
         );
 
-        CREATE INDEX IF NOT EXISTS idx_images_folder ON images(folder_id);
-        CREATE INDEX IF NOT EXISTS idx_images_file_path ON images(file_path);
         CREATE INDEX IF NOT EXISTS idx_images_deleted ON images(deleted_at);
         CREATE INDEX IF NOT EXISTS idx_images_folder_deleted ON images(folder_id, deleted_at, trash_group);
         CREATE INDEX IF NOT EXISTS idx_images_last_opened ON images(last_opened_at);
+        CREATE INDEX IF NOT EXISTS idx_images_folder_size ON images(folder_id, size) WHERE deleted_at IS NULL;
 
         CREATE TABLE IF NOT EXISTS picnest_trash_folders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -115,6 +124,27 @@ pub fn init_db(db_path: &Path) -> Result<Connection> {
     // idx_images_dirrel 已经是 (folder_id, dir_rel, sort_order, id)，前缀直接命中；
     // 之前多建了一个同名近似的索引（idx_images_dir_rel），这里删掉避免重复写放大。
     let _ = conn.execute("DROP INDEX IF EXISTS idx_images_dir_rel", []);
+    let _ = conn.execute("DROP INDEX IF EXISTS idx_images_file_path", []);
+    let _ = conn.execute("DROP INDEX IF EXISTS idx_images_folder", []);
+    let _ = conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_images_folder_size ON images(folder_id, size) WHERE deleted_at IS NULL",
+        [],
+    );
+    let _ = conn.execute(
+        "CREATE TABLE IF NOT EXISTS picnest_img_hash (
+            file_path TEXT PRIMARY KEY,
+            size INTEGER NOT NULL,
+            mtime INTEGER NOT NULL,
+            dhash INTEGER NOT NULL,
+            dhash_flip INTEGER NOT NULL,
+            color BLOB NOT NULL,
+            phash0 INTEGER NOT NULL,
+            phash1 INTEGER NOT NULL,
+            phash_flip0 INTEGER NOT NULL,
+            phash_flip1 INTEGER NOT NULL
+        )",
+        [],
+    );
     // 历史脏数据：早期版本把根层顺序写成 "<folder>|__root__"，而 dir_tree 读的是 "<folder>|"，
     // 那批行永远读不到。能搬到正确 key 的搬，搬不了（已有新值）的删。
     if let Ok(mut stmt) = conn.prepare("SELECT key, names FROM picnest_dir_order WHERE key LIKE '%|__root__'") {
@@ -148,14 +178,27 @@ pub fn init_db(db_path: &Path) -> Result<Connection> {
     let _ = conn.execute("ALTER TABLE images ADD COLUMN rating INTEGER DEFAULT 0", []);
     let _ = conn.execute("ALTER TABLE images ADD COLUMN is_favorite INTEGER DEFAULT 0", []);
     let _ = conn.execute("ALTER TABLE folders ADD COLUMN display_name TEXT DEFAULT ''", []);
-    let _ = conn.execute(
-        "UPDATE images SET palettes = NULL WHERE palettes IS NOT NULL AND palettes != '[]' AND CAST(json_extract(palettes, '$[0].percent') AS REAL) <= 1.0",
-        [],
-    );
-    let _ = conn.execute(
-        "UPDATE images SET palettes = NULL WHERE palettes = '[]' AND thumbnail_path IS NOT NULL AND thumbnail_path != 'SKIP'",
-        [],
-    );
+    let palettes_cleaned: bool = conn
+        .query_row(
+            "SELECT 1 FROM picnest_kv WHERE key = 'palettes_v2_cleaned'",
+            [],
+            |_| Ok(true),
+        )
+        .unwrap_or(false);
+    if !palettes_cleaned {
+        let _ = conn.execute(
+            "UPDATE images SET palettes = NULL WHERE palettes IS NOT NULL AND palettes != '[]' AND CAST(json_extract(palettes, '$[0].percent') AS REAL) <= 1.0",
+            [],
+        );
+        let _ = conn.execute(
+            "UPDATE images SET palettes = NULL WHERE palettes = '[]' AND thumbnail_path IS NOT NULL AND thumbnail_path != 'SKIP'",
+            [],
+        );
+        let _ = conn.execute(
+            "INSERT OR REPLACE INTO picnest_kv (key, value) VALUES ('palettes_v2_cleaned', '1')",
+            [],
+        );
+    }
 
     // 一次性兼容导入旧版 Electron (AppData\Roaming\PicNest\config.json 与 picrand.db) 的文件夹颜色、标签与手动排序
     migrate_legacy_electron_config(&conn);
@@ -570,10 +613,13 @@ pub(crate) fn backfill_dir_rel(conn: &Connection) {
         if rows.is_empty() {
             continue;
         }
-        if let Ok(mut stmt) = conn.prepare("UPDATE images SET dir_rel = ?1 WHERE id = ?2") {
-            for (id, fp) in rows {
-                let _ = stmt.execute(rusqlite::params![dir_rel_of(&root, &fp), id]);
+        if let Ok(tx) = conn.unchecked_transaction() {
+            if let Ok(mut stmt) = tx.prepare("UPDATE images SET dir_rel = ?1 WHERE id = ?2") {
+                for (id, fp) in rows {
+                    let _ = stmt.execute(rusqlite::params![dir_rel_of(&root, &fp), id]);
+                }
             }
+            let _ = tx.commit();
         }
     }
 }

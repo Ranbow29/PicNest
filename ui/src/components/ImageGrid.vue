@@ -79,6 +79,10 @@ onMounted(() => {
 onBeforeUnmount(() => {
   ro?.disconnect()
   viewport.value?.removeEventListener('scroll', onScroll)
+  if (waveTimer) { clearTimeout(waveTimer); waveTimer = null }
+  if (coverDelayTimer) { clearTimeout(coverDelayTimer); coverDelayTimer = null }
+  if (hoverVideoTimer) { clearTimeout(hoverVideoTimer); hoverVideoTimer = 0 }
+  if (rulerRAF) { cancelAnimationFrame(rulerRAF); rulerRAF = 0 }
 })
 
 function onScroll() {
@@ -93,8 +97,54 @@ function onScroll() {
 }
 
 
-/* 图片拖拽 → 丢到侧栏文件夹 = 移动文件 */
+/* 缩略图解码完成后柔和显影：用 data-ok 而非 class，避免 Vue 改 :class（灰度模式）时把标记冲掉 */
+function markImgReady(e) { if (e?.target) e.target.dataset.ok = '1' }
+
+/* 图片拖拽 → 丢到侧栏文件夹 = 移动文件；拖拽排序期间滚轮可上下滚动预览页 */
+let lastNativeDragWheelAt = 0
+let dragScrollTarget = null
+let dragScrollRAF = 0
+function stopDragScroll() {
+  if (dragScrollRAF) { cancelAnimationFrame(dragScrollRAF); dragScrollRAF = 0 }
+  dragScrollTarget = null
+}
+function scrollDuringDrag(dy) {
+  const vp = viewport.value
+  if (!vp || !dragging.value || !dy) return
+  const maxScroll = Math.max(0, vp.scrollHeight - vp.clientHeight)
+  if (maxScroll <= 0) return
+  const base = dragScrollTarget === null ? vp.scrollTop : dragScrollTarget
+  dragScrollTarget = Math.min(maxScroll, Math.max(0, base + dy))
+  if (dragScrollRAF) return
+  const step = () => {
+    dragScrollRAF = 0
+    const v = viewport.value
+    if (!v || !dragging.value || dragScrollTarget === null) { dragScrollTarget = null; return }
+    const diff = dragScrollTarget - v.scrollTop
+    if (Math.abs(diff) <= 1.2) {
+      v.scrollTop = dragScrollTarget
+      dragScrollTarget = null
+    } else {
+      v.scrollTop += diff * 0.42
+      dragScrollRAF = requestAnimationFrame(step)
+    }
+    scrollTop.value = v.scrollTop
+    if (reorderPointer && canvasEl.value && lib.canReorder()) {
+      const rect = canvasEl.value.getBoundingClientRect()
+      updateReorderAt(reorderPointer.x - rect.left, reorderPointer.y - rect.top)
+    }
+  }
+  dragScrollRAF = requestAnimationFrame(step)
+}
 function onViewportWheel(e) {
+  if (dragging.value && !e.ctrlKey) {
+    // 兜底：若 WebView2 直接派发了 DOM wheel 且近期未收到 Rust 钩子事件，则直接驱动拖拽滚屏
+    if (Date.now() - lastNativeDragWheelAt > 80 && e.deltaY) {
+      e.preventDefault()
+      scrollDuringDrag(e.deltaY)
+    }
+    return
+  }
   if (!e.ctrlKey) return // 普通滚动交给原生
   e.preventDefault()
   const k = e.deltaY < 0 ? 1.08 : 1 / 1.08
@@ -136,6 +186,7 @@ function onCellDragStart(e, img) {
 }
 
 /* ---------- 排列方式（Eagle 式）：名称/添加/修改/大小/尺寸/评分/随机 ---------- */
+const zhCollator = new Intl.Collator('zh', { numeric: true })
 const sortedImages = computed(() => {
   if (lib.pendingSlow) return [] // 超过 200ms 才清空旧图（快切换时保留旧图无缝替换）
   const arr = [...lib.filteredImages]
@@ -156,7 +207,7 @@ const sortedImages = computed(() => {
       default: return null
     }
   }
-  if (mode === 'name') arr.sort((a, b) => asc * String(a.file_name).localeCompare(String(b.file_name), 'zh', { numeric: true }))
+  if (mode === 'name') arr.sort((a, b) => asc * zhCollator.compare(String(a.file_name), String(b.file_name)))
   else arr.sort((a, b) => asc * ((key(a) || 0) - (key(b) || 0)))
   return arr
 })
@@ -448,8 +499,35 @@ const visible = computed(() => {
 
 /* ---------- ZCode 式概览滑尺（正文右缘、详情左侧）：canvas dash + 视口高亮 + 点击/拖拽跳转 ---------- */
 const RULER_W = 26
+const RULER_SLOTS = 48
 const rulerEl = ref(null)
 let rulerRAF = 0
+let rulerAccent = '#b4884b'
+
+function refreshRulerAccent() {
+  try {
+    rulerAccent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#b4884b'
+  } catch {
+    rulerAccent = '#b4884b'
+  }
+}
+
+/* 48 槽密度统计预计算：仅在 items 或 totalH 变更时重算一次，滚动每帧绘制降为 O(48) */
+const rulerSlots = computed(() => {
+  const it = items.value
+  const total = totalH.value || 1
+  const sum = new Array(RULER_SLOTS).fill(0)
+  const cnt = new Array(RULER_SLOTS).fill(0)
+  if (!it.length) return { hasItems: false, cnt, avg: sum, maxAvg: 1 }
+  for (const im of it) {
+    const s = Math.max(0, Math.min(RULER_SLOTS - 1, Math.floor((im.y / total) * RULER_SLOTS)))
+    sum[s] += im.w || 120
+    cnt[s]++
+  }
+  const avg = sum.map((v, i) => (cnt[i] ? v / cnt[i] : 0))
+  const maxAvg = Math.max(...avg) || 1
+  return { hasItems: true, cnt, avg, maxAvg }
+})
 
 function drawRuler() {
   const cv = rulerEl.value
@@ -465,31 +543,20 @@ function drawRuler() {
   const ctx = cv.getContext('2d')
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
   ctx.clearRect(0, 0, w, h)
-  const it = items.value
-  if (!it.length) return
-  const css = getComputedStyle(document.documentElement)
-  const accent = css.getPropertyValue('--accent').trim() || '#b4884b'
+  const { hasItems, cnt, avg, maxAvg } = rulerSlots.value
+  if (!hasItems) return
+  const accent = rulerAccent
 
   /* ZCode 波浪式：轨道切 48 槽，槽 dash 宽度 = 该段图片平均宽度的轮廓；
      视口所在槽为金色指示 dash，邻近槽以 cos² 衰减抬升（波随滚动行进） */
-  const SLOTS = 48
   const padTop = 66, padBottom = 14
   const trackH = Math.max(40, h - padTop - padBottom)
   const total = totalH.value || 1
-  const slotH = trackH / SLOTS
-  const sum = new Array(SLOTS).fill(0)
-  const cnt = new Array(SLOTS).fill(0)
-  for (const im of it) {
-    const s = Math.max(0, Math.min(SLOTS - 1, Math.floor((im.y / total) * SLOTS)))
-    sum[s] += im.w || 120
-    cnt[s]++
-  }
-  const avg = sum.map((v, i) => (cnt[i] ? v / cnt[i] : 0))
-  const maxAvg = Math.max(...avg) || 1
+  const slotH = trackH / RULER_SLOTS
 
-  const viewSlotF = ((scrollTop.value + viewH.value / 2) / total) * SLOTS
+  const viewSlotF = ((scrollTop.value + viewH.value / 2) / total) * RULER_SLOTS
   ctx.lineCap = 'round'
-  for (let i = 0; i < SLOTS; i++) {
+  for (let i = 0; i < RULER_SLOTS; i++) {
     if (!cnt[i]) continue
     const dist = Math.abs(i - viewSlotF)
     const wave = Math.max(0, 1 - dist / 4.2)
@@ -515,9 +582,9 @@ function queueRuler() {
   if (rulerRAF) return
   rulerRAF = requestAnimationFrame(() => { rulerRAF = 0; drawRuler() })
 }
-watch([scrollTop, totalH, viewH, viewW, () => items.value.length], queueRuler)
-watch(themeResolved, queueRuler) // 换主题：滑尺按新 accent 重绘
-onMounted(queueRuler)
+watch([scrollTop, totalH, viewH, viewW, rulerSlots], queueRuler)
+watch(themeResolved, () => { refreshRulerAccent(); queueRuler() }) // 换主题：滑尺按新 accent 重绘
+onMounted(() => { refreshRulerAccent(); queueRuler() })
 
 /* 滑尺交互：按下/拖拽 → 按比例跳转（即时，ZCode 同款） */
 let dragRuler = false
@@ -641,8 +708,6 @@ function requestDisplayThumbs(vis) {
     }
   })()
 }
-watch(() => visible.value.map((i) => `${i.file_path}:${i.thumbnail_path || ''}:${i.modify_time || 0}`).join('|'),
-  () => requestDisplayThumbs(visible.value))
 watch(visible, (vis) => {
   requestDisplayThumbs(vis)
   const now = Date.now()
@@ -661,13 +726,13 @@ watch(visible, (vis) => {
     const results = list.flatMap((r) => r?.results || [])
     for (const r of results) {
       if (r?.thumbnail_path) {
-        const img = lib.images.find((i) => i.file_path === r.file_path)
+        const img = lib.imageMap.get(r.file_path)
         if (img) {
           img.thumbnail_path = r.thumbnail_path
           if (r.width && (!img.width || !img.height)) { img.width = r.width; img.height = r.height }
         }
       } else if (r?.file_path && isTextPath(r.file_path)) {
-        const img = lib.images.find((i) => i.file_path === r.file_path)
+        const img = lib.imageMap.get(r.file_path)
         if (img) img.thumbnail_path = 'SKIP' // 文本缩略图失败：停止重试，格子里显示文档占位
       }
       inFlight.delete(r?.file_path)
@@ -686,23 +751,28 @@ function onCellImgError(cell, ev) {
      被中止的上一次请求也会吐 error，不区分就会把刚拿到的 1024 误删、退回原图。 */
   const attempted = ev?.target?.getAttribute?.('src')
   if (attempted && cell.src && attempted !== cell.src) return
-  // 1024 显示图自己坏了：从可用表里拿掉，别让它在降级后又被选回来（否则会反复重试）
-  if (cell.srcKind === 'display') {
-    /* 这里的 error 大多数不是真的坏图：切源那一瞬旧请求被中止、或滚动出屏被取消，
-       都会吐一个 error。所以不直接拉黑，而是拿同一张图重新载一次——真坏才拉黑。 */
-    const url = fileUrl(displaySrc[p] || '')
-    if (url) {
-      const im = new Image()
-      im.onload = () => {
-        lib.layoutTick++ // 图片其实没问题：让格子重算一次就能回到 1024
-      }
-      im.onerror = () => {
-        displayBroken.add(p)
-        lib.layoutTick++
-      }
-      im.src = url + `?rechk=${Date.now()}`
+  /* 先不降级：拿当前 src 重新载一次。加载成功 = 刚才是被中止的假失败（滚动/换源都会），
+     保持原图不动；只有真坏才走降级。这一步是为了消除“滚轮后频闪”——
+     以前一报错就降到原图/另一个档，源变一次画面就闪一次。 */
+  const cur = cell.src
+  if (cur) {
+    const im = new Image()
+    im.onload = () => {
+      lib.layoutTick++ // 图其实没问题：让格子重新算一次就好
     }
+    im.onerror = () => {
+      if (cell.srcKind === 'display') displayBroken.add(p)
+      degradeCell(cell)
+      lib.layoutTick++
+    }
+    im.src = cur + (cur.includes('?') ? '&' : '?') + 'rechk=' + Date.now()
+    return
   }
+  degradeCell(cell)
+}
+/* 确认某张图真的坏了，才按 1024 → 400 → 原图 → 占位 逐级降级 */
+function degradeCell(cell) {
+  const p = cell.file_path
   const hasThumb = !!(cell.thumbnail_path && cell.thumbnail_path !== 'SKIP')
   const cur = imgFix[p] || { n: 0 }
   if (cell.srcKind === 'display' || cell.srcKind === 'original') {
@@ -818,6 +888,7 @@ const canvasEl = ref(null)
 const marquee = ref(null) // { x, y, w, h }
 let mq = null // { startX, startY, clientX, clientY, x0, y0, x1, y1, moved, add, base }
 let mqRAF = 0
+let mqMoveRAF = 0
 let mqSuppressClickUntil = 0
 
 function mqUpdate() {
@@ -880,11 +951,17 @@ function onMarqueeMove(e) {
   }
   mq.clientX = e.clientX
   mq.clientY = e.clientY
-  mqUpdate()
+  if (!mqMoveRAF) {
+    mqMoveRAF = requestAnimationFrame(() => {
+      mqMoveRAF = 0
+      if (mq?.moved) mqUpdate()
+    })
+  }
   if (!mqRAF) mqRAF = requestAnimationFrame(mqTick)
 }
 function onMarqueeUp() {
   window.removeEventListener('pointermove', onMarqueeMove)
+  if (mqMoveRAF) { cancelAnimationFrame(mqMoveRAF); mqMoveRAF = 0 }
   if (mqRAF) cancelAnimationFrame(mqRAF)
   mqRAF = 0
   if (mq?.moved) mqSuppressClickUntil = Date.now() + 320 // 拖拽后的 click 不再当“点空白”
@@ -1008,6 +1085,7 @@ async function onCanvasDrop(e) {
   e.preventDefault()
   e.stopPropagation()
   /* 松手前把最后一帧的插入位置补算出来，避免 rAF 还没跑就 drop 导致插到旧位置 */
+  stopDragScroll()
   flushReorder(e.clientX, e.clientY)
   const ctx = reorderCtx
   const paths = internalImages(e)
@@ -1063,6 +1141,7 @@ async function onSubDrop(e, f) {
   }
 }
 function clearDragUi() {
+  stopDragScroll()
   if (reorderRAF) { cancelAnimationFrame(reorderRAF); reorderRAF = 0 }
   reorderPointer = null
   setReorderLine(null)
@@ -1095,8 +1174,21 @@ function onCellTiltLeave(e) {
   el.style.removeProperty('--rx')
   el.style.removeProperty('--ry')
 }
-onMounted(() => window.addEventListener('dragend', clearDragUi))
-onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
+let unlistenDragWheel = null
+onMounted(() => {
+  window.addEventListener('dragend', clearDragUi)
+  unlistenDragWheel = api.onDragWheel((delta) => {
+    if (!dragging.value) return
+    lastNativeDragWheelAt = Date.now()
+    // Windows 标准滚轮一格为 ±120（向上为正，向下为负），换算为向下正像素偏移
+    scrollDuringDrag((-delta / 120) * 160)
+  })
+})
+onBeforeUnmount(() => {
+  stopDragScroll()
+  window.removeEventListener('dragend', clearDragUi)
+  if (unlistenDragWheel) { unlistenDragWheel(); unlistenDragWheel = null }
+})
 </script>
 
 <template>
@@ -1136,7 +1228,7 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
               @contextmenu.prevent="lib.openDirMenu($event, { rel: f.rel, node: f })"
             >
               <div class="sf-cover">
-                <img v-if="covers[f.rel]" :src="covers[f.rel]" :class="{ gray: lib.grayscaleMode }" draggable="false" loading="lazy" decoding="async" @error="dropCover(f.rel)" />
+                <img v-if="covers[f.rel]" :src="covers[f.rel]" :class="{ gray: lib.grayscaleMode }" draggable="false" loading="lazy" decoding="async" @load="markImgReady" @error="dropCover(f.rel)" />
                 <FolderIcon v-else :color="lib.dirMemory[f.rel]?.color || ''" :size="30" />
               </div>
               <div class="sf-name" :title="lib.dispName(f.name) + ' · 双击进入'">{{ lib.dispName(f.name) }}</div>
@@ -1216,7 +1308,7 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
             loop
             playsinline
           />
-          <img v-else-if="img.src" :key="img.src" :src="img.src" loading="lazy" decoding="async" draggable="false" @error="onCellImgError(img, $event)" />
+          <img v-else-if="img.src" :src="img.src" loading="lazy" decoding="async" draggable="false" @load="markImgReady" @error="onCellImgError(img, $event)" />
           <video
             v-else-if="img.isVideo"
             class="cell-video-poster"
@@ -1236,9 +1328,19 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
         </div>
       </div>
     </div>
-    <div v-if="lib.pendingSlow" class="state overlay-state">载入中…</div>
-    <div v-else-if="!lib.images.length && !(lib.view === 'trash' && trashFolders.length)" class="state overlay-state">
-      {{ lib.view === 'trash' ? '回收站是空的' : (subfolders.length ? '此文件夹暂无直属图片' : '此文件夹暂无图片') }}
+    <div v-if="lib.pendingSlow" class="state overlay-state loading-state">
+      <span class="ld-dots"><i /><i /><i /></span>
+      <span class="ld-text">载入中</span>
+    </div>
+    <div v-else-if="!lib.images.length && !(lib.view === 'trash' && trashFolders.length)" class="state overlay-state empty-state">
+      <svg class="es-mark" viewBox="0 0 64 64" aria-hidden="true">
+        <rect x="10" y="16" width="34" height="40" rx="5" />
+        <rect x="20" y="8" width="34" height="40" rx="5" />
+        <path d="M26 38l7-8 6 6 4-4 7 8" />
+        <circle cx="31" cy="20" r="2.6" />
+      </svg>
+      <div class="es-title">{{ lib.view === 'trash' ? '回收站是空的' : (subfolders.length ? '此文件夹暂无直属图片' : '此文件夹暂无图片') }}</div>
+      <div class="es-hint">{{ lib.view === 'trash' ? '删除的图片会先在这里停留，随时可以还原' : '把图片或网页图片拖进窗口，就能收进这里' }}</div>
     </div>
   </div>
 </template>
@@ -1264,14 +1366,18 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
 .grid-viewport::-webkit-scrollbar { width: 0; height: 0; }
 .grid-viewport::-webkit-scrollbar-thumb { background: transparent; }
 .canvas { position: relative; width: 100%; margin-right: 26px; user-select: none; } /* 右缘让位概览滑尺（详情在其右侧） */
-.cell { position: absolute; top: 0; left: 0; cursor: default; will-change: transform; perspective: 820px; }
+.cell { position: absolute; top: 0; left: 0; cursor: default; }
+.cell:hover { will-change: transform; }
+.canvas.tilt-on .cell { perspective: 820px; }
 .thumb {
   position: relative; width: 100%; height: 100%;
   border-radius: 12px; overflow: hidden;
   background: var(--bg-2); border: 1px solid var(--border);
   box-shadow: var(--shadow-tile);
-  transform-style: preserve-3d;
   transition: box-shadow 0.24s ease, border-color 0.18s, transform 0.22s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+.canvas.tilt-on .thumb {
+  transform-style: preserve-3d;
 }
 /* 浮岛 3D 柔光掠影：随鼠标位置扫过卡片表面 */
 .thumb::before {
@@ -1326,6 +1432,15 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06) inset;
 }
 .thumb img { width: 100%; height: 100%; object-fit: cover; }
+/* 显影：解码完成前透明（露出 --bg-2 底色当占位），完成后 260ms 淡入 + 极轻微收拢 */
+.thumb img, .sf-cover img {
+  opacity: 0; transform: scale(1.018);
+  transition: opacity 0.26s ease-out, transform 0.42s cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+.thumb img[data-ok], .sf-cover img[data-ok] { opacity: 1; transform: none; }
+@media (prefers-reduced-motion: reduce) {
+  .thumb img, .sf-cover img { transition: none; transform: none; }
+}
 .thumb.gray img, .sf-cover img.gray { filter: grayscale(1); }
 .format-badge {
   position: absolute;
@@ -1475,6 +1590,31 @@ onBeforeUnmount(() => window.removeEventListener('dragend', clearDragUi))
 
 .state { padding: 40px; text-align: center; color: var(--text-2); font-size: 13px; }
 .overlay-state { position: absolute; inset: 60px 0 auto 0; }
+
+/* 空状态：沿用页头的编辑排版气质（衬线标题 + 细线条插画 + 一句轻提示） */
+.empty-state {
+  inset: 22vh 0 auto 0;
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+  animation: es-in 0.6s cubic-bezier(0.18, 0.72, 0.18, 1) both;
+}
+.es-mark {
+  width: 64px; height: 64px; margin-bottom: 6px;
+  fill: none; stroke: var(--accent); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round;
+  opacity: 0.75;
+}
+.es-mark rect:first-child { stroke: var(--text-2); opacity: 0.45; }
+.es-mark circle { fill: var(--accent); stroke: none; }
+.es-title { font-family: var(--font-serif); font-size: 18px; font-weight: 700; letter-spacing: 2px; color: var(--text); }
+.es-hint { font-size: 12px; letter-spacing: 0.6px; color: var(--text-2); }
+@keyframes es-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+/* 载入中：三点呼吸（仅载入期间存在，不常驻耗电） */
+.loading-state { display: flex; align-items: center; justify-content: center; gap: 10px; letter-spacing: 2px; }
+.ld-dots { display: inline-flex; gap: 5px; }
+.ld-dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); animation: ld-breathe 1.1s ease-in-out infinite; }
+.ld-dots i:nth-child(2) { animation-delay: 0.15s; }
+.ld-dots i:nth-child(3) { animation-delay: 0.3s; }
+@keyframes ld-breathe { 0%, 100% { opacity: 0.25; transform: scale(0.8); } 50% { opacity: 1; transform: none; } }
 
 /* 编辑排印头块 */
 .page-head { position: absolute; top: 0; left: 4px; right: 4px; padding: 56px 10px 0; }

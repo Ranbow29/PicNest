@@ -211,7 +211,7 @@ if (typeof window !== 'undefined' && isTauri()) {
     picnestCropAs: (filePath, opts) => tauriInvoke('crop_image_as', { filePath, opts }),
     copyFilesToClipboard: (paths) => tauriInvoke('copy_files_to_clipboard', { paths: paths || [] }),
     picnestCopyImages: (paths, targetDir) => tauriInvoke('copy_images', { paths: paths || [], targetDir }),
-    picnestImagesReorder: (folderId, dirRel, orderedPaths) => tauriInvoke('images_reorder', { folderId, dirRel, orderedPaths }),
+    picnestImagesReorder: (folderId, dirRel, orderedPaths) => tauriInvoke('images_reorder', { folderId, dirRel: dirRel ?? '', orderedPaths }),
     picnestPsdPreview: (filePath) => tauriInvoke('psd_preview', { filePath }),
     picnestViewPreview: (filePath) => tauriInvoke('view_preview', { filePath }),
     fillImageDims: (paths) => tauriInvoke('fill_image_dims', { paths }),
@@ -258,13 +258,26 @@ if (typeof window !== 'undefined' && isTauri()) {
       }).catch(() => {})
       return () => { cancelled = true; if (unlisten) unlisten() }
     },
+    onPicnestDragWheel: (cb) => {
+      if (typeof cb !== 'function') return () => {}
+      let unlisten = null
+      let cancelled = false
+      tauriListen('picnest-drag-wheel', (ev) => {
+        const delta = ev?.payload?.delta
+        if (typeof delta === 'number' && delta !== 0) cb(delta)
+      }).then((fn) => {
+        if (cancelled) fn()
+        else unlisten = fn
+      }).catch(() => {})
+      return () => { cancelled = true; if (unlisten) unlisten() }
+    },
     windowIsAlwaysOnTop: async () => !!(await safeInvoke('window_is_always_on_top')),
     picnestCollectGetToken: async () => await safeInvoke('collect_get_token'),
     picnestCollectResetToken: async () => await safeInvoke('collect_reset_token'),
     picnestCollectSetRoot: async (rootId) => await safeInvoke('collect_set_root', { rootId }),
     openWithDefault: async (p) => await safeInvoke('open_external', { url: p }),
     getFilePath: (f) => (typeof f?.path === 'string' && f.path ? f.path : null),
-    picnestAppVersion: async () => '1.0.0',
+    picnestAppVersion: async () => '1.0.1',
   }, {
     get(target, prop) {
       if (prop in target) return target[prop]
@@ -382,7 +395,7 @@ const invoke = async (name, ...args) => {
       case 'picnestTextThumbnails':
         return await tauriInvoke('generate_text_thumbnails', { paths: args[0] || [] })
       case 'picnestImagesReorder':
-        return await tauriInvoke('images_reorder', { folderId: args[0], dirRel: args[1], orderedPaths: args[2] })
+        return await tauriInvoke('images_reorder', { folderId: args[0], dirRel: args[1] ?? '', orderedPaths: args[2] })
       case 'picnestPsdPreview':
         return await tauriInvoke('psd_preview', { filePath: args[0] })
       case 'picnestViewPreview':
@@ -507,7 +520,7 @@ export const api = {
   syncFolderSnapshot: (path) => invoke('syncFolderSnapshot', path),
   syncDirSnapshot: (folderId, dirPath) => p().syncDirSnapshot?.(folderId, dirPath),
   startWatcher: (path) => invoke('startWatcher', path),
-  generateThumbnailsBatch: (paths) => thumbGate(() => p().generateThumbnailsBatch?.(paths)),
+  generateThumbnailsBatch: (paths) => p().generateThumbnailsBatch?.(paths),
   /* 1024 高清显示图（第二档）：网格大格子用，避免为了清晰去解码原图。
      不过 thumbGate：那是给 400 缩略图排队用的，共用一个门会让 1024 等缩略图批量跑完，
      等到超时就把结果丢掉。后端内部本来就限 2 线程，不需要再加门。 */
@@ -531,6 +544,9 @@ export const api = {
   // 导航取数走本地 HTTP：实测切目录瞬间 Tauri IPC 会被宿主侧阻塞（后端 12ms、往返 0.9–1.9s），
   // 而同一时刻 HTTP 通道 4–47ms。IPC 继续负责写操作与事件。
   imagesByDir: async (folderId, dirRel, offset, limit, sortMode = 'id', sortAsc, recursive, signal) => {
+    if (isTauri() && !_apiPort && !_mediaPort) {
+      await portsReady
+    }
     const port = _apiPort || _mediaPort
     if (isTauri() && port) {
       try {
@@ -580,6 +596,7 @@ export const api = {
   exportDir: (dirPath, stripPrefix) => invoke('picnestExportDir', dirPath, !!stripPrefix),
   dragBegin: (paths) => invoke('picnestDragBegin', paths),
   dragEnd: () => invoke('picnestDragEnd'),
+  onDragWheel: (cb) => p().onPicnestDragWheel?.(cb) || (() => {}),
   stageDropBegin: () => isTauri() ? tauriInvoke('stage_drop_begin') : null,
   stageDropMkdir: (batchId, relPath) => isTauri() ? tauriInvoke('stage_drop_mkdir', { batchId, relPath }) : null,
   stageDropChunk: (batchId, relPath, append, b64) => isTauri() ? tauriInvoke('stage_drop_chunk', { batchId, relPath, append, b64 }) : null,

@@ -80,7 +80,11 @@ watch(() => lib.selectedPath, async (p) => {
   meta.value = { annotation: '', url: '' }
   loadedFor.value = p || ''
   if (!p) return
-  try { meta.value = await window.picrand.picnestGetImageMeta(p) } catch { /* 静默 */ }
+  try {
+    const r = await window.picrand?.picnestGetImageMeta?.(p)
+    if (lib.selectedPath !== p) return
+    if (r) meta.value = r
+  } catch { /* 静默 */ }
 }, { immediate: true })
 let saveTimer = null
 function queueSave() {
@@ -110,7 +114,7 @@ function onPreviewError() {
 watch(() => lib.selectedPath, () => { previewFallback.value = false; previewDead.value = false })
 watch(() => lib.selectedPath, async (p) => {
   palette.value = []
-  if (!p) return
+  if (!p) { paletteLoading.value = false; return }
   if (isTextPath(p)) { paletteLoading.value = false; return } // 文本无色板，不白跑 IPC
   const cached = lib.palettes[p]
   if (Array.isArray(cached) && cached.length) {
@@ -122,12 +126,17 @@ watch(() => lib.selectedPath, async (p) => {
   }
   paletteLoading.value = true
   try {
-    const r = await window.picrand.computeColorAnalysis(p)
+    const r = await window.picrand?.computeColorAnalysis?.(p)
+    if (lib.selectedPath !== p) return
     const dom = r?.dominantColors || []
     /* 回写 store：详情现算的色板也要进索引，否则点这里色板做「精确命中保原图」时查不到自己 */
     if (dom.length) lib.palettes[p] = dom.map((c) => ({ r: c.r, g: c.g, b: c.b, percent: c.percent }))
     palette.value = dom.slice(0, 9).map((c) => ({ color: [c.r, c.g, c.b], ratio: c.percent }))
-  } catch { palette.value = [] } finally { paletteLoading.value = false }
+  } catch {
+    if (lib.selectedPath === p) palette.value = []
+  } finally {
+    if (lib.selectedPath === p) paletteLoading.value = false
+  }
 }, { immediate: true })
 
 const sections = ref({ info: true, palette: true, rating: true, tags: true, folder: true, locate: true })
@@ -184,8 +193,7 @@ async function copyFile() {
 
 /* ---------- 多选图片 ---------- */
 const multiImages = computed(() => {
-  const map = new Map(lib.images.map((i) => [i.file_path, i]))
-  return lib.selectedPaths.map((p) => map.get(p)).filter(Boolean)
+  return lib.selectedPaths.map((p) => lib.imageMap.get(p)).filter(Boolean)
 })
 const stackImgs = computed(() => multiImages.value.slice(-4))
 function stackStyle(i) {

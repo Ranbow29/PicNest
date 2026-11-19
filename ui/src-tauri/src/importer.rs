@@ -1,4 +1,4 @@
-﻿use crate::commands::{find_folder_id_for_path, open_read_conn, AppState};
+﻿use crate::commands::{with_read_conn, AppState};
 use crate::scanner::{file_size_and_mtime, is_supported_ext};
 use rusqlite::{params, Connection};
 use serde_json::json;
@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, State};
 
 static STAGE_SEQ: AtomicU64 = AtomicU64::new(1);
@@ -18,7 +18,61 @@ pub(crate) fn is_supported_drop_ext(ext: &str) -> bool {
 
 /// 将已在目标目录磁盘上存在、但数据库未录入（或处于软删回收站）的文件补录/恢复到 images 表。
 /// 返回本次新补录或恢复的条目数量；已在库且处于激活态（deleted_at IS NULL）的文件不计入。
+/// 在循环外预读 `folders` 列表并开启单个事务批量写入，大幅降低大批量导入时的 DB 事务开销。
 pub(crate) fn index_disk_paths(conn: &Connection, paths: &[PathBuf], restore_soft_deleted: bool) -> usize {
+    if paths.is_empty() {
+        return 0;
+    }
+
+    // 预读 folders 列表：(id, raw_root_path, norm_lowercase_root)
+    let folders: Vec<(i64, String, String)> = match conn.prepare("SELECT id, path FROM folders") {
+        Ok(mut stmt) => stmt
+            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
+            .map(|rows| {
+                rows.flatten()
+                    .filter_map(|(id, rp)| {
+                        let norm = rp.replace('/', "\\").trim_end_matches('\\').to_lowercase();
+                        if norm.is_empty() {
+                            None
+                        } else {
+                            Some((id, rp, norm))
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        Err(_) => return 0,
+    };
+    if folders.is_empty() {
+        return 0;
+    }
+
+    let match_folder = |target: &Path| -> Option<(i64, &str)> {
+        let norm = target
+            .to_string_lossy()
+            .replace('/', "\\")
+            .trim_end_matches('\\')
+            .to_lowercase();
+        if norm.is_empty() {
+            return None;
+        }
+        let mut best: Option<(usize, i64, &str)> = None;
+        for (id, raw_root, root_norm) in &folders {
+            let matched = norm == *root_norm
+                || (norm.len() > root_norm.len()
+                    && norm.starts_with(root_norm)
+                    && norm.as_bytes()[root_norm.len()] == b'\\');
+            if matched && best.map(|(len, _, _)| root_norm.len() > len).unwrap_or(true) {
+                best = Some((root_norm.len(), *id, raw_root.as_str()));
+            }
+        }
+        best.map(|(_, id, rp)| (id, rp))
+    };
+
+    let Ok(tx) = conn.unchecked_transaction() else {
+        return 0;
+    };
+
     let mut registered = 0usize;
     for path in paths {
         let Ok(meta) = std::fs::metadata(path) else {
@@ -27,21 +81,14 @@ pub(crate) fn index_disk_paths(conn: &Connection, paths: &[PathBuf], restore_sof
         if !meta.is_file() {
             continue;
         }
-        let Some(folder_id) = find_folder_id_for_path(conn, path) else {
+        let Some((folder_id, root_path)) = match_folder(path) else {
             continue;
         };
         let fp = path.to_string_lossy().to_string();
         let fp_norm = fp.replace('/', "\\");
         let (size, mtime) = file_size_and_mtime(Some(&meta));
-        // dir_rel 与其余 1 万多行同口径（相对库根、小写、正斜杠）。
-        // 漏了就会造成「导入进子文件夹后列表 0 条、徽章却有数」。
-        let dir_rel = conn
-            .query_row("SELECT path FROM folders WHERE id = ?1", [folder_id], |r| {
-                r.get::<_, String>(0)
-            })
-            .map(|root| crate::db::dir_rel_of(&root, &fp_norm))
-            .unwrap_or_default();
-        let existing: Option<(i64, bool)> = conn
+        let dir_rel = crate::db::dir_rel_of(root_path, &fp_norm);
+        let existing: Option<(i64, bool)> = tx
             .query_row(
                 "SELECT id, deleted_at IS NOT NULL FROM images WHERE LOWER(REPLACE(file_path, '/', '\\')) = LOWER(?1) LIMIT 1",
                 [&fp_norm],
@@ -52,7 +99,7 @@ pub(crate) fn index_disk_paths(conn: &Connection, paths: &[PathBuf], restore_sof
             Some((_, false)) => {}
             Some((id, true)) => {
                 if restore_soft_deleted {
-                    if conn
+                    if tx
                         .execute(
                             "UPDATE images SET folder_id = ?1, file_path = ?2, dir_rel = ?3, size = ?4, mtime = ?5, deleted_at = NULL, trash_group = NULL WHERE id = ?6",
                             params![folder_id, fp, dir_rel, size, mtime, id],
@@ -64,7 +111,7 @@ pub(crate) fn index_disk_paths(conn: &Connection, paths: &[PathBuf], restore_sof
                 }
             }
             None => {
-                if conn
+                if tx
                     .execute(
                         "INSERT INTO images (folder_id, file_path, size, mtime, dir_rel)
                          VALUES (?1, ?2, ?3, ?4, ?5)
@@ -79,6 +126,7 @@ pub(crate) fn index_disk_paths(conn: &Connection, paths: &[PathBuf], restore_sof
             }
         }
     }
+    let _ = tx.commit();
     registered
 }
 
@@ -120,37 +168,11 @@ fn safe_rel_join(base: &Path, rel: &str) -> Result<PathBuf, String> {
 }
 
 pub(crate) fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
-    static TABLE: OnceLock<[i8; 256]> = OnceLock::new();
-    let tbl = TABLE.get_or_init(|| {
-        let mut t = [-1i8; 256];
-        for (i, &b) in b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-            .iter()
-            .enumerate()
-        {
-            t[b as usize] = i as i8;
-        }
-        t
-    });
-
-    let mut out = Vec::with_capacity((input.len() * 3) / 4);
-    let mut acc: u32 = 0;
-    let mut bits: u32 = 0;
-    for &b in input.as_bytes() {
-        if b == b'=' || b.is_ascii_whitespace() {
-            continue;
-        }
-        let v = tbl[b as usize];
-        if v < 0 {
-            return Err("无效的 base64 数据".to_string());
-        }
-        acc = (acc << 6) | (v as u32);
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            out.push(((acc >> bits) & 0xFF) as u8);
-        }
-    }
-    Ok(out)
+    use base64::Engine;
+    let cleaned: String = input.chars().filter(|c| !c.is_ascii_whitespace()).collect();
+    base64::engine::general_purpose::STANDARD
+        .decode(cleaned.as_bytes())
+        .map_err(|_| "无效的 base64 数据".to_string())
 }
 
 // RFC 1321 流式 MD5：无外部依赖，大 PSD/MP4 只占 64KB 缓冲
@@ -305,47 +327,60 @@ pub fn stage_drop_mkdir(
 }
 
 #[tauri::command]
-pub fn stage_drop_chunk(
+pub async fn stage_drop_chunk(
     batch_id: String,
     rel_path: String,
     append: bool,
     b64: String,
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
-    use std::io::Write;
-    let clean_id = sanitize_filename(&batch_id, "b");
-    let batch_dir = state.data_dir.join("cache").join("drop_stage").join(clean_id);
-    let target = safe_rel_join(&batch_dir, &rel_path)?;
-    if let Some(parent) = target.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    let bytes = decode_base64(&b64)?;
-    let mut f = std::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .append(append)
-        .truncate(!append)
-        .open(&target)
-        .map_err(|e| e.to_string())?;
-    f.write_all(&bytes).map_err(|e| e.to_string())?;
-    Ok(json!({
-        "ok": true,
-        "path": target.to_string_lossy().to_string(),
-        "written": bytes.len()
-    }))
+    let data_dir = state.data_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        use std::io::Write;
+        let clean_id = sanitize_filename(&batch_id, "b");
+        let batch_dir = data_dir.join("cache").join("drop_stage").join(clean_id);
+        let target = safe_rel_join(&batch_dir, &rel_path)?;
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        let bytes = decode_base64(&b64)?;
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .append(append)
+            .truncate(!append)
+            .open(&target)
+            .map_err(|e| e.to_string())?;
+        f.write_all(&bytes).map_err(|e| e.to_string())?;
+        Ok(json!({
+            "ok": true,
+            "path": target.to_string_lossy().to_string(),
+            "written": bytes.len()
+        }))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-pub fn stage_drop_cleanup(batch_id: String, state: State<'_, AppState>) -> serde_json::Value {
-    let clean_id = sanitize_filename(&batch_id, "");
-    if clean_id.is_empty() {
-        return json!({ "ok": false });
-    }
-    let batch_dir = state.data_dir.join("cache").join("drop_stage").join(clean_id);
-    if batch_dir.exists() {
-        let _ = trash::delete(&batch_dir);
-    }
-    json!({ "ok": true })
+pub async fn stage_drop_cleanup(
+    batch_id: String,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let data_dir = state.data_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let clean_id = sanitize_filename(&batch_id, "");
+        if clean_id.is_empty() {
+            return Ok(json!({ "ok": false }));
+        }
+        let batch_dir = data_dir.join("cache").join("drop_stage").join(clean_id);
+        if batch_dir.exists() {
+            let _ = trash::delete(&batch_dir);
+        }
+        Ok(json!({ "ok": true }))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -357,131 +392,132 @@ pub async fn import_check(
 ) -> Result<serde_json::Value, String> {
     let db_path = state.db_path.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let conn = open_read_conn(&db_path)?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT i.file_path, COALESCE(i.width, 0), COALESCE(i.height, 0), f.path, COALESCE(f.display_name, '')
-                 FROM images i
-                 JOIN folders f ON f.id = i.folder_id
-                 WHERE i.size = ?1 AND i.folder_id = ?2 AND i.deleted_at IS NULL
-                 LIMIT 6",
-            )
-            .map_err(|e| e.to_string())?;
+        with_read_conn(&db_path, |conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT i.file_path, COALESCE(i.width, 0), COALESCE(i.height, 0), f.path, COALESCE(f.display_name, '')
+                     FROM images i
+                     JOIN folders f ON f.id = i.folder_id
+                     WHERE i.size = ?1 AND i.folder_id = ?2 AND i.deleted_at IS NULL
+                     LIMIT 6",
+                )
+                .map_err(|e| e.to_string())?;
 
-        let mut clean = Vec::new();
-        let mut conflicts = Vec::new();
-        let mut dirs = Vec::new();
-        let mut missing = Vec::new();
-        let mut md5_cache = HashMap::new();
+            let mut clean = Vec::new();
+            let mut conflicts = Vec::new();
+            let mut dirs = Vec::new();
+            let mut missing = Vec::new();
+            let mut md5_cache = HashMap::new();
 
-        for raw in paths {
-            let p = Path::new(&raw);
-            if raw.is_empty() || !p.exists() {
-                missing.push(raw);
-                continue;
-            }
-            if p.is_dir() {
-                dirs.push(raw);
-                continue;
-            }
-            let Ok(meta) = std::fs::metadata(p) else {
-                missing.push(raw);
-                continue;
-            };
-            let size = meta.len() as i64;
-            let base = p
-                .file_name()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_else(|| raw.clone());
-
-            // 1. 如果目标目录磁盘上已存在同名文件（且不是自身拖入），直接触发冲突对比弹窗
-            let mut matched_target = None;
-            if let Some(td) = target_dir.as_deref() {
-                let dst_path = Path::new(td).join(&base);
-                let same_low = dst_path.to_string_lossy().to_lowercase();
-                let raw_low = raw.to_lowercase();
-                if same_low != raw_low && dst_path.exists() && dst_path.is_file() {
-                    let (ex_w, ex_h) = image::image_dimensions(&dst_path).unwrap_or((0, 0));
-                    let folder_name = Path::new(td)
-                        .file_name()
-                        .map(|s| s.to_string_lossy().to_string())
-                        .unwrap_or_else(|| "当前文件夹".to_string());
-                    matched_target = Some((dst_path.to_string_lossy().to_string(), ex_w as i64, ex_h as i64, td.to_string(), folder_name));
+            for raw in paths {
+                let p = Path::new(&raw);
+                if raw.is_empty() || !p.exists() {
+                    missing.push(raw);
+                    continue;
                 }
-            }
-
-            let mut matched = matched_target;
-            if matched.is_none() {
-                let cands: Vec<(String, i64, i64, String, String)> = stmt
-                    .query_map(params![size, folder_id], |r| {
-                        Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
-                    })
-                    .map(|rows| rows.flatten().collect())
-                    .unwrap_or_default();
-
-                if !cands.is_empty() {
-                    if let Some(md5_new) = md5_of_file(p, &mut md5_cache) {
-                        for cand in cands {
-                            let cp = Path::new(&cand.0);
-                            if !cp.exists() {
-                                continue;
-                            }
-                            if md5_of_file(cp, &mut md5_cache).as_deref() == Some(&md5_new) {
-                                matched = Some(cand);
-                                break;
-                            }
-                        }
-                    }
+                if p.is_dir() {
+                    dirs.push(raw);
+                    continue;
                 }
-            }
-
-            if let Some((fp, w, h, root_path, disp)) = matched {
-                let name = p
+                let Ok(meta) = std::fs::metadata(p) else {
+                    missing.push(raw);
+                    continue;
+                };
+                let size = meta.len() as i64;
+                let base = p
                     .file_name()
                     .map(|s| s.to_string_lossy().to_string())
                     .unwrap_or_else(|| raw.clone());
-                let existing_name = Path::new(&fp)
-                    .file_name()
-                    .map(|s| s.to_string_lossy().to_string())
-                    .unwrap_or_default();
-                let parent_name = Path::new(&fp)
-                    .parent()
-                    .and_then(|d| d.file_name())
-                    .map(|s| s.to_string_lossy().to_string())
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or_else(|| {
-                        if !disp.trim().is_empty() {
-                            disp
-                        } else {
-                            Path::new(&root_path)
-                                .file_name()
-                                .map(|s| s.to_string_lossy().to_string())
-                                .unwrap_or(root_path)
-                        }
-                    });
-                conflicts.push(json!({
-                    "path": raw,
-                    "name": name,
-                    "size": size,
-                    "existing": {
-                        "file_path": fp,
-                        "file_name": existing_name,
-                        "width": w,
-                        "height": h,
-                        "folderName": parent_name
-                    }
-                }));
-            } else {
-                clean.push(raw);
-            }
-        }
 
-        Ok(json!({
-            "clean": clean,
-            "conflicts": conflicts,
-            "dirs": dirs,
-            "missing": missing
-        }))
+                // 1. 如果目标目录磁盘上已存在同名文件（且不是自身拖入），直接触发冲突对比弹窗
+                let mut matched_target = None;
+                if let Some(td) = target_dir.as_deref() {
+                    let dst_path = Path::new(td).join(&base);
+                    let same_low = dst_path.to_string_lossy().to_lowercase();
+                    let raw_low = raw.to_lowercase();
+                    if same_low != raw_low && dst_path.exists() && dst_path.is_file() {
+                        let (ex_w, ex_h) = image::image_dimensions(&dst_path).unwrap_or((0, 0));
+                        let folder_name = Path::new(td)
+                            .file_name()
+                            .map(|s| s.to_string_lossy().to_string())
+                            .unwrap_or_else(|| "当前文件夹".to_string());
+                        matched_target = Some((dst_path.to_string_lossy().to_string(), ex_w as i64, ex_h as i64, td.to_string(), folder_name));
+                    }
+                }
+
+                let mut matched = matched_target;
+                if matched.is_none() {
+                    let cands: Vec<(String, i64, i64, String, String)> = stmt
+                        .query_map(params![size, folder_id], |r| {
+                            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+                        })
+                        .map(|rows| rows.flatten().collect())
+                        .unwrap_or_default();
+
+                    if !cands.is_empty() {
+                        if let Some(md5_new) = md5_of_file(p, &mut md5_cache) {
+                            for cand in cands {
+                                let cp = Path::new(&cand.0);
+                                if !cp.exists() {
+                                    continue;
+                                }
+                                if md5_of_file(cp, &mut md5_cache).as_deref() == Some(&md5_new) {
+                                    matched = Some(cand);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if let Some((fp, w, h, root_path, disp)) = matched {
+                    let name = p
+                        .file_name()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_else(|| raw.clone());
+                    let existing_name = Path::new(&fp)
+                        .file_name()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    let parent_name = Path::new(&fp)
+                        .parent()
+                        .and_then(|d| d.file_name())
+                        .map(|s| s.to_string_lossy().to_string())
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or_else(|| {
+                            if !disp.trim().is_empty() {
+                                disp
+                            } else {
+                                Path::new(&root_path)
+                                    .file_name()
+                                    .map(|s| s.to_string_lossy().to_string())
+                                    .unwrap_or(root_path)
+                            }
+                        });
+                    conflicts.push(json!({
+                        "path": raw,
+                        "name": name,
+                        "size": size,
+                        "existing": {
+                            "file_path": fp,
+                            "file_name": existing_name,
+                            "width": w,
+                            "height": h,
+                            "folderName": parent_name
+                        }
+                    }));
+                } else {
+                    clean.push(raw);
+                }
+            }
+
+            Ok(json!({
+                "clean": clean,
+                "conflicts": conflicts,
+                "dirs": dirs,
+                "missing": missing
+            }))
+        })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -694,7 +730,7 @@ pub async fn dir_dup_check(
         let total = scanned;
         let _ = app.emit("picnest-dir-dup-progress", json!({ "phase": "hash", "done": 0, "total": total }));
 
-        let Ok(conn) = open_read_conn(&db_path) else {
+        let Ok(conn) = crate::commands::open_read_conn(&db_path) else {
             return json!({ "ok": false, "count": 0, "scanned": scanned, "items": [], "error": "数据库打开失败" });
         };
         let Ok(mut stmt) = conn.prepare(

@@ -143,7 +143,6 @@ pub fn run() {
             collect_get_token,
             collect_reset_token,
             collect_set_root,
-            window_is_always_on_top,
             drag::drag_begin,
             drag::drag_end,
             drag::copy_files_to_clipboard,

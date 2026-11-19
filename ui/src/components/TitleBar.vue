@@ -275,6 +275,11 @@ function onKey(e) {
               <span>{{ m.label }}</span><i v-if="theme.mode.value === m.key">✓</i>
             </button>
           </template>
+          <div class="theme-sep" />
+          <button class="theme-opt theme-toggle" :class="{ on: theme.paperGrain.value }" @click="theme.togglePaperGrain()">
+            <span>纸质肌理</span>
+            <span class="t-pill" :class="{ on: theme.paperGrain.value }"><i /></span>
+          </button>
           <div class="theme-hint">跟随系统随 Windows 明暗切换；黑白主题只改界面，不改变图片</div>
         </div>
       </div>
@@ -465,6 +470,19 @@ function onKey(e) {
 .theme-opt:hover { background: var(--accent-weak); }
 .theme-opt.on { color: var(--accent); font-weight: 600; }
 .theme-sep { height: 1px; margin: 5px 8px; background: var(--border); }
+.theme-toggle { font-weight: 500; }
+.t-pill {
+  width: 28px; height: 16px; border-radius: 99px; padding: 2px;
+  background: var(--border); display: inline-flex; align-items: center;
+  transition: background 0.2s ease; flex-shrink: 0;
+}
+.t-pill i {
+  width: 12px; height: 12px; border-radius: 50%; background: var(--panel-strong);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  transition: transform 0.22s var(--ease-overshoot);
+}
+.t-pill.on { background: var(--accent); }
+.t-pill.on i { transform: translateX(12px); background: #fff; }
 .theme-hint { padding: 6px 10px 2px; font-size: 10.5px; line-height: 1.5; color: var(--text-2); opacity: 0.8; }
 button.tool.funnel { position: relative; }
 button.tool.funnel .badge {

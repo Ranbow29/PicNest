@@ -93,12 +93,77 @@ pub fn drag_end() -> serde_json::Value {
 mod win32_drag {
     use super::*;
     use std::ffi::c_void;
-    use std::sync::atomic::{AtomicU32, Ordering as AtomOrd};
+    use std::sync::atomic::{AtomicI32, AtomicU32, Ordering as AtomOrd};
 
     const VK_LBUTTON: i32 = 0x01;
     const VK_ESCAPE: u16 = 0x1B;
     const INPUT_KEYBOARD: u32 = 1;
     const KEYEVENTF_KEYUP: u32 = 0x0002;
+    const WH_MOUSE_LL: i32 = 14;
+    const WM_MOUSEWHEEL: usize = 0x020A;
+    const PM_REMOVE: u32 = 0x0001;
+    const QS_ALLINPUT: u32 = 0x04FF;
+
+    static DRAG_WHEEL_DELTA: AtomicI32 = AtomicI32::new(0);
+
+    #[repr(C)]
+    struct MsllHookStruct {
+        pt: Point,
+        mouse_data: u32,
+        flags: u32,
+        time: u32,
+        dw_extra_info: usize,
+    }
+
+    #[repr(C)]
+    #[derive(Default)]
+    struct WinMsg {
+        hwnd: usize,
+        message: u32,
+        w_param: usize,
+        l_param: isize,
+        time: u32,
+        pt: Point,
+    }
+
+    unsafe extern "system" fn drag_wheel_hook_proc(
+        n_code: i32,
+        w_param: usize,
+        l_param: isize,
+    ) -> isize {
+        if n_code >= 0 && w_param == WM_MOUSEWHEEL && l_param != 0 {
+            let info = unsafe { &*(l_param as *const MsllHookStruct) };
+            let wheel_delta = ((info.mouse_data >> 16) as u16) as i16;
+            if wheel_delta != 0 {
+                DRAG_WHEEL_DELTA.fetch_add(wheel_delta as i32, AtomOrd::Relaxed);
+            }
+        }
+        unsafe { CallNextHookEx(std::ptr::null_mut(), n_code, w_param, l_param) }
+    }
+
+    struct WheelHookGuard(*mut c_void);
+
+    impl WheelHookGuard {
+        fn install() -> Self {
+            DRAG_WHEEL_DELTA.store(0, AtomOrd::Relaxed);
+            let h = unsafe {
+                SetWindowsHookExW(WH_MOUSE_LL, drag_wheel_hook_proc, std::ptr::null_mut(), 0)
+            };
+            Self(h)
+        }
+    }
+
+    impl Drop for WheelHookGuard {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                unsafe {
+                    UnhookWindowsHookEx(self.0);
+                }
+                self.0 = std::ptr::null_mut();
+            }
+            DRAG_WHEEL_DELTA.store(0, AtomOrd::Relaxed);
+        }
+    }
 
     const S_OK: i32 = 0;
     const S_FALSE: i32 = 1;
@@ -229,6 +294,33 @@ mod win32_drag {
         fn EmptyClipboard() -> i32;
         fn SetClipboardData(u_format: u32, h_mem: *mut c_void) -> *mut c_void;
         fn CloseClipboard() -> i32;
+        fn SetWindowsHookExW(
+            id_hook: i32,
+            lpfn: unsafe extern "system" fn(i32, usize, isize) -> isize,
+            hmod: *mut c_void,
+            dw_thread_id: u32,
+        ) -> *mut c_void;
+        fn UnhookWindowsHookEx(hhk: *mut c_void) -> i32;
+        fn CallNextHookEx(
+            hhk: *mut c_void,
+            n_code: i32,
+            w_param: usize,
+            l_param: isize,
+        ) -> isize;
+        fn PeekMessageW(
+            lp_msg: *mut WinMsg,
+            h_wnd: *mut c_void,
+            w_msg_filter_min: u32,
+            w_msg_filter_max: u32,
+            w_remove_msg: u32,
+        ) -> i32;
+        fn MsgWaitForMultipleObjects(
+            n_count: u32,
+            p_handles: *const *mut c_void,
+            f_wait_all: i32,
+            dw_milliseconds: u32,
+            dw_wake_mask: u32,
+        ) -> u32;
     }
 
     #[link(name = "kernel32")]
@@ -914,9 +1006,16 @@ mod win32_drag {
     ) {
         let mut out_ticks: u32 = 0;
         let mut up_ticks: u32 = 0;
+        // 拖拽期间挂轻量低级鼠标钩子穿透 Windows OLE 模态循环，让滚轮实时滚动预览页；
+        // RAII 守卫保证任何退出/升级路径都立即卸载，绝不残留。
+        let wheel_guard = WheelHookGuard::install();
 
         loop {
-            std::thread::sleep(std::time::Duration::from_millis(25));
+            unsafe {
+                MsgWaitForMultipleObjects(0, std::ptr::null(), 0, 16, QS_ALLINPUT);
+                let mut msg = WinMsg::default();
+                while PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {}
+            }
             if !active.load(Ordering::SeqCst) {
                 break;
             }
@@ -946,6 +1045,10 @@ mod win32_drag {
             let wh = size.height as i32;
 
             let outside = pt.x < wx || pt.x >= wx + ww || pt.y < wy || pt.y >= wy + wh;
+            let wheel_delta = DRAG_WHEEL_DELTA.swap(0, AtomOrd::Relaxed);
+            if wheel_delta != 0 && !outside {
+                let _ = app.emit("picnest-drag-wheel", json!({ "delta": wheel_delta }));
+            }
             if outside {
                 out_ticks += 1;
             } else {
@@ -953,6 +1056,8 @@ mod win32_drag {
             }
 
             if out_ticks >= 2 {
+                // 即将升级为外部原生 OLE 拖拽，立即卸载滚轮钩子不干扰外部窗口
+                drop(wheel_guard);
                 escalated.store(true, Ordering::SeqCst);
                 active.store(false, Ordering::SeqCst);
                 crate::media_server::diag_push(&format!("drag_escalate id={} send VK_ESCAPE", id));

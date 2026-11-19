@@ -31,18 +31,46 @@ function schedule() {
   if (raf) return
   raf = requestAnimationFrame(() => { raf = 0; draw() })
 }
+function clearImg(kind) {
+  const old = imgs[kind]
+  if (old) {
+    old.onload = null
+    old.onerror = null
+    old.src = ''
+  }
+  imgs[kind] = null
+  ready[kind] = false
+}
 function load(kind, src) {
-  if (!src) { ready[kind] = false; return }
+  if (!src) { clearImg(kind); return }
   if (imgs[kind]?.__src === src) return
+  const old = imgs[kind]
+  if (old) {
+    old.onload = null
+    old.onerror = null
+    old.src = ''
+  }
   const im = new Image()
   im.__src = src
   im.decoding = 'async'
   im.onload = () => {
-    const mark = () => { ready[kind] = true; failed[kind] = false; schedule() }
+    if (imgs[kind] !== im) return
+    const mark = () => {
+      if (imgs[kind] !== im) return
+      ready[kind] = true
+      failed[kind] = false
+      schedule()
+    }
     if (im.decode) im.decode().then(mark).catch(mark)
     else mark()
   }
-  im.onerror = () => { ready[kind] = false; failed[kind] = true; schedule(); maybeError() }
+  im.onerror = () => {
+    if (imgs[kind] !== im) return
+    ready[kind] = false
+    failed[kind] = true
+    schedule()
+    maybeError()
+  }
   imgs[kind] = im
   ready[kind] = false
   failed[kind] = false
@@ -130,18 +158,15 @@ function draw() {
 watch(() => [props.previewSrc, props.fallbackSrc], ([p, f], oldVal) => {
   if (oldVal && (oldVal[0] !== p || oldVal[1] !== f)) {
     // 切换图片时主动切断前一张位图引用，避免高分辨率位图在过渡期堆叠驻留
-    imgs.preview = null
-    imgs.fallback = null
-    ready.preview = false
-    ready.fallback = false
+    if (oldVal[0] !== p) clearImg('preview')
+    if (oldVal[1] !== f) clearImg('fallback')
   }
   load('preview', p)
   load('fallback', f)
 }, { immediate: true })
 watch(() => props.fullSrc, (s, oldS) => {
   if (oldS && oldS !== s) {
-    imgs.full = null
-    ready.full = false
+    clearImg('full')
   }
   if (s && props.useFull) load('full', s)
 }, { immediate: true })
@@ -150,8 +175,7 @@ watch(() => props.useFull, (u) => {
     load('full', props.fullSrc)
   } else if (!u && imgs.full) {
     // 缩放回窗口自适应时，主动卸载原始巨幅位图，立即向系统归还几十至数百兆显存/内存
-    imgs.full = null
-    ready.full = false
+    clearImg('full')
     schedule()
   }
 })
@@ -182,9 +206,9 @@ onBeforeUnmount(() => {
     canvasEl.value.width = 0
     canvasEl.value.height = 0
   }
-  imgs.preview = null
-  imgs.full = null
-  imgs.fallback = null
+  clearImg('preview')
+  clearImg('full')
+  clearImg('fallback')
   ctx = null
 })
 defineExpose({ drawAt })

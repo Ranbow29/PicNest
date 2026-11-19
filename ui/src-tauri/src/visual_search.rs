@@ -287,38 +287,6 @@ fn to_originals_url(url: &str) -> String {
     url.to_string()
 }
 
-/// 复用的 HTTP 客户端：每次搜索新建 Client 都要重做一次 TLS 握手（经代理 3–5 秒），
-/// 全局只建一次，后续搜索直接复用连接池与 HTTP/2 会话。
-static VS_CLIENT: std::sync::OnceLock<reqwest::blocking::Client> = std::sync::OnceLock::new();
-
-fn vs_client() -> Result<&'static reqwest::blocking::Client, String> {
-    if let Some(c) = VS_CLIENT.get() {
-        return Ok(c);
-    }
-    let mut builder = reqwest::blocking::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(15))
-        .timeout(std::time::Duration::from_secs(120))
-        .pool_idle_timeout(std::time::Duration::from_secs(180))
-        // HTTP 代理的 CONNECT 隧道下 h2 协商会失败（request or response body error），
-        // 强制 HTTP/1.1 才稳。
-        .http1_only()
-        .user_agent(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        );
-    if let Some(p) = detect_proxy() {
-        if let Ok(pr) = reqwest::Proxy::all(&p) {
-            builder = builder.proxy(pr);
-        }
-    }
-    let client = builder
-        .build()
-        .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
-    let _ = VS_CLIENT.set(client);
-    VS_CLIENT
-        .get()
-        .ok_or_else(|| "创建 HTTP 客户端失败".to_string())
-}
-
 /// 下载远程图片（衍生图搜：Pinterest 结果图是 https://i.pinimg.com/...）。
 /// pinimg 走代理，复用与视觉检索相同的代理探测。
 fn download_remote_image(url: &str) -> Result<Vec<u8>, String> {
@@ -417,13 +385,18 @@ pub fn execute_visual_search(
     let mut api_url = "https://api.pinterest.com/v3/visual_search/extension/image/".to_string();
     if let Some(ref bm) = opts.bookmark {
         if !bm.trim().is_empty() {
-            let enc = bm
-                .chars()
-                .map(|c| match c {
-                    'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => c.to_string(),
-                    _ => format!("%{:02X}", c as u8),
-                })
-                .collect::<String>();
+            let mut enc = String::with_capacity(bm.len() * 2);
+            let mut utf8_buf = [0u8; 4];
+            for c in bm.chars() {
+                match c {
+                    'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => enc.push(c),
+                    _ => {
+                        for &b in c.encode_utf8(&mut utf8_buf).as_bytes() {
+                            enc.push_str(&format!("%{:02X}", b));
+                        }
+                    }
+                }
+            }
             api_url.push_str(&format!("?bookmark={}", enc));
         }
     }
@@ -651,7 +624,7 @@ pub fn execute_visual_search(
         "results": items,
         "bookmark": next_bookmark,
         // 诊断字段（不影响前端使用）
-        "dbgProxy": detect_proxy(),
+        "dbgProxy": proxy,
         "dbgJpegBytes": jpeg_len,
         "dbgRespBytes": resp_bytes.len()
     }))
@@ -662,7 +635,7 @@ pub fn save_visual_search_item(
     db_path: &Path,
     app_handle: Option<&tauri::AppHandle>,
 ) -> Result<serde_json::Value, String> {
-    let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
+    let conn = crate::db::open_conn_with_pragmas(db_path).map_err(|e| e.to_string())?;
     let src = item
         .get("origUrl")
         .and_then(|v| v.as_str())

@@ -17,6 +17,128 @@ static DIAG_TX: OnceLock<std::sync::mpsc::Sender<String>> = OnceLock::new();
 /// 图库取数 HTTP 接口需要的库路径与缩略图目录
 static API_DB_PATH: OnceLock<PathBuf> = OnceLock::new();
 static API_THUMBS_DIR: OnceLock<PathBuf> = OnceLock::new();
+static ALLOWED_ROOTS_CACHE: OnceLock<std::sync::RwLock<(Option<Instant>, Vec<String>)>> = OnceLock::new();
+
+fn norm_path_prefix(p: &str) -> String {
+    let mut s = p.replace('/', "\\").to_lowercase();
+    if let Some(stripped) = s.strip_prefix("\\\\?\\") {
+        s = stripped.to_string();
+    }
+    let trimmed = s.trim_end_matches('\\');
+    if trimmed.is_empty() {
+        String::new()
+    } else {
+        format!("{}\\", trimmed)
+    }
+}
+
+fn prefix_matches(target_norm: &str, root_with_slash: &str) -> bool {
+    if root_with_slash.is_empty() {
+        return false;
+    }
+    let root_no_slash = root_with_slash.trim_end_matches('\\');
+    target_norm == root_no_slash || target_norm.starts_with(root_with_slash)
+}
+
+fn load_folder_roots_from_db() -> Vec<String> {
+    let Some(db_path) = API_DB_PATH.get() else {
+        return Vec::new();
+    };
+    let Ok(conn) = crate::commands::open_read_conn(db_path) else {
+        return Vec::new();
+    };
+    let Ok(mut stmt) = conn.prepare("SELECT path FROM folders") else {
+        return Vec::new();
+    };
+    let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(0)) else {
+        return Vec::new();
+    };
+    rows.flatten()
+        .map(|p| norm_path_prefix(&p))
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+pub(crate) fn is_allowed_media_path(raw_path: &Path) -> bool {
+    let raw_str = raw_path.to_string_lossy();
+    let mut s = raw_str.replace('/', "\\");
+    if let Some(stripped) = s.strip_prefix("\\\\?\\") {
+        s = stripped.to_string();
+    }
+    // 拦截任何包含 `..` 路径段的穿越尝试
+    for seg in s.split('\\') {
+        if seg == ".." {
+            return false;
+        }
+    }
+    let target_norm = s.trim_end_matches('\\').to_lowercase();
+    if target_norm.is_empty() {
+        return false;
+    }
+
+    // (a) data_dir（db_path 的父目录，含 cache、thumbs 等）或 thumbs_dir
+    if let Some(db_p) = API_DB_PATH.get() {
+        if let Some(data_dir) = db_p.parent() {
+            let pfx = norm_path_prefix(&data_dir.to_string_lossy());
+            if prefix_matches(&target_norm, &pfx) {
+                return true;
+            }
+        }
+    }
+    if let Some(th) = API_THUMBS_DIR.get() {
+        let pfx = norm_path_prefix(&th.to_string_lossy());
+        if prefix_matches(&target_norm, &pfx) {
+            return true;
+        }
+    }
+
+    // (b) 系统临时目录 std::env::temp_dir()
+    let tmp_pfx = norm_path_prefix(&std::env::temp_dir().to_string_lossy());
+    if prefix_matches(&target_norm, &tmp_pfx) {
+        return true;
+    }
+
+    // (c) 已注册的 folders 资料库根目录（内存缓存 + 未命中或超期时刷新 DB）
+    let cache = ALLOWED_ROOTS_CACHE.get_or_init(|| std::sync::RwLock::new((None, Vec::new())));
+    if let Ok(guard) = cache.read() {
+        if let Some(ts) = guard.0 {
+            if ts.elapsed().as_secs() < 5 {
+                for r in &guard.1 {
+                    if prefix_matches(&target_norm, r) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    // 缓存未命中或过期：立即查一次 DB 更新缓存，兼容运行时新加资料库
+    let fresh = load_folder_roots_from_db();
+    let matched = fresh.iter().any(|r| prefix_matches(&target_norm, r));
+    if let Ok(mut wguard) = cache.write() {
+        *wguard = (Some(Instant::now()), fresh);
+    }
+    matched
+}
+
+fn is_allowed_origin(origin: &str) -> bool {
+    let o = origin.trim().to_ascii_lowercase();
+    if o.is_empty() || o == "null" || o == "tauri://localhost" {
+        return true;
+    }
+    for pfx in [
+        "http://tauri.localhost",
+        "https://tauri.localhost",
+        "http://localhost",
+        "https://localhost",
+        "http://127.0.0.1",
+        "https://127.0.0.1",
+    ] {
+        if o == pfx || o.starts_with(&format!("{}:", pfx)) || o.starts_with(&format!("{}/", pfx)) {
+            return true;
+        }
+    }
+    false
+}
 
 fn query_param(query: &str, key: &str) -> Option<String> {
     for pair in query.split('&') {
@@ -68,12 +190,12 @@ fn serve_images_api(query: &str) -> Option<String> {
         Ok(list) => {
             let n = list.len();
             let s = serde_json::to_string(&list).ok();
-            diag_push(&format!(
+            diag_log!(
                 "api/images rel={:?} rows={} in {}ms",
                 rel,
                 n,
                 t0.elapsed().as_millis()
-            ));
+            );
             s
         }
         Err(e) => Some(serde_json::json!({ "error": e }).to_string()),
@@ -137,8 +259,22 @@ pub fn diag_init(data_dir: &Path) {
     diag_push("=== PicNest session start ===");
 }
 
+#[inline]
+pub fn is_diag_on() -> bool {
+    DIAG_ON.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+macro_rules! diag_log {
+    ($($arg:tt)*) => {
+        if $crate::media_server::is_diag_on() {
+            $crate::media_server::diag_push(&format!($($arg)*));
+        }
+    };
+}
+pub(crate) use diag_log;
+
 pub fn diag_push(msg: &str) {
-    if !DIAG_ON.load(std::sync::atomic::Ordering::Relaxed) {
+    if !is_diag_on() {
         return;
     }
     let ms = DIAG_START.get().map(|t| t.elapsed().as_millis()).unwrap_or(0);
@@ -279,6 +415,7 @@ fn serve_request(
     request_line: &str,
 ) -> bool {
     let mut range_header: Option<String> = None;
+    let mut origin_header: Option<String> = None;
     let mut keep_alive = true;
     loop {
         let mut line = String::new();
@@ -293,6 +430,8 @@ fn serve_request(
             let key = k.trim();
             if key.eq_ignore_ascii_case("range") {
                 range_header = Some(v.trim().to_string());
+            } else if key.eq_ignore_ascii_case("origin") {
+                origin_header = Some(v.trim().to_string());
             } else if key.eq_ignore_ascii_case("connection")
                 && v.trim().eq_ignore_ascii_case("close")
             {
@@ -306,6 +445,22 @@ fn serve_request(
         "Connection: close\r\n"
     };
 
+    // 收紧 CORS：若浏览器携带非本机/非 Tauri Origin，直接拒绝；仅允许本机/Tauri/无 Origin 的资源加载
+    if let Some(ref orig) = origin_header {
+        if !is_allowed_origin(orig) {
+            let hdr = format!(
+                "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n{}\r\n",
+                conn_hdr
+            );
+            let _ = stream.write_all(hdr.as_bytes());
+            return keep_alive;
+        }
+    }
+    let cors_origin = origin_header
+        .as_deref()
+        .filter(|o| !o.is_empty())
+        .unwrap_or("http://tauri.localhost");
+
     let parts: Vec<&str> = request_line.split_whitespace().collect();
     if parts.len() < 2 {
         let _ = stream.write_all(b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
@@ -316,8 +471,8 @@ fn serve_request(
 
     if method == "OPTIONS" {
         let hdr = format!(
-            "HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, HEAD, OPTIONS\r\nAccess-Control-Allow-Headers: Range\r\n{}\r\n",
-            conn_hdr
+            "HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: {}\r\nVary: Origin\r\nAccess-Control-Allow-Methods: GET, HEAD, OPTIONS\r\nAccess-Control-Allow-Headers: Range\r\n{}\r\n",
+            cors_origin, conn_hdr
         );
         let _ = stream.write_all(hdr.as_bytes());
         return keep_alive;
@@ -327,8 +482,9 @@ fn serve_request(
     if path_part == "/api/images" {
         let body = serve_images_api(query).unwrap_or_else(|| "[]".to_string());
         let hdr = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\nCache-Control: no-store\r\n{}\r\n",
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: {}\r\nVary: Origin\r\nCache-Control: no-store\r\n{}\r\n",
             body.len(),
+            cors_origin,
             conn_hdr
         );
         if stream.write_all(hdr.as_bytes()).is_err() {
@@ -343,8 +499,9 @@ fn serve_request(
         })
         .to_string();
         let hdr = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\n{}\r\n",
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: {}\r\nVary: Origin\r\n{}\r\n",
             body.len(),
+            cors_origin,
             conn_hdr
         );
         if stream.write_all(hdr.as_bytes()).is_err() {
@@ -374,19 +531,29 @@ fn serve_request(
     };
 
     let path = Path::new(&fp);
+    if !is_allowed_media_path(path) {
+        diag_log!("m 403 {}", fp);
+        let hdr = format!(
+            "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nAccess-Control-Allow-Origin: {}\r\nVary: Origin\r\n{}\r\n",
+            cors_origin, conn_hdr
+        );
+        let _ = stream.write_all(hdr.as_bytes());
+        return keep_alive;
+    }
+
     let t_media = std::time::Instant::now();
-    diag_push(&format!(
+    diag_log!(
         "m req {}",
         path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default()
-    ));
+    );
     let Ok(mut file) = File::open(path) else {
-        diag_push(&format!(
+        diag_log!(
             "m 404 {}",
             path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default()
-        ));
+        );
         let hdr = format!(
-            "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n{}\r\n",
-            conn_hdr
+            "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nAccess-Control-Allow-Origin: {}\r\nVary: Origin\r\n{}\r\n",
+            cors_origin, conn_hdr
         );
         let _ = stream.write_all(hdr.as_bytes());
         return keep_alive;
@@ -400,8 +567,8 @@ fn serve_request(
 
     if total_len == 0 {
         let hdr = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: 0\r\nAccept-Ranges: bytes\r\nAccess-Control-Allow-Origin: *\r\n{}\r\n",
-            mime, conn_hdr
+            "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: 0\r\nAccept-Ranges: bytes\r\nAccess-Control-Allow-Origin: {}\r\nVary: Origin\r\n{}\r\n",
+            mime, cors_origin, conn_hdr
         );
         let _ = stream.write_all(hdr.as_bytes());
         return keep_alive;
@@ -440,13 +607,13 @@ fn serve_request(
     let content_len = end - start + 1;
     let hdr = if status == 206 {
         format!(
-            "HTTP/1.1 206 Partial Content\r\nContent-Type: {}\r\nContent-Length: {}\r\nContent-Range: bytes {}-{}/{}\r\nAccept-Ranges: bytes\r\nAccess-Control-Allow-Origin: *\r\n{}\r\n",
-            mime, content_len, start, end, total_len, conn_hdr
+            "HTTP/1.1 206 Partial Content\r\nContent-Type: {}\r\nContent-Length: {}\r\nContent-Range: bytes {}-{}/{}\r\nAccept-Ranges: bytes\r\nAccess-Control-Allow-Origin: {}\r\nVary: Origin\r\n{}\r\n",
+            mime, content_len, start, end, total_len, cors_origin, conn_hdr
         )
     } else {
         format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\nCache-Control: public, max-age=3600\r\nAccess-Control-Allow-Origin: *\r\n{}\r\n",
-            mime, content_len, conn_hdr
+            "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\nCache-Control: public, max-age=3600\r\nAccess-Control-Allow-Origin: {}\r\nVary: Origin\r\n{}\r\n",
+            mime, content_len, cors_origin, conn_hdr
         )
     };
 
@@ -474,12 +641,12 @@ fn serve_request(
             }
         }
     }
-    diag_push(&format!(
+    diag_log!(
         "m done {} bytes={} in {}ms",
         content_len - remaining,
         content_len,
         t_media.elapsed().as_millis()
-    ));
+    );
     keep_alive && remaining == 0
 }
 

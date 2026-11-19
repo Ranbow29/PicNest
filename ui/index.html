@@ -14,6 +14,7 @@
           var t = allowed[m] ? m : (m === 'auto' ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'mono-dark' : 'mono-light') : 'mono-light')
           document.documentElement.dataset.theme = t
           document.documentElement.style.colorScheme = (t === 'light' || t === 'mono-light') ? 'light' : 'dark'
+          document.documentElement.dataset.paper = localStorage.getItem('picnest.paperGrain') === '0' ? 'off' : 'on'
         } catch (e) {}
       })()
     </script>
