@@ -966,13 +966,17 @@ pub fn do_quit_and_install(app: &tauri::AppHandle, zip_path: &str) -> Value {
     );
 
     let mut cmd = Command::new("powershell.exe");
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
     {
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
             const CREATE_NO_WINDOW: u32 = 0x08000000;
-            const DETACHED_PROCESS: u32 = 0x00000008;
-            cmd.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS);
+            const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
+            // 不能与 DETACHED_PROCESS 并用：Win32 CreateProcessW 下两者互斥，会导致 powershell 启动即失败
+            cmd.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
         }
     }
     let spawned = cmd

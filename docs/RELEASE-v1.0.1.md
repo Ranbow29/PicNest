@@ -15,7 +15,8 @@
 - **Rust 二进制体积再降 ~1MB**：生产构建引入 `lto = "thin"`、`codegen-units = 1` 与 `strip = true` 极限优化，单文件可执行程序缩减至 **17.7 MB**，绿色便携包仅 **5.88 MB**！
 - **组件按需懒加载**：剥离冗余依赖，灯箱、画板、查重等重型模态框与子模块实现按需异步分割加载，冷启动更加迅捷。
 
-### 3. 底层稳定性与交互精细打磨
+### 3. 底层稳定性与热更新引擎修复
+- **自更新跳板修复**：移除了 Windows 进程创建中与 `CREATE_NO_WINDOW` 互斥的 `DETACHED_PROCESS` 标志，改用 `CREATE_NEW_PROCESS_GROUP` 并切断标准流继承，彻底解决点击“立即重启并替换新版本”时跳板脚本未能启动的问题。
 - **媒体服务与文件监听优化**：进一步强化了 `media_server.rs` 与 `watcher.rs` 并发读取健壮性。
 - **核心模块持续强化**：同步优化 `importer.rs`、`dup_finder.rs`、`drag.rs`、`CanvasStage.vue` 与多套主题配色细节。
 - **全绿测试保障**：全部 28 项核心 Rust 单元测试 100% 通过。
@@ -24,9 +25,8 @@
 
 ## 📦 下载与校验 (Assets)
 
-| 文件名 | 文件类型 | 文件大小 | SHA-256 校验和 |
+| 文件名 | 说明 | 文件大小 | SHA-256 校验和 |
 | :--- | :--- | :--- | :--- |
-| **`PicNest-v1.0.1-windows-x64-portable.zip`** | 便携分发包（含指南） | **5.88 MB** | `DA54E2AEECB50DB382F7071CCBE3A7C377ED74F10031314ECA904AE6D222664D` |
-| **`PicNest.exe`** | 独立可执行程序 | **17.7 MB** | `6E23C172480B27C9D8AFFD27DEB5DA413951A83848205DF2BD32E7A43A4DE719` |
+| **`PicNest-v1.0.1-windows-x64-portable.zip`** | 绿色便携包（内含 `PicNest.exe` 与画师指南） | **5.88 MB** | `4BC46AE83C534026BF6AE2EEA113E73614FF5B4F4A1511C9DA75F3271D9E1B54B` |
 
 > **使用方法**：解压 `PicNest-v1.0.1-windows-x64-portable.zip` 到任意目录，双击 `PicNest.exe` 即可直接使用，无需任何外部依赖。
