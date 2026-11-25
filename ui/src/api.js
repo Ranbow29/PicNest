@@ -1,10 +1,23 @@
-import { invoke as tauriInvoke, convertFileSrc } from '@tauri-apps/api/core'
+import { invoke as tauriInvoke } from '@tauri-apps/api/core'
 import { listen as tauriListen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import { ref } from 'vue'
 
 const isTauri = () => typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)
-let _mediaPort = 0
+const _mediaPort = ref(0)
+const _mediaNonce = ref('')
 let _apiPort = 0
+const portsReady = typeof window !== 'undefined' && isTauri()
+  ? Promise.all([
+      tauriInvoke('get_media_port').then((access) => {
+        if (access?.port) _mediaPort.value = access.port
+        if (access?.nonce) _mediaNonce.value = access.nonce
+      }).catch(() => {}),
+      tauriInvoke('get_api_port')
+        .then((port) => { if (port) _apiPort = port })
+        .catch(() => {})
+    ])
+  : Promise.resolve()
 /* 图库取数序号：每次 imagesByDir 自增，后端据此放弃已被顶掉的旧请求 */
 let _imgSeq = 0
 const nextImgSeq = () => ++_imgSeq
@@ -34,8 +47,6 @@ if (typeof window !== 'undefined' && isTauri()) {
   const sendDiag = (msg) => { try { tauriInvoke('diag_event', { msg: String(msg) }).catch(() => {}) } catch {} }
   window.addEventListener('error', (ev) => sendDiag(`window.error: ${ev?.message || ev} @ ${ev?.filename || ''}:${ev?.lineno || 0}`))
   window.addEventListener('unhandledrejection', (ev) => sendDiag(`unhandledrejection: ${ev?.reason?.message || ev?.reason || 'unknown'}`))
-  tauriInvoke('get_media_port').then((port) => { if (port) _mediaPort = port }).catch(() => {})
-  tauriInvoke('get_api_port').then((port) => { if (port) _apiPort = port }).catch(() => {})
 
   // Tauri 无边框窗口拖动接管：替代 Electron 的 CSS -webkit-app-region: drag
   window.addEventListener('mousedown', (ev) => {
@@ -292,6 +303,7 @@ const p = () => typeof window !== 'undefined' ? window.picrand || {} : {}
 
 const invoke = async (name, ...args) => {
   if (isTauri()) {
+    await portsReady
     switch (name) {
       case 'getPaths':
         return await tauriInvoke('get_paths')
@@ -544,11 +556,11 @@ export const api = {
   // 导航取数走本地 HTTP：实测切目录瞬间 Tauri IPC 会被宿主侧阻塞（后端 12ms、往返 0.9–1.9s），
   // 而同一时刻 HTTP 通道 4–47ms。IPC 继续负责写操作与事件。
   imagesByDir: async (folderId, dirRel, offset, limit, sortMode = 'id', sortAsc, recursive, signal) => {
-    if (isTauri() && !_apiPort && !_mediaPort) {
+    if (isTauri() && (!_apiPort || !_mediaNonce.value)) {
       await portsReady
     }
-    const port = _apiPort || _mediaPort
-    if (isTauri() && port) {
+    const port = _apiPort || _mediaPort.value
+    if (isTauri() && port && _mediaNonce.value) {
       try {
         const q = new URLSearchParams({
           folder: String(folderId),
@@ -560,6 +572,7 @@ export const api = {
         // 不传时与命令侧 unwrap_or 默认保持一致：asc=false、rec=true
         if (typeof sortAsc === 'boolean') q.set('asc', sortAsc ? '1' : '0')
         if (typeof recursive === 'boolean') q.set('rec', recursive ? '1' : '0')
+        q.set('nonce', _mediaNonce.value)
         const r = await fetch(`http://127.0.0.1:${port}/api/images?${q}`, { cache: 'no-store', signal })
         if (r.ok) {
           const v = await r.json()
@@ -637,11 +650,10 @@ export async function onFsDirChanged(cb) {
 export function fileUrl(winPath) {
   if (!winPath) return ''
   if (isTauri()) {
-    if (_mediaPort) {
-      return `http://127.0.0.1:${_mediaPort}/m/${encodeURIComponent(winPath)}`
+    if (_mediaPort.value && _mediaNonce.value) {
+      return `http://127.0.0.1:${_mediaPort.value}/m/${encodeURIComponent(_mediaNonce.value)}/${encodeURIComponent(winPath)}`
     }
-    const norm = winPath.replace(/\\/g, '/')
-    return convertFileSrc(norm)
+    return ''
   }
   const norm = winPath.replace(/\\/g, '/')
   return 'file:///' + norm.split('/').map(encodeURIComponent).join('/')

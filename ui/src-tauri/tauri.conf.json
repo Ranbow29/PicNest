@@ -24,18 +24,11 @@
       }
     ],
     "security": {
-      "csp": null,
+      "csp": "default-src 'self'; script-src 'self' 'sha256-nt8A98bUw0I+XGDdGT58TO4355ALEgovpLVDgoztvYo=' 'sha256-cAesyYs7zUbyIHDwKg4Qsq2FzjwMRvaCRtARr7nwqs8='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http://127.0.0.1:* https:; media-src 'self' data: blob: http://127.0.0.1:*; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:*; frame-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'none'",
+      "devCsp": "default-src 'self' http://127.0.0.1:5173 ws://127.0.0.1:5173; script-src 'self' 'unsafe-inline' http://127.0.0.1:5173; style-src 'self' 'unsafe-inline' http://127.0.0.1:5173; img-src 'self' data: blob: http://127.0.0.1:* https:; media-src 'self' data: blob: http://127.0.0.1:*; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:* ws://127.0.0.1:5173; frame-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'none'",
       "assetProtocol": {
-        "enable": true,
-        "scope": [
-          "C:/**/*",
-          "D:/**/*",
-          "E:/**/*",
-          "F:/**/*",
-          "$APPDATA/**/*",
-          "$APPLOCALDATA/**/*",
-          "**/*"
-        ]
+        "enable": false,
+        "scope": []
       }
     }
   },

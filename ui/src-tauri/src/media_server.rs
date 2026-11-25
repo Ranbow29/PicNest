@@ -17,30 +17,14 @@ static DIAG_TX: OnceLock<std::sync::mpsc::Sender<String>> = OnceLock::new();
 /// 图库取数 HTTP 接口需要的库路径与缩略图目录
 static API_DB_PATH: OnceLock<PathBuf> = OnceLock::new();
 static API_THUMBS_DIR: OnceLock<PathBuf> = OnceLock::new();
-static ALLOWED_ROOTS_CACHE: OnceLock<std::sync::RwLock<(Option<Instant>, Vec<String>)>> = OnceLock::new();
+static ALLOWED_ROOTS_CACHE: OnceLock<std::sync::RwLock<(Option<Instant>, Vec<PathBuf>)>> = OnceLock::new();
+static MEDIA_NONCE: OnceLock<String> = OnceLock::new();
 
-fn norm_path_prefix(p: &str) -> String {
-    let mut s = p.replace('/', "\\").to_lowercase();
-    if let Some(stripped) = s.strip_prefix("\\\\?\\") {
-        s = stripped.to_string();
-    }
-    let trimmed = s.trim_end_matches('\\');
-    if trimmed.is_empty() {
-        String::new()
-    } else {
-        format!("{}\\", trimmed)
-    }
+fn media_nonce() -> &'static str {
+    MEDIA_NONCE.get().map(String::as_str).unwrap_or("")
 }
 
-fn prefix_matches(target_norm: &str, root_with_slash: &str) -> bool {
-    if root_with_slash.is_empty() {
-        return false;
-    }
-    let root_no_slash = root_with_slash.trim_end_matches('\\');
-    target_norm == root_no_slash || target_norm.starts_with(root_with_slash)
-}
-
-fn load_folder_roots_from_db() -> Vec<String> {
+fn load_folder_roots_from_db() -> Vec<PathBuf> {
     let Some(db_path) = API_DB_PATH.get() else {
         return Vec::new();
     };
@@ -54,90 +38,64 @@ fn load_folder_roots_from_db() -> Vec<String> {
         return Vec::new();
     };
     rows.flatten()
-        .map(|p| norm_path_prefix(&p))
-        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .filter_map(|p| p.canonicalize().ok())
         .collect()
 }
 
-pub(crate) fn is_allowed_media_path(raw_path: &Path) -> bool {
-    let raw_str = raw_path.to_string_lossy();
-    let mut s = raw_str.replace('/', "\\");
-    if let Some(stripped) = s.strip_prefix("\\\\?\\") {
-        s = stripped.to_string();
-    }
-    // 拦截任何包含 `..` 路径段的穿越尝试
-    for seg in s.split('\\') {
-        if seg == ".." {
-            return false;
-        }
-    }
-    let target_norm = s.trim_end_matches('\\').to_lowercase();
-    if target_norm.is_empty() {
-        return false;
-    }
-
-    // (a) data_dir（db_path 的父目录，含 cache、thumbs 等）或 thumbs_dir
-    if let Some(db_p) = API_DB_PATH.get() {
-        if let Some(data_dir) = db_p.parent() {
-            let pfx = norm_path_prefix(&data_dir.to_string_lossy());
-            if prefix_matches(&target_norm, &pfx) {
-                return true;
-            }
-        }
-    }
-    if let Some(th) = API_THUMBS_DIR.get() {
-        let pfx = norm_path_prefix(&th.to_string_lossy());
-        if prefix_matches(&target_norm, &pfx) {
-            return true;
-        }
-    }
-
-    // (b) 系统临时目录 std::env::temp_dir()
-    let tmp_pfx = norm_path_prefix(&std::env::temp_dir().to_string_lossy());
-    if prefix_matches(&target_norm, &tmp_pfx) {
-        return true;
-    }
-
-    // (c) 已注册的 folders 资料库根目录（内存缓存 + 未命中或超期时刷新 DB）
+fn resolve_allowed_media_path(raw_path: &Path) -> Option<PathBuf> {
     let cache = ALLOWED_ROOTS_CACHE.get_or_init(|| std::sync::RwLock::new((None, Vec::new())));
-    if let Ok(guard) = cache.read() {
-        if let Some(ts) = guard.0 {
-            if ts.elapsed().as_secs() < 5 {
-                for r in &guard.1 {
-                    if prefix_matches(&target_norm, r) {
-                        return true;
-                    }
-                }
+    let cached = cache
+        .read()
+        .ok()
+        .and_then(|guard| guard.0.filter(|ts| ts.elapsed().as_secs() < 5).map(|_| guard.1.clone()));
+    let roots = match cached {
+        Some(roots) => roots,
+        None => {
+            let fresh = load_folder_roots_from_db();
+            if let Ok(mut guard) = cache.write() {
+                *guard = (Some(Instant::now()), fresh.clone());
             }
+            fresh
         }
+    };
+    resolve_allowed_media_path_with_roots(raw_path, API_THUMBS_DIR.get().map(PathBuf::as_path), &roots)
+}
+
+fn resolve_allowed_media_path_with_roots(
+    raw_path: &Path,
+    thumbs_dir: Option<&Path>,
+    roots: &[PathBuf],
+) -> Option<PathBuf> {
+    if raw_path.as_os_str().is_empty()
+        || raw_path.components().any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return None;
     }
-    // 缓存未命中或过期：立即查一次 DB 更新缓存，兼容运行时新加资料库
-    let fresh = load_folder_roots_from_db();
-    let matched = fresh.iter().any(|r| prefix_matches(&target_norm, r));
-    if let Ok(mut wguard) = cache.write() {
-        *wguard = (Some(Instant::now()), fresh);
+    let target = raw_path.canonicalize().ok()?;
+    if let Some(thumbs) = thumbs_dir
+        && let Ok(root) = thumbs.canonicalize()
+        && target.starts_with(root)
+    {
+        return Some(target);
     }
-    matched
+    roots.iter().find(|root| target.starts_with(root)).cloned().map(|_| target)
 }
 
 fn is_allowed_origin(origin: &str) -> bool {
-    let o = origin.trim().to_ascii_lowercase();
-    if o.is_empty() || o == "null" || o == "tauri://localhost" {
+    if origin == "tauri://localhost" {
         return true;
     }
-    for pfx in [
-        "http://tauri.localhost",
-        "https://tauri.localhost",
-        "http://localhost",
-        "https://localhost",
-        "http://127.0.0.1",
-        "https://127.0.0.1",
-    ] {
-        if o == pfx || o.starts_with(&format!("{}:", pfx)) || o.starts_with(&format!("{}/", pfx)) {
-            return true;
-        }
+    if crate::security::is_loopback_origin(origin) {
+        return true;
     }
-    false
+    url::Url::parse(origin).is_ok_and(|url| {
+        matches!(url.scheme(), "http" | "https")
+            && url.host_str() == Some("tauri.localhost")
+            && url.path() == "/"
+            && url.query().is_none()
+            && url.fragment().is_none()
+    })
 }
 
 fn query_param(query: &str, key: &str) -> Option<String> {
@@ -172,6 +130,7 @@ fn serve_images_api(query: &str) -> Option<String> {
     let rel = query_param(query, "rel").unwrap_or_default();
     let offset: i64 = query_param(query, "offset").and_then(|v| v.parse().ok()).unwrap_or(0);
     let limit: i64 = query_param(query, "limit").and_then(|v| v.parse().ok()).unwrap_or(100000);
+    let (offset, limit) = crate::commands::normalize_query_window(offset, limit);
     let sort = query_param(query, "sort");
     let asc = query_param(query, "asc").map(|v| v == "1" || v == "true");
     let rec = query_param(query, "rec").map(|v| v == "1" || v == "true");
@@ -364,7 +323,7 @@ fn mime_for_ext(path: &Path) -> &'static str {
 const PARK_CAP: usize = 8;
 static PARKED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
-fn handle_client(mut stream: TcpStream) {
+fn handle_client(mut stream: TcpStream, expected_port: u16) {
     // 写超时：对端不读时不能无限期卡住 worker。
     let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(15)));
     let mut reader = BufReader::new(match stream.try_clone() {
@@ -402,7 +361,7 @@ fn handle_client(mut stream: TcpStream) {
         if request_line.trim().is_empty() {
             continue;
         }
-        if !serve_request(&mut stream, &mut reader, &request_line) {
+        if !serve_request(&mut stream, &mut reader, &request_line, expected_port) {
             return;
         }
     }
@@ -413,9 +372,11 @@ fn serve_request(
     stream: &mut TcpStream,
     reader: &mut BufReader<TcpStream>,
     request_line: &str,
+    expected_port: u16,
 ) -> bool {
     let mut range_header: Option<String> = None;
     let mut origin_header: Option<String> = None;
+    let mut host_header: Option<String> = None;
     let mut keep_alive = true;
     loop {
         let mut line = String::new();
@@ -432,6 +393,8 @@ fn serve_request(
                 range_header = Some(v.trim().to_string());
             } else if key.eq_ignore_ascii_case("origin") {
                 origin_header = Some(v.trim().to_string());
+            } else if key.eq_ignore_ascii_case("host") {
+                host_header = Some(v.trim().to_string());
             } else if key.eq_ignore_ascii_case("connection")
                 && v.trim().eq_ignore_ascii_case("close")
             {
@@ -445,16 +408,24 @@ fn serve_request(
         "Connection: close\r\n"
     };
 
+    if !host_header.as_deref().is_some_and(|host| {
+        crate::security::validate_download_host_header(host, expected_port)
+    }) {
+        let hdr = format!("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n{}\r\n", conn_hdr);
+        let _ = stream.write_all(hdr.as_bytes());
+        return keep_alive;
+    }
+
     // 收紧 CORS：若浏览器携带非本机/非 Tauri Origin，直接拒绝；仅允许本机/Tauri/无 Origin 的资源加载
-    if let Some(ref orig) = origin_header {
-        if !is_allowed_origin(orig) {
-            let hdr = format!(
-                "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n{}\r\n",
-                conn_hdr
-            );
-            let _ = stream.write_all(hdr.as_bytes());
-            return keep_alive;
-        }
+    if let Some(orig) = &origin_header
+        && !is_allowed_origin(orig)
+    {
+        let hdr = format!(
+            "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n{}\r\n",
+            conn_hdr
+        );
+        let _ = stream.write_all(hdr.as_bytes());
+        return keep_alive;
     }
     let cors_origin = origin_header
         .as_deref()
@@ -478,7 +449,20 @@ fn serve_request(
         return keep_alive;
     }
 
+    if method != "GET" && method != "HEAD" {
+        let _ = stream.write_all(b"HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        return false;
+    }
+
     let (path_part, query) = target.split_once('?').unwrap_or((target, ""));
+    let nonce = media_nonce();
+    if path_part == "/api/images" || path_part == "/diag" {
+        let supplied = query_param(query, "nonce").unwrap_or_default();
+        if nonce.is_empty() || !crate::security::constant_time_eq(&supplied, nonce) {
+            let _ = stream.write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            return false;
+        }
+    }
     if path_part == "/api/images" {
         let body = serve_images_api(query).unwrap_or_else(|| "[]".to_string());
         let hdr = format!(
@@ -509,29 +493,22 @@ fn serve_request(
         }
         return stream.write_all(body.as_bytes()).is_ok() && keep_alive;
     }
-    let file_path_str = if let Some(encoded) = path_part.strip_prefix("/m/") {
-        Some(url_decode(encoded))
-    } else {
-        let mut found = None;
-        for pair in query.split('&') {
-            if let Some((k, v)) = pair.split_once('=') {
-                if k == "path" {
-                    let clean_v = v.split('?').next().unwrap_or(v);
-                    found = Some(url_decode(clean_v));
-                    break;
-                }
+    let file_path_str = path_part
+        .strip_prefix("/m/")
+        .and_then(|rest| rest.split_once('/'))
+        .and_then(|(supplied, encoded)| {
+            if !crate::security::constant_time_eq(supplied, nonce) {
+                return None;
             }
-        }
-        found
-    };
+            (!encoded.is_empty()).then(|| url_decode(encoded))
+        });
 
     let Some(fp) = file_path_str else {
-        let _ = stream.write_all(b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
+        let _ = stream.write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
         return false;
     };
 
-    let path = Path::new(&fp);
-    if !is_allowed_media_path(path) {
+    let Some(path) = resolve_allowed_media_path(Path::new(&fp)) else {
         diag_log!("m 403 {}", fp);
         let hdr = format!(
             "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nAccess-Control-Allow-Origin: {}\r\nVary: Origin\r\n{}\r\n",
@@ -539,14 +516,14 @@ fn serve_request(
         );
         let _ = stream.write_all(hdr.as_bytes());
         return keep_alive;
-    }
+    };
 
     let t_media = std::time::Instant::now();
     diag_log!(
         "m req {}",
         path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default()
     );
-    let Ok(mut file) = File::open(path) else {
+    let Ok(mut file) = File::open(&path) else {
         diag_log!(
             "m 404 {}",
             path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default()
@@ -563,7 +540,7 @@ fn serve_request(
         return false;
     };
     let total_len = meta.len();
-    let mime = mime_for_ext(path);
+    let mime = mime_for_ext(&path);
 
     if total_len == 0 {
         let hdr = format!(
@@ -650,14 +627,19 @@ fn serve_request(
     keep_alive && remaining == 0
 }
 
-pub fn start_media_server(db_path: std::path::PathBuf, thumbs_dir: std::path::PathBuf) -> (u16, u16) {
+pub fn start_media_server(
+    db_path: std::path::PathBuf,
+    thumbs_dir: std::path::PathBuf,
+) -> (u16, u16, String) {
     let _ = API_DB_PATH.set(db_path);
     let _ = API_THUMBS_DIR.set(thumbs_dir);
+    let nonce = crate::security::random_hex(24).expect("Failed to generate media nonce");
+    let _ = MEDIA_NONCE.set(nonce.clone());
     // 两条监听：图库取数走独立端口，避开浏览器的同源 6 连限制——
     // 否则切目录时缩略图请求会把连接占满，取数要排队（实测 15 张的目录要 170ms）。
     let media_port = spawn_listener();
     let api_port = spawn_listener();
-    (media_port, api_port)
+    (media_port, api_port, nonce)
 }
 
 fn spawn_listener() -> u16 {
@@ -678,7 +660,7 @@ fn spawn_listener() -> u16 {
                 }
             };
             match stream {
-                Ok(s) => handle_client(s),
+                Ok(s) => handle_client(s, port),
                 Err(_) => break,
             }
         });
@@ -693,4 +675,97 @@ fn spawn_listener() -> u16 {
         }
     });
     port
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::io::{Read, Write};
+
+    fn request(port: u16, target: &str, headers: &[(&str, &str)]) -> (u16, String) {
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        stream.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+        let mut req = format!("GET {} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n", target, port);
+        for (key, value) in headers {
+            req.push_str(&format!("{}: {}\r\n", key, value));
+        }
+        req.push_str("\r\n");
+        stream.write_all(req.as_bytes()).unwrap();
+        let mut response = Vec::new();
+        let _ = stream.read_to_end(&mut response);
+        let response = String::from_utf8_lossy(&response);
+        let status = response.split_whitespace().nth(1).and_then(|v| v.parse().ok()).unwrap_or(0);
+        (status, response.into_owned())
+    }
+
+    #[test]
+    fn containment_uses_canonical_paths_and_only_explicit_roots() {
+        let tmp = crate::testutil::TempDir::new("picnest_media_containment");
+        let root = tmp.join("library");
+        let thumbs = tmp.join("data").join("cache").join("thumbs");
+        let outside = tmp.join("outside");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&thumbs).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        let image = root.join("image.png");
+        let secret = tmp.join("data").join("collect_token.txt");
+        let thumb = thumbs.join("thumb.jpg");
+        let external = outside.join("outside.png");
+        fs::write(&image, b"image").unwrap();
+        fs::write(&secret, b"secret").unwrap();
+        fs::write(&thumb, b"thumb").unwrap();
+        fs::write(&external, b"outside").unwrap();
+        let roots = vec![root.canonicalize().unwrap()];
+        assert!(resolve_allowed_media_path_with_roots(&image, Some(&thumbs), &roots).is_some());
+        assert!(resolve_allowed_media_path_with_roots(&thumb, Some(&thumbs), &roots).is_some());
+        assert!(resolve_allowed_media_path_with_roots(&secret, Some(&thumbs), &roots).is_none());
+        assert!(resolve_allowed_media_path_with_roots(&external, Some(&thumbs), &roots).is_none());
+        assert!(resolve_allowed_media_path_with_roots(&root.join("..").join("outside.png"), Some(&thumbs), &roots).is_none());
+        #[cfg(windows)]
+        {
+            let junction = root.join("escape");
+            let status = std::process::Command::new("cmd")
+                .args(["/D", "/C", "mklink", "/J"])
+                .arg(&junction)
+                .arg(&outside)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .unwrap();
+            assert!(status.success());
+            assert!(resolve_allowed_media_path_with_roots(&junction.join("outside.png"), Some(&thumbs), &roots).is_none());
+        }
+    }
+
+    #[test]
+    fn media_endpoints_require_nonce_host_and_origin() {
+        let tmp = crate::testutil::TempDir::new("picnest_media_http");
+        let data = tmp.join("data");
+        let root = tmp.join("library");
+        let thumbs = data.join("cache").join("thumbs");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&thumbs).unwrap();
+        fs::write(root.join("image.png"), b"image").unwrap();
+        fs::write(data.join("collect_token.txt"), b"secret").unwrap();
+        let db_path = data.join("test.db");
+        let conn = crate::db::init_db(&db_path).unwrap();
+        conn.execute("INSERT INTO folders (path) VALUES (?1)", [root.to_string_lossy().to_string()]).unwrap();
+        drop(conn);
+        let (media_port, api_port, nonce) = start_media_server(db_path, thumbs);
+        let encoded: String = url::form_urlencoded::byte_serialize(root.join("image.png").to_string_lossy().as_bytes()).collect();
+        let target = format!("/m/{}/{}", nonce, encoded);
+        assert_eq!(request(media_port, &target, &[]).0, 200);
+        assert_eq!(request(media_port, &format!("/m/wrong/{}", encoded), &[]).0, 403);
+        let secret_encoded: String = url::form_urlencoded::byte_serialize(data.join("collect_token.txt").to_string_lossy().as_bytes()).collect();
+        assert_eq!(request(media_port, &format!("/m/{}/{}", nonce, secret_encoded), &[]).0, 403);
+        assert_eq!(request(media_port, &target, &[("Origin", "https://evil.example")]).0, 403);
+        assert_eq!(request(api_port, "/api/images?folder=1&limit=10", &[]).0, 403);
+        assert_eq!(request(api_port, &format!("/api/images?folder=1&limit=10&nonce={}", nonce), &[]).0, 200);
+        let mut stream = TcpStream::connect(("127.0.0.1", media_port)).unwrap();
+        write!(stream, "GET {} HTTP/1.1\r\nHost: evil.example:{}\r\nConnection: close\r\n\r\n", target, media_port).unwrap();
+        let mut response = Vec::new();
+        let _ = stream.read_to_end(&mut response);
+        assert!(String::from_utf8_lossy(&response).starts_with("HTTP/1.1 403"));
+    }
 }

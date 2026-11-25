@@ -14,6 +14,7 @@ pub struct AppState {
     pub data_dir: PathBuf,
     pub media_port: u16,
     pub api_port: u16,
+    pub media_nonce: String,
 }
 
 /// 命令级计时器：进入/退出各打一条诊断日志（只在 PICNEST_DIAG=1 时有成本）。
@@ -85,9 +86,9 @@ pub(crate) fn with_read_conn<T>(
 }
 
 #[tauri::command]
-pub fn get_media_port(state: State<AppState>) -> u16 {
+pub fn get_media_port(state: State<AppState>) -> serde_json::Value {
     let _t = CmdTimer::new("get_media_port");
-    state.media_port
+    serde_json::json!({ "port": state.media_port, "nonce": state.media_nonce })
 }
 
 /// 图库取数接口的独立端口（与缩略图共用 HTTP 服务，但分端口避免连接池互扰）
@@ -764,6 +765,16 @@ pub async fn dir_covers(
 /// 为什么要两条路：实测切目录瞬间 Tauri IPC 会被宿主侧阻塞（后端查询 12ms，
 /// 但 invoke 往返要 0.9–1.9s），而同一时刻本地 HTTP 通道最快 4ms、最慢 47ms。
 /// 所以导航取数改走 HTTP，IPC 留给写操作。两处 SQL 必须保持同步。
+const MAX_QUERY_LIMIT: i64 = 500_000;
+
+fn normalize_limit(limit: i64) -> i64 {
+    limit.clamp(1, MAX_QUERY_LIMIT)
+}
+
+pub(crate) fn normalize_query_window(offset: i64, limit: i64) -> (i64, i64) {
+    (offset.max(0), normalize_limit(limit))
+}
+
 pub(crate) fn query_images_http(
     db_path: &Path,
     thumbs_dir: &Path,
@@ -775,6 +786,7 @@ pub(crate) fn query_images_http(
     sort_asc: Option<bool>,
     recursive: Option<bool>,
 ) -> Result<Vec<ImageItem>, String> {
+    let (offset, limit) = normalize_query_window(offset, limit);
     with_read_conn(db_path, |conn| {
     let root_path: String = conn
         .query_row("SELECT path FROM folders WHERE id = ?1", [folder_id], |r| r.get(0))
@@ -929,6 +941,7 @@ pub async fn count_all(folder_id: i64, state: State<'_, AppState>) -> Result<i64
 
 #[tauri::command]
 pub async fn recent(folder_id: i64, limit: i64, state: State<'_, AppState>) -> Result<Vec<ImageItem>, String> {
+    let limit = normalize_limit(limit);
     let db_path = state.db_path.clone();
     let thumbs_dir = state.data_dir.join("cache").join("thumbs");
     tauri::async_runtime::spawn_blocking(move || {
@@ -4958,7 +4971,7 @@ pub async fn picnest_search(
     }
     let db_path = state.db_path.clone();
     let thumbs_dir = state.data_dir.join("cache").join("thumbs");
-    let lim = limit.unwrap_or(300).clamp(1, 2000);
+    let lim = normalize_limit(limit.unwrap_or(300));
     tauri::async_runtime::spawn_blocking(move || {
         with_read_conn(&db_path, |conn| {
             let escaped = escape_like(&q);
@@ -5018,7 +5031,7 @@ pub async fn picnest_random(
 ) -> Result<Vec<ImageItem>, String> {
     let db_path = state.db_path.clone();
     let thumbs_dir = state.data_dir.join("cache").join("thumbs");
-    let lim = limit.unwrap_or(300).clamp(1, 2000);
+    let lim = normalize_limit(limit.unwrap_or(300));
     tauri::async_runtime::spawn_blocking(move || {
         with_read_conn(&db_path, |conn| {
             let mut stmt = conn
@@ -6036,7 +6049,7 @@ pub async fn generate_text_thumbnails(
 pub fn collect_get_token() -> Result<serde_json::Value, String> {
     Ok(serde_json::json!({
         "ok": true,
-        "token": crate::collector::get_token()
+        "token": crate::collector::get_token()?
     }))
 }
 
@@ -6044,7 +6057,7 @@ pub fn collect_get_token() -> Result<serde_json::Value, String> {
 pub fn collect_reset_token() -> Result<serde_json::Value, String> {
     Ok(serde_json::json!({
         "ok": true,
-        "token": crate::collector::reset_token()
+        "token": crate::collector::reset_token()?
     }))
 }
 
@@ -6234,6 +6247,14 @@ pub async fn ai_dup_cancel() -> Result<serde_json::Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn query_window_clamps_invalid_limits_without_truncating_large_folders() {
+        assert_eq!(normalize_query_window(-10, -1), (0, 1));
+        assert_eq!(normalize_query_window(20, 0), (20, 1));
+        assert_eq!(normalize_query_window(0, 500_001), (0, 500_000));
+        assert_eq!(normalize_query_window(0, 250_000), (0, 250_000));
+    }
 
     /// 透明图必须走无损 WebP（否则 JPEG 会暴露 alpha=0 里藏的 RGB，变成彩色毛刺）
     #[test]

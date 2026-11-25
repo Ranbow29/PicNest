@@ -6,6 +6,7 @@ mod dup_finder;
 mod importer;
 mod media_server;
 mod scanner;
+mod security;
 mod trash_ops;
 mod updater;
 mod visual_search;
@@ -41,7 +42,7 @@ pub fn run() {
     let conn = db::init_db(&db_path).expect("Failed to initialize PicNest SQLite database");
     media_server::diag_push(&format!("db::init_db done in {}ms", t_db.elapsed().as_millis()));
     let thumbs_dir = data_dir.join("cache").join("thumbs");
-    let (media_port, api_port) = media_server::start_media_server(db_path.clone(), thumbs_dir);
+    let (media_port, api_port, media_nonce) = media_server::start_media_server(db_path.clone(), thumbs_dir);
     media_server::diag_push(&format!("media_server port={} api_port={}", media_port, api_port));
 
     let cdp_data_base = data_dir.clone();
@@ -51,6 +52,7 @@ pub fn run() {
         data_dir,
         media_port,
         api_port,
+        media_nonce,
     };
 
     tauri::Builder::default()

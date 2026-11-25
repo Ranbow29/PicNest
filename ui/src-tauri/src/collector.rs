@@ -16,6 +16,7 @@ static ACTIVE_COLLECT_ROOT: AtomicI64 = AtomicI64::new(-1);
 static COLLECTOR_DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
 static COLLECTOR_DB_PATH: OnceLock<PathBuf> = OnceLock::new();
 static COLLECTOR_APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
+static COLLECTOR_TOKEN: OnceLock<std::sync::RwLock<String>> = OnceLock::new();
 
 pub fn set_active_collect_root(root_id: Option<i64>) {
     ACTIVE_COLLECT_ROOT.store(root_id.unwrap_or(-1), Ordering::SeqCst);
@@ -30,39 +31,47 @@ pub fn get_active_collect_root() -> Option<i64> {
     }
 }
 
-pub fn get_token() -> String {
-    let Some(data_dir) = COLLECTOR_DATA_DIR.get() else {
-        return "picnest-token-fallback".to_string();
-    };
-    let token_file = data_dir.join("collect_token.txt");
-    if let Ok(content) = fs::read_to_string(&token_file) {
-        let trimmed = content.trim();
-        if trimmed.len() >= 16 && trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
-            return trimmed.to_string();
-        }
+pub fn get_token() -> Result<String, String> {
+    let slot = COLLECTOR_TOKEN.get_or_init(|| std::sync::RwLock::new(String::new()));
+    let mut guard = slot.write().map_err(|_| "采集密钥锁不可用".to_string())?;
+    if guard.len() == 32 && guard.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Ok(guard.clone());
     }
-    reset_token()
+    let data_dir = COLLECTOR_DATA_DIR
+        .get()
+        .ok_or_else(|| "采集服务数据目录未初始化".to_string())?;
+    let loaded = fs::read_to_string(data_dir.join("collect_token.txt"))
+        .ok()
+        .map(|content| content.trim().to_string())
+        .filter(|token| token.len() == 32 && token.chars().all(|c| c.is_ascii_hexdigit()));
+    let token = match loaded {
+        Some(token) => token,
+        None => generate_token(data_dir)?,
+    };
+    *guard = token.clone();
+    Ok(token)
 }
 
-pub fn reset_token() -> String {
-    let Some(data_dir) = COLLECTOR_DATA_DIR.get() else {
-        return "picnest-token-fallback".to_string();
-    };
-    let _ = fs::create_dir_all(data_dir);
-    let token_file = data_dir.join("collect_token.txt");
+fn generate_token(data_dir: &Path) -> Result<String, String> {
+    let token = crate::security::random_hex(16)?;
+    fs::create_dir_all(data_dir).map_err(|e| format!("创建数据目录失败: {}", e))?;
+    fs::write(data_dir.join("collect_token.txt"), &token)
+        .map_err(|e| format!("保存采集密钥失败: {}", e))?;
+    Ok(token)
+}
 
-    // 生成高质量 32 位 hex 密钥
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let pid = std::process::id();
-    let p1 = (now ^ 0x5bf03635) as u64;
-    let p2 = ((now >> 64) ^ (pid as u128) ^ 0xa5a5a5a5) as u64;
-    let token = format!("{:016x}{:016x}", p1, p2);
-
-    let _ = fs::write(&token_file, &token);
-    token
+pub fn reset_token() -> Result<String, String> {
+    let data_dir = COLLECTOR_DATA_DIR
+        .get()
+        .ok_or_else(|| "采集服务数据目录未初始化".to_string())?;
+    let slot = COLLECTOR_TOKEN.get_or_init(|| std::sync::RwLock::new(String::new()));
+    let mut guard = slot.write().map_err(|_| "采集密钥锁不可用".to_string())?;
+    let token = crate::security::random_hex(16)?;
+    fs::create_dir_all(data_dir).map_err(|e| format!("创建数据目录失败: {}", e))?;
+    fs::write(data_dir.join("collect_token.txt"), &token)
+        .map_err(|e| format!("保存采集密钥失败: {}", e))?;
+    *guard = token.clone();
+    Ok(token)
 }
 
 fn url_decode(input: &str) -> String {
@@ -232,126 +241,166 @@ fn parse_data_url(u: &str) -> Result<(Vec<u8>, String), String> {
 }
 
 fn download_media_curl(src: &str, referer: &str) -> Result<(Vec<u8>, String), String> {
-    if !src.starts_with("http://") && !src.starts_with("https://") {
-        return Err("仅支持 http 或 https 链接".to_string());
-    }
+    download_media_curl_limited(src, referer, 500 * 1024 * 1024, false)
+}
 
-    let temp_dir = std::env::temp_dir();
-    let tick = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let hdr_path = temp_dir.join(format!("picnest_hdr_{}.tmp", tick));
-    let body_path = temp_dir.join(format!("picnest_body_{}.tmp", tick));
+fn download_media_curl_limited(
+    src: &str,
+    referer: &str,
+    max_bytes: usize,
+    allow_loopback_test: bool,
+) -> Result<(Vec<u8>, String), String> {
+    let proxy = if allow_loopback_test {
+        None
+    } else {
+        crate::security::detect_curl_proxy()
+    };
+    download_media_curl_limited_with_proxy(src, referer, max_bytes, allow_loopback_test, proxy)
+}
 
-    let is_pin = src.to_ascii_lowercase().contains("pinimg.com");
+fn download_media_curl_limited_with_proxy(
+    src: &str,
+    referer: &str,
+    max_bytes: usize,
+    allow_loopback_test: bool,
+    proxy: Option<String>,
+) -> Result<(Vec<u8>, String), String> {
+    let proxy_enabled = proxy.is_some();
+    let mut current = crate::security::validate_download_url(src, allow_loopback_test, proxy_enabled)?;
+    let temp_root = std::env::temp_dir().join(format!("picnest_collect_{}", crate::security::random_hex(12)?));
+    fs::create_dir(&temp_root).map_err(|e| format!("创建下载临时目录失败: {}", e))?;
+    let _guard = defer_cleanup(&temp_root);
+    let hdr_path = temp_root.join("headers.tmp");
+    let body_path = temp_root.join("body.tmp");
+
+    let is_pin = current.as_str().to_ascii_lowercase().contains("pinimg.com");
+    let clean_referer: String = referer
+        .trim()
+        .chars()
+        .filter(|c| !c.is_control())
+        .collect();
     let ref_header = if is_pin {
         "https://www.pinterest.com/".to_string()
-    } else if !referer.trim().is_empty() {
-        referer.trim().to_string()
-    } else if let Some(idx) = src.find("://") {
-        let after = &src[idx + 3..];
-        if let Some(slash) = after.find('/') {
-            format!("{}/", &src[..idx + 3 + slash])
-        } else {
-            format!("{}/", src)
-        }
+    } else if !clean_referer.is_empty() {
+        clean_referer
     } else {
-        "".to_string()
+        format!("{}/", current.origin().ascii_serialization())
     };
 
-    let mut cmd = std::process::Command::new("curl.exe");
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
-    cmd.arg("-s")
-        .arg("-S")
-        .arg("-L")
-        .arg("--max-time")
-        .arg("15")
-        .arg("-A")
-        .arg("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0")
-        .arg("-D")
-        .arg(&hdr_path)
-        .arg("-o")
-        .arg(&body_path);
-
-    if !ref_header.is_empty() {
-        cmd.arg("-e").arg(&ref_header);
-    }
-    cmd.arg(src);
-
-    let output = cmd.output().map_err(|e| format!("启动 curl 失败: {}", e))?;
-
-    let _guard = defer_cleanup(&hdr_path, &body_path);
-
-    if !output.status.success() {
-        let err_msg = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("curl 下载失败 (code={:?}): {}", output.status.code(), err_msg));
-    }
-
-    // 检查 HTTP 状态码和 Content-Type
-    let mut status_ok = false;
     let mut content_type = String::new();
-    if let Ok(hdr_str) = fs::read_to_string(&hdr_path) {
-        for line in hdr_str.lines() {
-            let t = line.trim();
-            if t.starts_with("HTTP/") {
-                if let Some(code_part) = t.split_whitespace().nth(1) {
-                    if let Ok(code) = code_part.parse::<u16>() {
-                        status_ok = (200..=299).contains(&code);
-                    }
-                }
-            } else if let Some((k, v)) = t.split_once(':') {
-                if k.trim().eq_ignore_ascii_case("content-type") {
+    for _ in 0..6 {
+        let addr = crate::security::resolve_download_address(&current, allow_loopback_test, proxy_enabled)?;
+        let mut cmd = std::process::Command::new("curl.exe");
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+        cmd.arg("-s")
+            .arg("-S")
+            .arg("--max-time")
+            .arg("15")
+            .arg("--max-filesize")
+            .arg(max_bytes.to_string())
+            .arg("-A")
+            .arg("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0")
+            .arg("-D")
+            .arg(&hdr_path)
+            .arg("-o")
+            .arg(&body_path);
+        for arg in crate::security::curl_args_for_url(&current, addr)? {
+            cmd.arg(arg);
+        }
+        if let Some(proxy) = &proxy {
+            cmd.arg("-x").arg(proxy);
+        } else if allow_loopback_test {
+            cmd.arg("--noproxy").arg("*");
+        }
+        if !ref_header.is_empty() {
+            cmd.arg("-e").arg(&ref_header);
+        }
+        cmd.arg(current.as_str());
+
+        let output = cmd.output().map_err(|e| format!("启动 curl 失败: {}", e))?;
+        if !output.status.success() {
+            let err_msg = String::from_utf8_lossy(&output.stderr);
+            if output.status.code() == Some(63)
+                || err_msg.contains("Maximum file size exceeded")
+                || err_msg.contains("Exceeded the size limit")
+            {
+                return Err("文件超过采集大小上限".to_string());
+            }
+            return Err(format!("curl 下载失败 (code={:?}): {}", output.status.code(), err_msg));
+        }
+
+        let headers = fs::read_to_string(&hdr_path).map_err(|e| format!("读取响应头失败: {}", e))?;
+        let mut status = None;
+        let mut location = None;
+        content_type.clear();
+        for line in headers.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("HTTP/") {
+                status = trimmed.split_whitespace().nth(1).and_then(|v| v.parse::<u16>().ok());
+                location = None;
+                content_type.clear();
+            } else if let Some((k, v)) = trimmed.split_once(':') {
+                if k.trim().eq_ignore_ascii_case("location") {
+                    location = Some(v.trim().to_string());
+                } else if k.trim().eq_ignore_ascii_case("content-type") {
                     content_type = v.trim().to_string();
                 }
             }
         }
-    }
+        let status = status.ok_or_else(|| "远程服务器未返回有效 HTTP 状态".to_string())?;
+        if (300..400).contains(&status) {
+            let location = location.ok_or_else(|| "重定向响应缺少 Location".to_string())?;
+            current = current
+                .join(&location)
+                .map_err(|_| "重定向链接非法".to_string())?;
+            crate::security::validate_download_url(current.as_str(), allow_loopback_test, proxy_enabled)?;
+            continue;
+        }
+        if !(200..300).contains(&status) {
+            return Err("远程服务器返回非 200 响应".to_string());
+        }
 
-    if !status_ok {
-        return Err("远程服务器返回非 200 响应".to_string());
+        let file = File::open(&body_path).map_err(|e| format!("读取临时文件失败: {}", e))?;
+        let mut bytes = Vec::new();
+        file.take(max_bytes as u64 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|e| format!("读取下载文件失败: {}", e))?;
+        if bytes.len() > max_bytes {
+            return Err("文件超过采集大小上限".to_string());
+        }
+        if bytes.is_empty() {
+            return Err("采集数据为空 (0 字节)".to_string());
+        }
+        let head = &bytes[..std::cmp::min(bytes.len(), 64)];
+        let head_str = String::from_utf8_lossy(head).to_ascii_lowercase();
+        if head_str.starts_with("<!doctype")
+            || head_str.starts_with("<html")
+            || head_str.starts_with("<?xml")
+        {
+            return Err("远程服务器返回了网页而非媒体流".to_string());
+        }
+        return Ok((bytes, content_type));
     }
-
-    let bytes = fs::read(&body_path).map_err(|e| format!("读取临时文件失败: {}", e))?;
-    if bytes.is_empty() {
-        return Err("采集数据为空 (0 字节)".to_string());
-    }
-    if bytes.len() > 500 * 1024 * 1024 {
-        return Err("文件过大 (>500MB)".to_string());
-    }
-
-    // 防御性校验：远程网页拦截（如 B 站防盗链/登录跳转 HTML）
-    let head = &bytes[..std::cmp::min(bytes.len(), 64)];
-    let head_str = String::from_utf8_lossy(head).to_ascii_lowercase();
-    if head_str.starts_with("<!doctype")
-        || head_str.starts_with("<html")
-        || head_str.starts_with("<?xml")
-    {
-        return Err("远程服务器返回了网页而非媒体流".to_string());
-    }
-
-    Ok((bytes, content_type))
+    Err("下载重定向次数过多".to_string())
 }
 
 struct CleanGuard<'a> {
-    p1: &'a Path,
-    p2: &'a Path,
+    dir: &'a Path,
 }
 
 impl<'a> Drop for CleanGuard<'a> {
     fn drop(&mut self) {
-        let _ = fs::remove_file(self.p1);
-        let _ = fs::remove_file(self.p2);
+        let _ = fs::remove_dir_all(self.dir);
     }
 }
 
-fn defer_cleanup<'a>(p1: &'a Path, p2: &'a Path) -> CleanGuard<'a> {
-    CleanGuard { p1, p2 }
+fn defer_cleanup<'a>(dir: &'a Path) -> CleanGuard<'a> {
+    CleanGuard { dir }
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -384,8 +433,20 @@ fn query_roots(conn: &rusqlite::Connection) -> Vec<RootItem> {
     }
 }
 
-fn safe_canonicalize(path: &Path) -> PathBuf {
-    fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+fn canonicalize_within_root(root: &Path, candidate: &Path) -> Result<PathBuf, String> {
+    let root = fs::canonicalize(root).map_err(|_| "资料库根目录物理路径不存在".to_string())?;
+    let mut existing = candidate.to_path_buf();
+    while !existing.exists() {
+        let Some(parent) = existing.parent() else {
+            return Err("目标存储路径越界（不在根文件范围内）".to_string());
+        };
+        existing = parent.to_path_buf();
+    }
+    let canonical = fs::canonicalize(&existing).map_err(|e| format!("解析目标路径失败: {}", e))?;
+    if !canonical.starts_with(&root) {
+        return Err("目标存储路径越界（不在根文件范围内）".to_string());
+    }
+    Ok(candidate.to_path_buf())
 }
 
 fn build_folder_tree(root_abs: &Path, rel: &str) -> Vec<serde_json::Value> {
@@ -475,7 +536,7 @@ fn check_duplicates(
     };
 
     let mut matches = Vec::new();
-    let root_canon = safe_canonicalize(root_path);
+    let root_canon = fs::canonicalize(root_path).unwrap_or_else(|_| root_path.to_path_buf());
 
     for (file_path, width, height) in rows {
         let p = Path::new(&file_path);
@@ -489,7 +550,7 @@ fn check_duplicates(
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| "根目录".to_string());
-            let p_canon = safe_canonicalize(p);
+            let p_canon = fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
             if let Ok(rel) = p_canon.strip_prefix(&root_canon) {
                 if let Some(parent) = rel.parent() {
                     let parent_str = parent.to_string_lossy().replace('\\', "/");
@@ -569,11 +630,7 @@ pub(crate) fn save_one_item_direct(
     }
 
     // 防逃逸安全检查
-    let root_canon = safe_canonicalize(&root_path);
-    let dest_canon = safe_canonicalize(&dest_dir);
-    if !dest_canon.starts_with(&root_canon) {
-        return Err("目标存储路径越界（不在根文件范围内）".to_string());
-    }
+    canonicalize_within_root(&root_path, &dest_dir)?;
 
     let _ = fs::create_dir_all(&dest_dir);
 
@@ -815,12 +872,15 @@ fn send_response(
     origin: Option<&str>,
     body: &[u8],
 ) {
+    let allow_origin = origin
+        .map(|value| format!("Access-Control-Allow-Origin: {}\r\n", value))
+        .unwrap_or_default();
     let resp = format!(
-        "HTTP/1.1 {} {}\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: {}\r\nVary: Origin\r\nAccess-Control-Allow-Methods: GET,POST,OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type, X-PicNest-Token\r\nAccess-Control-Allow-Private-Network: true\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {} {}\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {}\r\n{}Vary: Origin\r\nAccess-Control-Allow-Methods: GET,POST,OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type, X-PicNest-Token\r\nAccess-Control-Allow-Private-Network: true\r\nConnection: close\r\n\r\n",
         status_code,
         status_text,
         body.len(),
-        origin.unwrap_or("*")
+        allow_origin
     );
     let _ = stream.write_all(resp.as_bytes());
     let _ = stream.write_all(body);
@@ -842,7 +902,7 @@ fn send_json(stream: &mut TcpStream, status_code: u16, origin: Option<&str>, val
     send_response(stream, status_code, status_text, origin, body_str.as_bytes());
 }
 
-fn handle_client(mut stream: TcpStream) {
+fn handle_client(mut stream: TcpStream, expected_port: u16) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(15)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(15)));
 
@@ -880,28 +940,23 @@ fn handle_client(mut stream: TcpStream) {
     let origin = headers.get("origin").cloned();
     let origin_str = origin.as_deref();
 
+    if !headers.get("host").is_some_and(|host| {
+        crate::security::validate_download_host_header(host, expected_port)
+    }) {
+        send_json(&mut stream, 403, origin_str, &json!({ "ok": false, "error": "host not allowed" }));
+        return;
+    }
+    if let Some(o) = &origin
+        && !crate::security::is_allowed_collector_origin(o)
+    {
+        send_json(&mut stream, 403, origin_str, &json!({ "ok": false, "error": "origin not allowed" }));
+        return;
+    }
+
     // CORS 预检
     if method == "OPTIONS" {
         send_response(&mut stream, 204, "No Content", origin_str, b"");
         return;
-    }
-
-    // Origin 白名单过滤
-    if let Some(ref o) = origin {
-        let is_ok = o.is_empty()
-            || o.starts_with("chrome-extension://")
-            || o.starts_with("extension://")
-            || o.starts_with("http://127.0.0.1")
-            || o.starts_with("http://localhost");
-        if !is_ok {
-            send_json(
-                &mut stream,
-                403,
-                origin_str,
-                &json!({ "ok": false, "error": "origin not allowed" }),
-            );
-            return;
-        }
     }
 
     let (path, query) = uri.split_once('?').unwrap_or((uri, ""));
@@ -924,14 +979,15 @@ fn handle_client(mut stream: TcpStream) {
     }
 
     // Token 校验
-    let req_token = headers
-        .get("x-picnest-token")
-        .cloned()
-        .or_else(|| query_param(query, "token"))
-        .unwrap_or_default();
-
-    let valid_token = get_token();
-    if req_token.trim().is_empty() || req_token != valid_token {
+    let req_token = headers.get("x-picnest-token").cloned().unwrap_or_default();
+    let valid_token = match get_token() {
+        Ok(token) => token,
+        Err(e) => {
+            send_json(&mut stream, 500, origin_str, &json!({ "ok": false, "error": e }));
+            return;
+        }
+    };
+    if req_token.is_empty() || !crate::security::constant_time_eq(req_token.trim(), &valid_token) {
         send_json(
             &mut stream,
             401,
@@ -1135,6 +1191,12 @@ fn handle_client(mut stream: TcpStream) {
             final_dir = dest_dir.join(format!("{} ({})", safe_name, n));
             n += 1;
         }
+        if canonicalize_within_root(Path::new(&root.path), &dest_dir).is_err()
+            || canonicalize_within_root(Path::new(&root.path), &final_dir).is_err()
+        {
+            send_json(&mut stream, 400, origin_str, &json!({ "ok": false, "error": "目标路径越界" }));
+            return;
+        }
 
         if let Err(e) = fs::create_dir_all(&final_dir) {
             send_json(
@@ -1262,7 +1324,7 @@ pub fn start_collector_server(data_dir: PathBuf, db_path: PathBuf, app_handle: t
             match stream {
                 Ok(s) => {
                     std::thread::spawn(move || {
-                        handle_client(s);
+                        handle_client(s, COLLECT_PORT);
                     });
                 }
                 Err(_) => {}
@@ -1285,7 +1347,8 @@ mod tests {
         fs::create_dir_all(&root_dir).unwrap();
 
         let _ = COLLECTOR_DATA_DIR.set(data_dir.clone());
-        let token = get_token();
+        let _ = COLLECTOR_DB_PATH.set(data_dir.join("test.db"));
+        let token = get_token().unwrap();
         assert_eq!(token.len(), 32);
 
         let db_path = data_dir.join("test.db");
@@ -1298,10 +1361,58 @@ mod tests {
         let fid = conn.last_insert_rowid();
 
         // 1. 测试 Token 生成与重置
-        let new_token = reset_token();
+        let new_token = reset_token().unwrap();
         assert_eq!(new_token.len(), 32);
         assert_ne!(token, new_token);
-        assert_eq!(get_token(), new_token);
+        assert_eq!(get_token().unwrap(), new_token);
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            for _ in 0..5 {
+                let stream = accept_with_timeout(&listener, Duration::from_secs(5)).unwrap();
+                handle_client(stream, port);
+            }
+        });
+        let valid_host = format!("127.0.0.1:{}", port);
+        let token_header = format!("X-PicNest-Token: {}\r\n", new_token);
+        let send = |target: &str, host: &str, headers: &str| -> String {
+            let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+            write!(
+                stream,
+                "GET {} HTTP/1.1\r\nHost: {}\r\n{}Connection: close\r\n\r\n",
+                target, host, headers
+            )
+            .unwrap();
+            stream.flush().unwrap();
+            read_response(&mut stream)
+        };
+
+        let missing_token = send("/api/v1/context", &valid_host, "");
+        assert_eq!(missing_token.split_whitespace().nth(1), Some("401"));
+        assert!(!missing_token.contains("Access-Control-Allow-Origin:"));
+        let query_token = send(
+            &format!("/api/v1/context?token={}", new_token),
+            &valid_host,
+            "",
+        );
+        assert_eq!(query_token.split_whitespace().nth(1), Some("401"));
+        let invalid_origin = send(
+            "/api/v1/context",
+            &valid_host,
+            &format!("Origin: https://evil.example\r\n{}", token_header),
+        );
+        assert_eq!(invalid_origin.split_whitespace().nth(1), Some("403"));
+        let invalid_host = send(
+            "/api/v1/context",
+            &format!("127.0.0.1:{}", port + 1),
+            &token_header,
+        );
+        assert_eq!(invalid_host.split_whitespace().nth(1), Some("403"));
+        let authorized = send("/api/v1/context", &valid_host, &token_header);
+        assert_eq!(authorized.split_whitespace().nth(1), Some("200"));
+        server.join().unwrap();
 
         // 2. 测试 save_one_item (base64 写入)
         // 1x1 透明 PNG base64
@@ -1360,6 +1471,203 @@ mod tests {
         assert_eq!(tree[0]["children"][0]["name"], "风景");
 
         let _ = trash::delete(&tmp);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn collector_paths_reject_junction_escape() {
+        let tmp = crate::testutil::TempDir::new("picnest_collector_junction");
+        let root = tmp.join("library");
+        let outside = tmp.join("outside");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        let junction = root.join("escape");
+        let status = std::process::Command::new("cmd")
+            .args(["/D", "/C", "mklink", "/J"])
+            .arg(&junction)
+            .arg(&outside)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success());
+        assert!(canonicalize_within_root(&root, &root.join("new").join("folder")).is_ok());
+        assert!(canonicalize_within_root(&root, &outside).is_err());
+        assert!(canonicalize_within_root(&root, &junction.join("new")).is_err());
+    }
+
+    fn accept_with_timeout(
+        listener: &TcpListener,
+        timeout: Duration,
+    ) -> Result<TcpStream, std::io::Error> {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            match listener.accept() {
+                Ok((stream, _)) => return Ok(stream),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if std::time::Instant::now() >= deadline {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::TimedOut,
+                            "mock server 未在超时时间内收到连接",
+                        ));
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    #[test]
+    fn accept_timeout_returns_instead_of_blocking() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let error = accept_with_timeout(&listener, Duration::from_millis(20)).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+    }
+
+    fn read_response(stream: &mut TcpStream) -> String {
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut response = Vec::new();
+        let mut buffer = [0u8; 4096];
+        loop {
+            match stream.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(count) => response.extend_from_slice(&buffer[..count]),
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::ConnectionReset
+                            | std::io::ErrorKind::ConnectionAborted
+                            | std::io::ErrorKind::TimedOut
+                            | std::io::ErrorKind::WouldBlock
+                    ) => break,
+                Err(error) => panic!("读取测试响应失败: {}", error),
+            }
+        }
+        String::from_utf8_lossy(&response).into_owned()
+    }
+
+    fn mock_server(response: &'static [u8]) -> (u16, std::thread::JoinHandle<Result<String, String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let mut stream = accept_with_timeout(&listener, Duration::from_secs(5))
+                .map_err(|error| error.to_string())?;
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .map_err(|error| error.to_string())?;
+            stream
+                .set_write_timeout(Some(Duration::from_secs(5)))
+                .map_err(|error| error.to_string())?;
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut request = String::new();
+            let mut line = String::new();
+            loop {
+                line.clear();
+                if reader.read_line(&mut line).map_err(|error| error.to_string())? == 0 {
+                    break;
+                }
+                request.push_str(&line);
+                if line == "\r\n" {
+                    break;
+                }
+            }
+            stream.write_all(response).map_err(|error| error.to_string())?;
+            stream.flush().map_err(|error| error.to_string())?;
+            Ok(request)
+        });
+        (port, server)
+    }
+
+    #[test]
+    fn download_tests_allow_loopback_only_for_mock_server() {
+        let response = b"HTTP/1.1 200 OK\r\nContent-Type: image/jpeg\r\nContent-Length: 4\r\nConnection: close\r\n\r\n\xff\xd8\xff\xd9" as &[u8];
+        let (port, server) = mock_server(response);
+        let (bytes, content_type) = download_media_curl_limited(
+            &format!("http://127.0.0.1:{}/image.jpg", port),
+            "https://example.com/\r\nX-Injected: yes",
+            1024,
+            true,
+        )
+        .unwrap();
+        assert_eq!(bytes, b"\xff\xd8\xff\xd9");
+        assert_eq!(content_type, "image/jpeg");
+        let request = server.join().unwrap().unwrap();
+        assert!(!request.contains("\r\nX-Injected: yes"));
+        assert!(download_media_curl_limited(
+            &format!("http://127.0.0.1:{}/image.jpg", port),
+            "",
+            1024,
+            false,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn download_rejects_redirect_to_private_address_and_oversize_body() {
+        let redirect = b"HTTP/1.1 302 Found\r\nLocation: http://169.254.169.254/latest/meta-data\r\nContent-Length: 0\r\nConnection: close\r\n\r\n" as &[u8];
+        let (port, server) = mock_server(redirect);
+        let error = download_media_curl_limited(
+            &format!("http://127.0.0.1:{}/image", port),
+            "",
+            1024,
+            true,
+        )
+        .unwrap_err();
+        assert!(error.contains("禁止采集内网、回环或链路本地地址"), "{error}");
+        server.join().unwrap().unwrap();
+
+        let oversized = b"HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: 1024\r\nConnection: close\r\n\r\n" as &[u8];
+        let (port, server) = mock_server(oversized);
+        let error = download_media_curl_limited(
+            &format!("http://127.0.0.1:{}/image.png", port),
+            "",
+            16,
+            true,
+        )
+        .unwrap_err();
+        assert_eq!(error, "文件超过采集大小上限");
+        server.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn download_uses_explicit_proxy_without_resolving_target() {
+        let response = b"HTTP/1.1 200 OK\r\nContent-Type: image/jpeg\r\nContent-Length: 4\r\nConnection: close\r\n\r\n\xff\xd8\xff\xd9" as &[u8];
+        let (proxy_port, server) = mock_server(response);
+        let target = "http://images.example.invalid/image.jpg";
+        let (bytes, content_type) = download_media_curl_limited_with_proxy(
+            target,
+            "",
+            1024,
+            true,
+            Some(format!("http://127.0.0.1:{}", proxy_port)),
+        )
+        .unwrap();
+        assert_eq!(bytes, b"\xff\xd8\xff\xd9");
+        assert_eq!(content_type, "image/jpeg");
+        let request = server.join().unwrap().unwrap();
+        assert!(request.starts_with(&format!("GET {} HTTP/1.1\r\n", target)));
+        assert!(request.contains("Host: images.example.invalid\r\n"));
+    }
+
+    #[test]
+    fn proxy_download_rejects_private_redirect_target() {
+        let redirect = b"HTTP/1.1 302 Found\r\nLocation: http://169.254.169.254/latest/meta-data\r\nContent-Length: 0\r\nConnection: close\r\n\r\n" as &[u8];
+        let (proxy_port, server) = mock_server(redirect);
+        let error = download_media_curl_limited_with_proxy(
+            "http://images.example.invalid/image",
+            "",
+            1024,
+            false,
+            Some(format!("http://127.0.0.1:{}", proxy_port)),
+        )
+        .unwrap_err();
+        assert!(error.contains("禁止采集内网、回环或链路本地地址"), "{error}");
+        server.join().unwrap().unwrap();
     }
 }
 
