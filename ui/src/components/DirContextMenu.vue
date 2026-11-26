@@ -128,9 +128,10 @@ function renameLib() {
     ask.value = { title: '重命名根文件夹（磁盘目录）', initial: current, selectBase: false, run: (name) => lib.renameLibrary(node.id, name) }
   })
 }
-/* 根文件 → 在文件管理器中打开（shell.openPath 打开目录本身，不是“显示所在位置”） */
-function revealLib() {
-  const p = menuNode.value?.path || menu.value.node?.absPath || ''
+function reveal() {
+  const p = isLib.value
+    ? menuNode.value?.path || menu.value.node?.absPath || ''
+    : lib.absPathOf(relOf(menu.value.rel))
   if (!p) return
   run(async () => {
     const err = await window.picrand.openWithDefault(p).catch((e) => String(e?.message || e))
@@ -294,7 +295,7 @@ function pasteItem() {
   <Teleport to="body">
     <div v-if="menu.open" class="dm-layer" @click="lib.closeDirMenu()" @contextmenu.prevent="lib.closeDirMenu()">
       <div ref="menuEl" class="dm glass-card" :style="pos" @click.stop>
-        <button v-if="isLib" class="mi" @click="revealLib">在文件管理器中打开</button>
+        <button class="mi" @click="reveal">在文件管理器中打开</button>
         <button class="mi" @click="newFolder">新建文件夹</button>
         <button v-if="isLib" class="mi" @click="renameLib">重命名根文件…</button>
         <button v-if="!isLib" class="mi" @click="rename">重命名</button>

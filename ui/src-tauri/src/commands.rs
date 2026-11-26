@@ -222,6 +222,266 @@ pub fn app_version() -> serde_json::Value {
     serde_json::json!({ "version": env!("CARGO_PKG_VERSION") })
 }
 
+#[cfg(target_os = "windows")]
+mod file_manager {
+    use super::with_read_conn;
+    use std::ffi::c_void;
+    use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::process::CommandExt;
+    use std::path::{Path, PathBuf};
+
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    const COINIT_APARTMENTTHREADED: u32 = 2;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn CompareStringOrdinal(
+            a: *const u16,
+            a_len: i32,
+            b: *const u16,
+            b_len: i32,
+            ignore_case: i32,
+        ) -> i32;
+    }
+
+    #[link(name = "ole32")]
+    unsafe extern "system" {
+        fn CoInitializeEx(reserved: *mut c_void, init: u32) -> i32;
+        fn CoUninitialize();
+        fn CoTaskMemFree(value: *mut c_void);
+    }
+
+    #[link(name = "shell32")]
+    unsafe extern "system" {
+        fn ILCreateFromPathW(path: *const u16) -> *mut c_void;
+        fn SHOpenFolderAndSelectItems(
+            folder: *mut c_void,
+            count: u32,
+            items: *const *const c_void,
+            flags: u32,
+        ) -> i32;
+    }
+
+    pub(super) fn normalize_path(raw: &str) -> Result<String, String> {
+        if raw.is_empty() || raw.chars().any(|c| c.is_control() || c == '"') {
+            return Err("文件管理器路径为空或包含非法字符".to_string());
+        }
+        let path = raw.replace('/', "\\");
+        if let Some(unc) = path.strip_prefix(r"\\?\UNC\") {
+            Ok(format!(r"\\{unc}"))
+        } else if let Some(plain) = path.strip_prefix(r"\\?\") {
+            Ok(plain.to_string())
+        } else {
+            Ok(path)
+        }
+    }
+
+    pub(super) fn select_argument(path: &str) -> String {
+        format!("/select,\"{path}\"")
+    }
+
+    fn explorer_executable() -> PathBuf {
+        std::env::var_os("SystemRoot")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(r"C:\Windows"))
+            .join("explorer.exe")
+    }
+
+    fn select_with_shell(path: &str) -> Result<(), String> {
+        let wide: Vec<u16> = std::ffi::OsStr::new(path)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        unsafe {
+            let hr = CoInitializeEx(std::ptr::null_mut(), COINIT_APARTMENTTHREADED);
+            if hr < 0 {
+                return Err(format!("COM 初始化失败：0x{:08X}", hr as u32));
+            }
+            let pidl = ILCreateFromPathW(wide.as_ptr());
+            if pidl.is_null() {
+                CoUninitialize();
+                return Err("Shell 无法解析文件路径".to_string());
+            }
+            let hr = SHOpenFolderAndSelectItems(pidl, 0, std::ptr::null(), 0);
+            CoTaskMemFree(pidl);
+            CoUninitialize();
+            if hr < 0 {
+                Err(format!("Shell 定位文件失败：0x{:08X}", hr as u32))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    pub(super) fn reveal_file(raw: &str) -> Result<(), String> {
+        let clean = normalize_path(raw)?;
+        let metadata = std::fs::metadata(&clean).map_err(|e| format!("读取文件失败：{e}"))?;
+        if !metadata.is_file() {
+            return Err("目标不是文件".to_string());
+        }
+        if let Err(shell_error) = select_with_shell(&clean) {
+            std::process::Command::new(explorer_executable())
+                .creation_flags(CREATE_NO_WINDOW)
+                .raw_arg(select_argument(&clean))
+                .spawn()
+                .map_err(|e| format!("资源管理器定位失败（{shell_error}）：{e}"))?;
+        }
+        Ok(())
+    }
+
+    fn same_path(a: &Path, b: &Path) -> bool {
+        let a: Vec<u16> = a.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+        let b: Vec<u16> = b.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+        unsafe { CompareStringOrdinal(a.as_ptr(), -1, b.as_ptr(), -1, 1) == 2 }
+    }
+
+    fn folder_is_within(root: &Path, folder: &Path) -> bool {
+        let mut parts = folder.components();
+        for expected in root.components() {
+            if !parts.next().is_some_and(|actual| {
+                same_path(Path::new(actual.as_os_str()), Path::new(expected.as_os_str()))
+            }) {
+                return false;
+            }
+        }
+        same_path(root, folder) || parts.next().is_some()
+    }
+
+    pub(super) fn library_folder(db_path: &Path, raw: &str) -> Result<PathBuf, String> {
+        let clean = normalize_path(raw)?;
+        let folder = std::fs::canonicalize(&clean).map_err(|e| format!("读取文件夹失败：{e}"))?;
+        if !folder.is_dir() {
+            return Err("目标不是文件夹".to_string());
+        }
+        let roots = with_read_conn(db_path, |conn| {
+            let mut stmt = conn.prepare("SELECT path FROM folders").map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(0))
+                .map_err(|e| e.to_string())?;
+            Ok(rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?)
+        })?;
+        let registered = roots.iter().any(|root| {
+            std::fs::canonicalize(root)
+                .map(|root| folder_is_within(&root, &folder))
+                .unwrap_or(false)
+        });
+        if !registered {
+            return Err("仅允许打开已登记图库内的文件夹".to_string());
+        }
+        Ok(folder)
+    }
+
+    pub(super) fn folder_open_argument(folder: &Path) -> Result<String, String> {
+        normalize_path(&folder.to_string_lossy())
+    }
+
+    pub(super) fn open_folder(folder: &Path) -> Result<(), String> {
+        let clean = folder_open_argument(folder)?;
+        std::process::Command::new(explorer_executable())
+            .creation_flags(CREATE_NO_WINDOW)
+            .arg(&clean)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("打开文件夹失败：{e}"))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn normalizes_windows_paths_and_rejects_unsafe_input() {
+            assert_eq!(normalize_path(r"C:/Pictures/a.jpg").unwrap(), r"C:\Pictures\a.jpg");
+            assert_eq!(normalize_path(r"\\?\C:\Pictures\a.jpg").unwrap(), r"C:\Pictures\a.jpg");
+            assert_eq!(
+                normalize_path(r"\\?\UNC\server\share\a.jpg").unwrap(),
+                r"\\server\share\a.jpg"
+            );
+            assert!(normalize_path("").is_err());
+            assert!(normalize_path("C:\\Pictures\na.jpg").is_err());
+            assert!(normalize_path(r#"C:\Pictures\a".jpg"#).is_err());
+        }
+
+        #[test]
+        fn builds_exact_explorer_select_argument() {
+            assert_eq!(
+                select_argument(r"C:\My Pictures\a,b & c.jpg"),
+                r#"/select,"C:\My Pictures\a,b & c.jpg""#
+            );
+        }
+
+        #[test]
+        fn strips_verbatim_prefix_for_explorer_open_folder() {
+            assert_eq!(
+                folder_open_argument(Path::new(r"\\?\C:\My Library\Sub Folder")).unwrap(),
+                r"C:\My Library\Sub Folder"
+            );
+            assert_eq!(
+                folder_open_argument(Path::new(r"\\?\UNC\server\share\art")).unwrap(),
+                r"\\server\share\art"
+            );
+        }
+
+        #[test]
+        fn compares_windows_paths_case_insensitively() {
+            assert!(same_path(Path::new(r"C:\Pictures"), Path::new(r"c:\pictures")));
+            assert!(!same_path(Path::new(r"C:\Pictures"), Path::new(r"C:\Other")));
+        }
+
+        #[test]
+        fn folder_containment_requires_a_complete_case_insensitive_path_prefix() {
+            assert!(folder_is_within(Path::new(r"C:\Library"), Path::new(r"c:\library\child")));
+            assert!(folder_is_within(Path::new(r"C:\Library"), Path::new(r"C:\Library")));
+            assert!(!folder_is_within(Path::new(r"C:\Library"), Path::new(r"C:\Library-other")));
+            assert!(!folder_is_within(Path::new(r"C:\Library"), Path::new(r"D:\Library\child")));
+        }
+
+        #[test]
+        fn only_accepts_existing_folders_inside_registered_libraries() {
+            let tmp = crate::testutil::TempDir::new("picnest_open_folder");
+            let root = tmp.join("library");
+            let child = root.join("child");
+            let outside = tmp.join("outside");
+            let prefixed_outside = tmp.join("library-other");
+            std::fs::create_dir_all(&child).unwrap();
+            std::fs::create_dir_all(&outside).unwrap();
+            std::fs::create_dir_all(&prefixed_outside).unwrap();
+            std::fs::write(root.join("image.png"), b"image").unwrap();
+            let db = crate::db::init_db(&tmp.join("test.db")).unwrap();
+            db.execute("INSERT INTO folders (path) VALUES (?1)", [root.to_string_lossy().to_string()]).unwrap();
+            assert_eq!(library_folder(&tmp.join("test.db"), &root.to_string_lossy()).unwrap(), std::fs::canonicalize(&root).unwrap());
+            assert_eq!(library_folder(&tmp.join("test.db"), &child.to_string_lossy()).unwrap(), std::fs::canonicalize(&child).unwrap());
+            assert!(library_folder(&tmp.join("test.db"), &outside.to_string_lossy()).unwrap_err().contains("已登记"));
+            assert!(library_folder(&tmp.join("test.db"), &prefixed_outside.to_string_lossy()).unwrap_err().contains("已登记"));
+            assert!(library_folder(&tmp.join("test.db"), &root.join("image.png").to_string_lossy()).unwrap_err().contains("不是文件夹"));
+            assert!(library_folder(&tmp.join("test.db"), &tmp.join("missing").to_string_lossy()).is_err());
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn open_folder(path: String, state: State<'_, AppState>) -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let db_path = state.db_path.clone();
+        let outcome = tauri::async_runtime::spawn_blocking(move || {
+            let folder = file_manager::library_folder(&db_path, &path)?;
+            file_manager::open_folder(&folder)
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(match outcome {
+            Ok(()) => String::new(),
+            Err(error) => error,
+        })
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (path, state);
+        Ok("当前平台不支持打开文件管理器".to_string())
+    }
+}
+
 #[tauri::command]
 pub fn open_external(url: String) -> Result<(), String> {
     let trimmed = url.trim();
@@ -5194,16 +5454,21 @@ pub async fn db_delete_image(
 }
 
 #[tauri::command]
-pub fn picnest_reveal(file_path: String) -> Result<bool, String> {
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        let _ = std::process::Command::new("explorer")
-            .creation_flags(CREATE_NO_WINDOW)
-            .arg(format!("/select,{}", file_path))
-            .spawn();
-    }
+pub async fn picnest_reveal(file_path: String) -> Result<bool, String> {
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        #[cfg(target_os = "windows")]
+        {
+            file_manager::reveal_file(&file_path)
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = file_path;
+            Err("当前平台不支持在文件管理器中定位文件".to_string())
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    result?;
     Ok(true)
 }
 

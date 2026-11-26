@@ -352,7 +352,10 @@ if (typeof window !== 'undefined' && isTauri()) {
     picnestCollectGetToken: async () => await safeInvoke('collect_get_token'),
     picnestCollectResetToken: async () => await safeInvoke('collect_reset_token'),
     picnestCollectSetRoot: async (rootId) => await safeInvoke('collect_set_root', { rootId }),
-    openWithDefault: async (p) => await safeInvoke('open_external', { url: p }),
+    openWithDefault: async (p) => {
+      const result = await safeInvoke('open_folder', { path: p })
+      return typeof result === 'string' ? result : result?.error || '打开文件夹失败'
+    },
     getFilePath: (f) => (typeof f?.path === 'string' && f.path ? f.path : null),
     picnestAppVersion: async () => await safeInvoke('app_version'),
   }, {

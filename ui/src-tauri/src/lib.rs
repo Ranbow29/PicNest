@@ -77,6 +77,7 @@ pub fn run() {
             thumbs_missing,
             eagle_inspect,
             open_external,
+            open_folder,
             get_paths,
             get_all_folders,
             add_folder_by_path,

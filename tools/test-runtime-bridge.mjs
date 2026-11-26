@@ -7,6 +7,7 @@ import { PLUGIN_UNSUPPORTED_ERROR, pluginUnsupported } from '../ui/src/lib/plugi
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const api = fs.readFileSync(path.join(root, 'ui/src/api.js'), 'utf8')
 const lib = fs.readFileSync(path.join(root, 'ui/src-tauri/src/lib.rs'), 'utf8')
+const dirMenu = fs.readFileSync(path.join(root, 'ui/src/components/DirContextMenu.vue'), 'utf8')
 const proxyStart = api.indexOf('window.picrand = new Proxy({')
 const proxyEnd = api.indexOf('\n  }, {', proxyStart)
 assert.ok(proxyStart >= 0 && proxyEnd > proxyStart, '必须存在 window.picrand Proxy 桥接')
@@ -56,6 +57,12 @@ for (const [method, command] of [
   assert.ok(api.includes(`tauriInvoke('${command}'`), `api.js 缺少 ${command} 调用`)
   assert.match(lib, new RegExp(`\\b${command}\\s*,`), `lib.rs 未注册 ${command}`)
 }
+
+assert.ok(proxySource.includes("safeInvoke('open_folder', { path: p })"), 'openWithDefault 必须调用 open_folder')
+assert.ok(proxySource.includes("typeof result === 'string' ? result"), 'open_folder 空字符串成功不得被误报为失败')
+assert.match(lib, /\bopen_folder\s*,/, 'lib.rs 未注册 open_folder')
+assert.ok(dirMenu.includes('<button class="mi" @click="reveal">在文件管理器中打开</button>'), '普通文件夹右键菜单缺少打开入口')
+assert.ok(dirMenu.includes(': lib.absPathOf(relOf(menu.value.rel))'), '普通文件夹必须解析为已登记图库内的绝对路径')
 
 assert.doesNotMatch(proxySource, /picnestAppVersion:\s*async\s*\(\)\s*=>\s*['"]/, '版本号不得在前端写死')
 assert.ok(proxySource.includes('count: 1'), '缩略图检测失败必须阻止“已齐”假成功')
