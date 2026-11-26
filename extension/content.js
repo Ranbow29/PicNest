@@ -2,7 +2,7 @@
 // 在网页图片上左键按住 → 光标处环形进度 → 弹出双栏面板（左：未分类/库根；右：全部文件夹）
 // 拖到目标松开即保存；松开在面板空白处则面板停留，可点击/滚动选择；Esc / 点外部取消。
 (() => {
-  const VERSION = '0.3.2'
+  const VERSION = '0.3.3'
   const prevLoaded = !!window.__picnestHoldCollectLoaded
   const prevVersion = String(window.__picnestHoldCollectVersion || '')
   /* 同版本重复注入：幂等返回。旧版本实例：0.1.4 起会挂 __picnestHoldCollectCleanup，
@@ -34,12 +34,85 @@
     }, true)
   } catch {}
 
-  function isPinterestSite() {
+  function safeHostname() {
     try {
-      const host = window.location?.hostname || location?.hostname || ''
-      return /(^|\.)pinterest\.[a-z.]+$/i.test(host)
+      return (typeof window !== 'undefined' && window.location?.hostname) ||
+        (typeof location !== 'undefined' && location?.hostname) || ''
     } catch {
-      return false
+      return ''
+    }
+  }
+  function isPinterestSite() {
+    return /(^|\.)pinterest\.[a-z.]+$/i.test(safeHostname())
+  }
+  function isHuabanSite() {
+    return /(^|\.)huaban\.com$/i.test(safeHostname())
+  }
+  function isPixivSite() {
+    return /(^|\.)pixiv\.net$/i.test(safeHostname())
+  }
+  function buildImageUpgradePlan(rawSrc, ctx = {}) {
+    const src = typeof rawSrc === 'string' ? rawSrc.trim() : ''
+    if (!src || !/^https?:\/\//i.test(src)) {
+      return { src, fallbackSrcs: [] }
+    }
+    let u = null
+    try {
+      u = new URL(src)
+    } catch {
+      return { src, fallbackSrcs: [] }
+    }
+    const host = u.hostname.toLowerCase()
+    const cands = []
+    const push = (val) => {
+      if (val && typeof val === 'string' && !cands.includes(val)) cands.push(val)
+    }
+
+    if (/(^|\.)(huaban\.com|huabanimg\.com)$/i.test(host)) {
+      const mA = u.pathname.match(/(_(?:fw|sq)\d+[a-z0-9]*)$/i)
+      if (mA) {
+        const suffix = mA[1]
+        const basePath = u.pathname.slice(0, -suffix.length)
+        if (basePath) {
+          push(u.origin + basePath + u.search)
+          if (!basePath.startsWith('/small/') && !/^_fw1200webp$/i.test(suffix)) {
+            push(u.origin + basePath + '_fw1200webp' + u.search)
+          }
+        }
+      } else {
+        const mB = u.pathname.match(/(\/fw\/\d+(?:\/format\/[a-z0-9]+)?)$/i)
+        if (mB) {
+          const basePath = u.pathname.slice(0, -mB[1].length)
+          if (basePath) push(u.origin + basePath + u.search)
+        }
+      }
+    } else if (/(^|\.)pinimg\.com$/i.test(host)) {
+      const upgraded = src.replace(/\/(236x|474x|564x|736x)\//, '/originals/')
+      if (upgraded !== src) push(upgraded)
+    } else if (/(^|\.)pximg\.net$/i.test(host)) {
+      const origHref = typeof ctx.origHref === 'string' ? ctx.origHref.trim() : ''
+      if (/^https?:\/\/i\.pximg\.net\/img-original\//i.test(origHref)) {
+        push(origHref)
+      }
+      const mPx = src.match(/^https?:\/\/i\.pximg\.net\/(?:c\/[^/]+\/)?(?:img-master|custom-thumb)\/(img\/\d{4}\/\d{2}\/\d{2}\/\d{2}\/\d{2}\/\d{2}\/\d+_p\d+)_(?:master|square|custom)1200\.(?:jpg|jpeg|png|webp)(\?.*)?$/i)
+      if (mPx) {
+        const pathPart = mPx[1]
+        push(`https://i.pximg.net/img-original/${pathPart}.png`)
+        push(`https://i.pximg.net/img-original/${pathPart}.jpg`)
+        push(`https://i.pximg.net/img-original/${pathPart}.gif`)
+        push(`https://i.pximg.net/img-master/${pathPart}_master1200.jpg`)
+      }
+    }
+
+    push(src)
+    return { src: cands[0] || src, fallbackSrcs: cands.slice(1) }
+  }
+  function findPixivOrigHref(el) {
+    if (!el || !isPixivSite()) return ''
+    try {
+      return el.closest?.('a[href*="i.pximg.net/img-original/"]')?.href || ''
+    } catch {
+      return ''
     }
   }
   var isPinterest = isPinterestSite
@@ -340,21 +413,40 @@
   /* 验证某个媒体元素是否确实位于 (x, y) 坐标处且可见 */
   function mediaVisibleAt(el, x, y) {
     if (!el || (el.tagName !== 'IMG' && el.tagName !== 'VIDEO')) return false
-    const r = el.getBoundingClientRect()
-    if (r.width < 32 || r.height < 32) return false
+    const r = el.getBoundingClientRect?.()
+    if (!r || r.width < 32 || r.height < 32) return false
     // 坐标必须物理落在该元素的可视矩形边界内
     if (x < r.left || x > r.right || y < r.top || y > r.bottom) return false
     if (el.tagName === 'IMG') {
       if (!el.naturalWidth || !el.naturalHeight) return false
-      // 过滤评论头像、小表情等干扰项
-      if (el.closest?.('[class*="avatar"], [class*="face"], [class*="emoji"], [class*="head"]') && (r.width < 80 || r.height < 80)) return false
+      // 过滤评论头像、小表情等干扰项（避免 [class*="head"] 误伤 header 容器）
+      if (el.closest?.('[class*="avatar"], [class*="face"], [class*="emoji"], [class*="portrait"], [class*="user-head"], [class*="headimg"], [class*="head-img"]') && (r.width < 80 || r.height < 80)) return false
     } else if (el.tagName === 'VIDEO') {
       const src = getMediaSrc(el)
       if (!src && !el.poster && !el.videoWidth && el.readyState === 0) return false
     }
     if (el.checkVisibility && !el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) return false
-    const cs = getComputedStyle(el)
-    return cs.display !== 'none' && cs.visibility !== 'hidden' && Number(cs.opacity) !== 0
+    if (typeof getComputedStyle === 'function') {
+      const cs = getComputedStyle(el)
+      if (cs && (cs.display === 'none' || cs.visibility === 'hidden' || Number(cs.opacity) === 0)) return false
+    }
+    return true
+  }
+
+  function findVisibleMediaIn(container, x, y) {
+    if (!container?.querySelectorAll) return null
+    for (const v of container.querySelectorAll('video')) {
+      if (mediaVisibleAt(v, x, y)) return v
+    }
+    let bestImg = null
+    let bestArea = Infinity
+    for (const im of container.querySelectorAll('img')) {
+      if (!mediaVisibleAt(im, x, y)) continue
+      const r = im.getBoundingClientRect()
+      const area = r.width * r.height
+      if (area < bestArea) { bestArea = area; bestImg = im }
+    }
+    return bestImg
   }
 
   function mediaFromEvent(e) {
@@ -368,14 +460,14 @@
       if (n.tagName === 'IMG' || n.tagName === 'VIDEO') {
         if (mediaVisibleAt(n, x, y)) return n
       }
-      // 包装层容器（如 Pinterest 的遮罩层 DIV）：必须是紧凑容器且坐标在内
-      if (n.querySelector && n !== document.body && n !== document.documentElement) {
+      // 包装层容器（如 Pinterest 遮罩层或花瓣 display:contents 包装层）
+      if (n.querySelectorAll && n !== document.body && n !== document.documentElement) {
         const nr = n.getBoundingClientRect?.()
-        if (nr && x >= nr.left && x <= nr.right && y >= nr.top && y <= nr.bottom && nr.width < 2500 && nr.height < 2500) {
-          const v = n.querySelector('video')
-          if (v && mediaVisibleAt(v, x, y)) return v
-          const im = n.querySelector('img')
-          if (im && mediaVisibleAt(im, x, y)) return im
+        const isContents = nr && nr.width === 0 && nr.height === 0 &&
+          typeof getComputedStyle === 'function' && getComputedStyle(n)?.display === 'contents'
+        if (isContents || (nr && x >= nr.left && x <= nr.right && y >= nr.top && y <= nr.bottom && nr.width < 2500 && nr.height < 2500)) {
+          const hit = findVisibleMediaIn(n, x, y)
+          if (hit) return hit
         }
       }
     }
@@ -384,15 +476,30 @@
 
   function mediaAtPoint(x, y) {
     const list = document.elementsFromPoint?.(x, y) || []
+    if (list.length > 0 && isInteractiveOrTextTarget(list[0])) return null
     for (const el of list) {
-      if (isInteractiveOrTextTarget(el)) return null
+      if (isInteractiveOrTextTarget(el)) continue
       if (mediaVisibleAt(el, x, y)) return el
-      const v = el.querySelector?.('video')
-      if (v && mediaVisibleAt(v, x, y)) return v
-      const im = el.querySelector?.('img')
-      if (im && mediaVisibleAt(im, x, y)) return im
+      if (el !== document.body && el !== document.documentElement) {
+        const nr = el.getBoundingClientRect?.()
+        if (nr && nr.width < 2500 && nr.height < 2500) {
+          const hit = findVisibleMediaIn(el, x, y)
+          if (hit) return hit
+        }
+      }
     }
-    return null
+    /* 安全几何兜底扫描（兼容花瓣等 Shadow/槽位覆盖层或 pointer-events:none 图片） */
+    let best = null
+    let bestArea = 0
+    const all = [...(document.querySelectorAll?.('video') || []), ...(document.images || [])]
+    for (const el of all) {
+      if (isInteractiveOrTextTarget(el)) continue
+      if (!mediaVisibleAt(el, x, y)) continue
+      const r = el.getBoundingClientRect()
+      const area = r.width * r.height
+      if (area > bestArea) { bestArea = area; best = el }
+    }
+    return best
   }
   function panelAtPoint(x, y) {
     const p = session?.panel
@@ -773,7 +880,7 @@
   }
 
   function findPinUrl(el) {
-    if (!el) return ''
+    if (!el || !isPinterestSite()) return ''
 
     // 1. 优先检查当前节点或其直系祖先是否明确属于单个推荐卡片的 <a> 链接（只向上检索，严禁向下 querySelector 吞噬同级卡片）
     const pinA = el.closest?.('a[href*="/pin/"]')
@@ -820,6 +927,25 @@
     }
 
     return ''
+  }
+
+  function findHuabanPinUrl(el) {
+    if (!isHuabanSite()) return ''
+    try {
+      const pinA = el?.closest?.('a[href*="/pins/"]')
+      if (pinA) {
+        const m = (pinA.getAttribute('href') || pinA.href || '').match(/\/pins\/(\d+)/)
+        if (m) return 'https://huaban.com/pins/' + m[1]
+      }
+      const pinCard = el?.closest?.('[data-pin-id]')
+      if (pinCard) {
+        const pId = pinCard.getAttribute?.('data-pin-id')
+        if (pId && /^\d+$/.test(pId)) return 'https://huaban.com/pins/' + pId
+      }
+      return (typeof location !== 'undefined' && location?.href) || ''
+    } catch {
+      return ''
+    }
   }
 
   function normalizePinterestVideoUrl(rawUrl) {
@@ -1235,23 +1361,29 @@
         const src = getMediaSrc(img)
         if (!src) { toast.error('没有图片地址'); return }
         const pinUrl = findPinUrl(img)
-        let finalSrc = src
-        if (isPinterestSite() && finalSrc.includes('pinimg.com')) {
-          finalSrc = finalSrc.replace(/\/(236x|474x|564x|736x)\//, '/originals/')
-        }
+        const huabanUrl = findHuabanPinUrl(img)
+        const pageUrl = isPinterestSite()
+          ? (pinUrl || (isVisualCloseup ? location.href : ''))
+          : isHuabanSite()
+            ? (huabanUrl || location.href)
+            : ((typeof location !== 'undefined' && location?.href) || '')
+        const plan = buildImageUpgradePlan(src, { origHref: findPixivOrigHref(img) })
         payload = {
-          url: pinUrl || (isVisualCloseup ? location.href : ''),
-          pinUrl: pinUrl || (isVisualCloseup ? location.href : ''),
+          url: pageUrl,
+          pinUrl: pinUrl || '',
           isVisualCloseup,
           title,
           kind: 'image',
         }
-        if (finalSrc.startsWith('data:')) payload.dataUrl = finalSrc
-        else if (finalSrc.startsWith('blob:')) {
-          const dataUrl = await blobToDataUrl(finalSrc)
+        if (plan.src.startsWith('data:')) payload.dataUrl = plan.src
+        else if (plan.src.startsWith('blob:')) {
+          const dataUrl = await blobToDataUrl(plan.src)
           if (!dataUrl) { toast.error('blob 读取失败'); return }
           payload.dataUrl = dataUrl
-        } else payload.src = finalSrc
+        } else {
+          payload.src = plan.src
+          payload.fallbackSrcs = plan.fallbackSrcs
+        }
       }
 
       if (!runtimeAlive()) {
@@ -1384,20 +1516,32 @@
     }
   }
   let lastContextMenuTarget = null
+  function buildCtxMediaInfo(media) {
+    const isVideo = media.tagName === 'VIDEO' || !!media.querySelector?.('video')
+    const vInfo = isVideo ? extractVideoInfo(media) : null
+    const pageUrl = isPinterestSite()
+      ? (vInfo?.pinUrl || findPinUrl(media) || '')
+      : isHuabanSite()
+        ? (findHuabanPinUrl(media) || (typeof location !== 'undefined' ? location.href : ''))
+        : (typeof location !== 'undefined' ? location.href : '')
+    return {
+      isVideo: !!isVideo,
+      src: vInfo?.src || getMediaSrc(media),
+      title: vInfo?.title || (media.getAttribute?.('title') || media.alt || media.title || document.title || '').trim(),
+      pinUrl: vInfo?.pinUrl || '',
+      pageUrl,
+      origHref: isVideo ? '' : findPixivOrigHref(media),
+      poster: vInfo?.poster || '',
+      dataUrl: vInfo?.frameDataUrl || '',
+    }
+  }
   function onCtx(e) {
     if (session && !inHost(e)) e.preventDefault()
     try {
       const media = mediaFromEvent(e) || mediaAtPoint(e.clientX, e.clientY) || (e.target?.closest ? e.target.closest('a')?.querySelector('img, video') : null)
       if (media) {
-        const isVideo = media.tagName === 'VIDEO' || !!media.querySelector?.('video')
-        let vInfo = isVideo ? extractVideoInfo(media) : null
         lastContextMenuTarget = {
-          isVideo: !!isVideo,
-          src: vInfo?.src || getMediaSrc(media),
-          title: vInfo?.title || (media.getAttribute?.('title') || media.alt || media.title || document.title || '').trim(),
-          pinUrl: vInfo?.pinUrl || '',
-          poster: vInfo?.poster || '',
-          dataUrl: vInfo?.frameDataUrl || '',
+          ...buildCtxMediaInfo(media),
           time: Date.now(),
         }
       }
@@ -1448,16 +1592,9 @@
           const a = links.find((el) => el.href === req.linkUrl || (pathname.length > 2 && el.href && el.href.includes(pathname)))
           const media = a?.querySelector('img, video') || a?.parentElement?.querySelector('img, video') || a?.closest('[data-test-id="pin"]')?.querySelector('img, video')
           if (media) {
-            const isVideo = media.tagName === 'VIDEO' || !!media.querySelector?.('video')
-            const vInfo = isVideo ? extractVideoInfo(media) : null
             sendResponse({
               ok: true,
-              isVideo: !!isVideo,
-              src: vInfo?.src || getMediaSrc(media),
-              title: vInfo?.title || (media.getAttribute?.('title') || media.alt || media.title || document.title || '').trim(),
-              pinUrl: vInfo?.pinUrl || '',
-              poster: vInfo?.poster || '',
-              dataUrl: vInfo?.frameDataUrl || '',
+              ...buildCtxMediaInfo(media),
             })
             return true
           }
@@ -1567,6 +1704,7 @@
     removeListeners()
     try { chrome.storage.onChanged.removeListener(onStorageChanged) } catch { /* 静默 */ }
     try { document.getElementById(HOST_ID)?.remove() } catch { /* 静默 */ }
+    try { delete window.__picnestCollectTestHooks } catch { /* 静默 */ }
   }
 
   /* 后台探测用：发一个私有事件，能收到就说明 document 监听器仍活着；
@@ -1580,6 +1718,13 @@
   installListeners()
   window.__picnestHoldCollectCleanup = cleanup
   window.__picnestHoldCollectHealth = health
+  window.__picnestCollectTestHooks = {
+    buildImageUpgradePlan,
+    findPinUrl,
+    findHuabanPinUrl,
+    mediaFromEvent,
+    mediaAtPoint,
+  }
   /* 只有监听器全部注册成功后才置 Loaded：部分初始化失败的页面可以被后台补注入修复 */
   window.__picnestHoldCollectLoaded = true
   window.__picnestHoldCollectVersion = VERSION

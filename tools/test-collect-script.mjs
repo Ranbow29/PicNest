@@ -44,16 +44,21 @@ class FakeTarget {
   count(type) { return (this.listeners.get(type) || []).length }
 }
 
-function createPage({ runtimeAlive = true } = {}) {
+function createPage({ runtimeAlive = true, locationHref = 'https://example.com/' } = {}) {
   const doc = new FakeTarget()
   const docEl = { style: {} }
   doc.documentElement = docEl
   doc.hidden = false
   doc.getElementById = () => null
+  doc.elementsFromPoint = () => []
+  doc.querySelectorAll = () => []
+  doc.images = []
 
   const win = new FakeTarget()
   win.__picnestHoldCollectLoaded = false
   win.__picnestHoldCollectVersion = ''
+  const parsedLoc = new URL(locationHref)
+  win.location = { href: parsedLoc.href, hostname: parsedLoc.hostname, pathname: parsedLoc.pathname }
 
   const storageChanged = new FakeTarget()
   const chrome = {
@@ -67,6 +72,9 @@ function createPage({ runtimeAlive = true } = {}) {
   const ctx = vm.createContext({
     window: win,
     document: doc,
+    location: win.location,
+    URL,
+    getComputedStyle: () => ({ display: 'block', visibility: 'visible', opacity: '1' }),
     chrome,
     Event: FakeEvent,
     setTimeout(fn, ms) { timers.timeouts.push({ fn, ms, cleared: false }); return timers.timeouts.length },
@@ -200,6 +208,123 @@ console.log('ok 版本一致：', manifest.version)
   page.dispatchProbe()
   assert.equal(page.probeTicks(), 1, '监听器还活着，但 runtime 已失效')
   console.log('ok 孤立脚本：alive=false 可被探测')
+}
+
+/* 9. 花瓣 / Pinterest / Pixiv 识别、原图升级计划、DOM 穿透与 cleanup */
+{
+  const page = createPage({ locationHref: 'https://huaban.com/discovery' })
+  page.run()
+  const hooks = page.win.__picnestCollectTestHooks
+  assert.ok(hooks, '已导出测试钩子')
+
+  // 9a. 花瓣发现页带 data-pin-id + display:contents + 同级遮罩层
+  const card = {
+    tagName: 'DIV',
+    attributes: { 'data-pin-id': '7058355788' },
+    getAttribute(k) { return this.attributes[k] || null },
+    getBoundingClientRect: () => ({ left: 0, top: 0, right: 278, bottom: 207, width: 278, height: 207 }),
+    querySelectorAll: () => [],
+    closest(sel) {
+      if (sel.includes('data-pin-id')) return this
+      return null
+    },
+  }
+  const contentsWrap = {
+    tagName: 'DIV',
+    parentElement: card,
+    getBoundingClientRect: () => ({ left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 }),
+    querySelectorAll(sel) {
+      if (sel === 'img') return [imgEl]
+      return []
+    },
+    closest(sel) { return card.closest(sel) },
+  }
+  const overlayEl = {
+    tagName: 'DIV',
+    parentElement: contentsWrap,
+    getBoundingClientRect: () => ({ left: 0, top: 0, right: 278, bottom: 207, width: 278, height: 207 }),
+    querySelectorAll: () => [],
+    closest(sel) { return contentsWrap.closest(sel) },
+  }
+  const imgEl = {
+    tagName: 'IMG',
+    naturalWidth: 240,
+    naturalHeight: 180,
+    parentElement: contentsWrap,
+    getBoundingClientRect: () => ({ left: 0, top: 0, right: 278, bottom: 207, width: 278, height: 207 }),
+    closest(sel) { return contentsWrap.closest(sel) },
+  }
+  page.ctx.getComputedStyle = (el) => {
+    if (el === contentsWrap) return { display: 'contents', visibility: 'visible', opacity: '1' }
+    return { display: 'block', visibility: 'visible', opacity: '1' }
+  }
+  assert.equal(hooks.findPinUrl(imgEl), '', '花瓣 data-pin-id 不得误判为 Pinterest URL')
+  assert.equal(hooks.findHuabanPinUrl(imgEl), 'https://huaban.com/pins/7058355788')
+  const hit = hooks.mediaFromEvent({
+    target: overlayEl,
+    clientX: 120,
+    clientY: 100,
+    composedPath: () => [overlayEl, contentsWrap, card],
+  })
+  assert.equal(hit, imgEl, 'display:contents 包装层可穿透命中同级卡片图片')
+
+  // 9b. 花瓣首页 new-home-header-active 祖先下的小图不被误判为头像
+  const narrowBannerImg = {
+    tagName: 'IMG',
+    naturalWidth: 226,
+    naturalHeight: 50,
+    getBoundingClientRect: () => ({ left: 24, top: 400, right: 250, bottom: 450, width: 226, height: 50 }),
+    closest(sel) {
+      // 模拟首页最外层仅含 header，不含 avatar/user-head
+      if (sel.includes('avatar') || sel.includes('user-head')) return null
+      return sel.includes('head') ? {} : null
+    },
+  }
+  page.doc.elementsFromPoint = () => [narrowBannerImg]
+  assert.equal(hooks.mediaAtPoint(100, 420), narrowBannerImg, 'header 类名不再误杀 <80px 素材图')
+
+  // 9c. 三大站高清原图升级与降级计划
+  const clone = (x) => JSON.parse(JSON.stringify(x))
+  const hbPlan = clone(hooks.buildImageUpgradePlan('https://gd-hbimg-edge.huaban.com/abc-123_fw240webp?auth_key=k1'))
+  assert.deepEqual(hbPlan, {
+    src: 'https://gd-hbimg-edge.huaban.com/abc-123?auth_key=k1',
+    fallbackSrcs: [
+      'https://gd-hbimg-edge.huaban.com/abc-123_fw1200webp?auth_key=k1',
+      'https://gd-hbimg-edge.huaban.com/abc-123_fw240webp?auth_key=k1',
+    ],
+  })
+  const hbSmallPlan = clone(hooks.buildImageUpgradePlan('https://gd-hbimg-edge.huaban.com/small/abc-123_fw240webp?auth_key=k2'))
+  assert.deepEqual(hbSmallPlan, {
+    src: 'https://gd-hbimg-edge.huaban.com/small/abc-123?auth_key=k2',
+    fallbackSrcs: ['https://gd-hbimg-edge.huaban.com/small/abc-123_fw240webp?auth_key=k2'],
+  })
+
+  const pinPlan = clone(hooks.buildImageUpgradePlan('https://i.pinimg.com/236x/ab/cd/ef.jpg'))
+  assert.deepEqual(pinPlan, {
+    src: 'https://i.pinimg.com/originals/ab/cd/ef.jpg',
+    fallbackSrcs: ['https://i.pinimg.com/236x/ab/cd/ef.jpg'],
+  })
+
+  const pxMasterPlan = clone(hooks.buildImageUpgradePlan('https://i.pximg.net/c/250x250_80_a2/img-master/img/2026/01/01/00/00/00/999_p0_square1200.jpg'))
+  assert.deepEqual(pxMasterPlan, {
+    src: 'https://i.pximg.net/img-original/img/2026/01/01/00/00/00/999_p0.png',
+    fallbackSrcs: [
+      'https://i.pximg.net/img-original/img/2026/01/01/00/00/00/999_p0.jpg',
+      'https://i.pximg.net/img-original/img/2026/01/01/00/00/00/999_p0.gif',
+      'https://i.pximg.net/img-master/img/2026/01/01/00/00/00/999_p0_master1200.jpg',
+      'https://i.pximg.net/c/250x250_80_a2/img-master/img/2026/01/01/00/00/00/999_p0_square1200.jpg',
+    ],
+  })
+  const pxOrigPlan = hooks.buildImageUpgradePlan(
+    'https://i.pximg.net/img-master/img/2026/01/01/00/00/00/999_p0_master1200.jpg',
+    { origHref: 'https://i.pximg.net/img-original/img/2026/01/01/00/00/00/999_p0.jpg' }
+  )
+  assert.equal(pxOrigPlan.src, 'https://i.pximg.net/img-original/img/2026/01/01/00/00/00/999_p0.jpg')
+
+  // 9d. cleanup 清理测试钩子
+  page.win.__picnestHoldCollectCleanup()
+  assert.equal(page.win.__picnestCollectTestHooks, undefined)
+  console.log('ok 花瓣 DOM 穿透 + 三大站原图升级计划 + cleanup 钩子清理')
 }
 
 console.log('\n全部通过')

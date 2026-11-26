@@ -28,7 +28,7 @@ chrome.runtime.onInstalled.addListener(setupMenus)
    - 更老的脚本（无 cleanup）/ 扩展更新后失去 runtime 的孤立脚本 / document 监听器失效
      → 只在 Pinterest 标签自动刷新一次（chrome.storage.session 记标记防循环），其它站点走 popup「修复本页」。
    content.js 在监听器全部注册完成之后才置 Loaded，并提供健康事件，部分初始化也能被发现。 */
-const CONTENT_VERSION = '0.3.2'
+const CONTENT_VERSION = '0.3.3'
 const RELOAD_KEY = 'picnestCollectReloads'
 const INJECTABLE_RE = /^(https?|file):\/\//i
 const PINTEREST_HOST_RE = /(^|\.)pinterest\.[a-z.]+$/i
@@ -42,6 +42,62 @@ function isPinterestUrl(url) {
   try { return PINTEREST_HOST_RE.test(new URL(url).hostname) } catch { return false }
 }
 var isPinterest = isPinterestUrl
+function buildImageUpgradePlan(rawSrc, ctx = {}) {
+  const src = typeof rawSrc === 'string' ? rawSrc.trim() : ''
+  if (!src || !/^https?:\/\//i.test(src)) {
+    return { src, fallbackSrcs: [] }
+  }
+  let u = null
+  try {
+    u = new URL(src)
+  } catch {
+    return { src, fallbackSrcs: [] }
+  }
+  const host = u.hostname.toLowerCase()
+  const cands = []
+  const push = (val) => {
+    if (val && typeof val === 'string' && !cands.includes(val)) cands.push(val)
+  }
+
+  if (/(^|\.)(huaban\.com|huabanimg\.com)$/i.test(host)) {
+    const mA = u.pathname.match(/(_(?:fw|sq)\d+[a-z0-9]*)$/i)
+    if (mA) {
+      const suffix = mA[1]
+      const basePath = u.pathname.slice(0, -suffix.length)
+      if (basePath) {
+        push(u.origin + basePath + u.search)
+        if (!basePath.startsWith('/small/') && !/^_fw1200webp$/i.test(suffix)) {
+          push(u.origin + basePath + '_fw1200webp' + u.search)
+        }
+      }
+    } else {
+      const mB = u.pathname.match(/(\/fw\/\d+(?:\/format\/[a-z0-9]+)?)$/i)
+      if (mB) {
+        const basePath = u.pathname.slice(0, -mB[1].length)
+        if (basePath) push(u.origin + basePath + u.search)
+      }
+    }
+  } else if (/(^|\.)pinimg\.com$/i.test(host)) {
+    const upgraded = src.replace(/\/(236x|474x|564x|736x)\//, '/originals/')
+    if (upgraded !== src) push(upgraded)
+  } else if (/(^|\.)pximg\.net$/i.test(host)) {
+    const origHref = typeof ctx.origHref === 'string' ? ctx.origHref.trim() : ''
+    if (/^https?:\/\/i\.pximg\.net\/img-original\//i.test(origHref)) {
+      push(origHref)
+    }
+    const mPx = src.match(/^https?:\/\/i\.pximg\.net\/(?:c\/[^/]+\/)?(?:img-master|custom-thumb)\/(img\/\d{4}\/\d{2}\/\d{2}\/\d{2}\/\d{2}\/\d{2}\/\d+_p\d+)_(?:master|square|custom)1200\.(?:jpg|jpeg|png|webp)(\?.*)?$/i)
+    if (mPx) {
+      const pathPart = mPx[1]
+      push(`https://i.pximg.net/img-original/${pathPart}.png`)
+      push(`https://i.pximg.net/img-original/${pathPart}.jpg`)
+      push(`https://i.pximg.net/img-original/${pathPart}.gif`)
+      push(`https://i.pximg.net/img-master/${pathPart}_master1200.jpg`)
+    }
+  }
+
+  push(src)
+  return { src: cands[0] || src, fallbackSrcs: cands.slice(1) }
+}
 function probeCurrent(p) {
   return !!p && p.loaded === true && p.alive === true && p.healthy === true &&
     p.version === CONTENT_VERSION
@@ -589,6 +645,8 @@ async function saveImage(info, tab, toast) {
   let title = tab?.title || ''
   let isVideo = info.mediaType === 'video' || /\.(mp4|webm|mov|mkv|avi|flv|f4v)(\?.*)?$/i.test(src)
   let pinUrl = ''
+  let pageUrl = ''
+  let origHref = ''
   let poster = ''
   let dataUrl = ''
 
@@ -606,6 +664,8 @@ async function saveImage(info, tab, toast) {
           if (res.title) title = res.title
           if (res.isVideo) isVideo = true
           if (res.pinUrl) pinUrl = res.pinUrl
+          if (res.pageUrl) pageUrl = res.pageUrl
+          if (res.origHref) origHref = res.origHref
           if (res.poster) poster = res.poster
           if (res.dataUrl) dataUrl = res.dataUrl
         }
@@ -649,6 +709,7 @@ async function saveImage(info, tab, toast) {
     } catch { /* 静默 */ }
   }
 
+  let fallbackSrcs = []
   const isExplicitVideo = isVideo || (src && (src.includes('/videos/') || src.startsWith('blob:') || src.includes('.m3u8') || /\.mp4(\?.*)?$/i.test(src)))
   if (isExplicitVideo) {
     toast?.updateStatus('正在解析视频原片…')
@@ -663,8 +724,10 @@ async function saveImage(info, tab, toast) {
       src = res.src
       isVideo = true
     }
-  } else if (isPinterestUrl(tab?.url) && src && src.includes('pinimg.com')) {
-    src = src.replace(/\/(236x|474x|564x|736x)\//, '/originals/')
+  } else if (src && /^https?:\/\//i.test(src)) {
+    const plan = buildImageUpgradePlan(src, { origHref })
+    src = plan.src
+    fallbackSrcs = plan.fallbackSrcs
   }
 
   if (!src && !dataUrl) throw new Error(isVideo ? '未能解析视频地址' : '未能识别图片地址')
@@ -713,6 +776,7 @@ async function saveImage(info, tab, toast) {
     payload = {
       kind: isVideo ? 'video' : 'image',
       src,
+      fallbackSrcs,
       poster: poster || dataUrl,
       dataUrl: isVideo ? '' : dataUrl,
     }
@@ -723,7 +787,7 @@ async function saveImage(info, tab, toast) {
   const r = await api('/api/v1/save', {
     kind: isVideo ? 'video' : 'image',
     title,
-    url: pinUrl || info.pageUrl || tab?.url || '',
+    url: pinUrl || pageUrl || info.pageUrl || tab?.url || '',
     ...payload,
     ...t,
   })
@@ -890,9 +954,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           }
         }
 
+        let fallbackSrcs = Array.isArray(msg.fallbackSrcs) ? msg.fallbackSrcs : []
+        if (!isExplicitVideo && kind === 'image' && src && /^https?:\/\//i.test(src) && fallbackSrcs.length === 0) {
+          const plan = buildImageUpgradePlan(src)
+          src = plan.src
+          fallbackSrcs = plan.fallbackSrcs
+        }
+
         const body = {
           kind,
           src: src.startsWith('blob:') ? '' : src,
+          fallbackSrcs,
           poster,
           dataUrl,
           url: msg.url,

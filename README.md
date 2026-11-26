@@ -12,7 +12,7 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue.svg" alt="License: GPL-3.0"></a>
   <img src="https://img.shields.io/badge/platform-Windows%2010%2F11%20x64-brightgreen.svg" alt="Platform">
-  <img src="https://img.shields.io/badge/version-v1.1.0-orange.svg" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.1.1-orange.svg" alt="Version">
   <img src="https://img.shields.io/badge/rust-1.80%2B-dea584.svg" alt="Rust">
   <img src="https://img.shields.io/badge/tauri-v2-24c8db.svg" alt="Tauri v2">
   <img src="https://img.shields.io/badge/vue-3.5-brightgreen.svg" alt="Vue">
@@ -63,11 +63,11 @@
 - **Renderer 插件**：单文件 HTML 沙箱隔离（无 Node 越权风险），通过 postMessage 安全接口读取当前库只读数据，轻松写出色卡面板、番茄钟、参考画板。
 - **插件管理库**：应用内自带插件库，支持直接从文件夹加载或从社区 Registry ZIP 安装/启停/卸载。
 
-### 🌐 自研浏览器采集扩展 (MV3 Extension v0.1.6)
-- 支持 Edge 与 Chrome（开发者模式一键加载，便携包内已自带）。
+### 🌐 自研浏览器采集扩展 (MV3 Extension v0.3.3)
+- 支持 Edge 与 Chrome（开发者模式一键加载，便携包与 Release 资产均已提供）。
 - **本地安全握手**：采用 32 位随机密钥 `X-PicNest-Token` 鉴权，仅授权扩展可接入本地 `127.0.0.1:41600` 接口。
 - **按住采集手势**：网页图片上按住 0.4 秒弹出环形分类面板，支持拖拽保存到指定文件夹或库根，支持覆盖/跳过查重。
-- **站点适配**：内置遮罩层坐标扫描与链接祖先穿透提取，原生适配 Pinterest 右键收集与各类现代瀑布流站点；图片由主进程下载并自动附带页面 Referer 防盗链头。
+- **三大站无损原图与自动降级**：内置遮罩层与 `display: contents` 坐标穿透，原生适配 **花瓣（自动剥离缩略图后缀直取无损原图 + 正确 Referer 防 `567`）**、**Pinterest（自动升级 `/originals/` 与视频直链提取）**、**Pixiv（自动提取或推导 `img-original` 原图并附带回退保险链）**。
 
 > #### 💡 浏览器采集扩展极速上手指南（画师专属保姆级教程）
 > 
@@ -92,9 +92,9 @@
 > 
 > **⚠️ 画师常见避坑与站点技巧**：
 > - ❗ **请保持 PicNest 软件在后台运行**：扩展通过本地安全通道（`127.0.0.1:41600`）将图片交给软件下载；若软件未启动，扩展会提示“未连接”。
-> - ❗ **Pinterest 卡片采集**：v0.1.6 已全面适配 Pinterest 卡片遮罩层，可直接在瀑布流卡片上点右键「保存图片到图巢」或按住 0.4 秒唤出面板。
-> - ❗ **花瓣网（huaban.com）采集技巧**：花瓣网前端脚本拦截了浏览器原生右键并替换为自定义站内菜单，采集时请按住 **`Shift + 鼠标右键`** 强行穿透唤出系统原生菜单点击「保存图片到图巢」，或直接 **左键按住图片 0.4 秒** 唤出图巢长按面板（不受右键拦截影响）。
-> - ❗ **安装/更新扩展后，旧页面提示失效时**：v0.1.6 会自动探测并优先原地重建采集监听；若旧页面无响应，点扩展弹窗顶部的「修复本页」或刷新一次页面即可。
+> - ❗ **Pinterest / Pixiv 卡片采集**：v0.3.3 已全面适配卡片遮罩层与原图推导，可直接在瀑布流卡片上右键「保存图片到图巢」或按住 0.4 秒唤出面板。
+> - ❗ **花瓣网（huaban.com）采集技巧**：v0.3.3 已全面修复花瓣发现页与详情页采集（支持直接按住左键 0.4 秒穿透遮罩并自动升级无损原图）；若使用右键菜单，因花瓣前端拦截了原生右键，请按住 **`Shift + 鼠标右键`** 穿透唤出系统菜单点击「保存至图巢」。
+> - ❗ **安装/更新扩展后，旧页面提示失效时**：扩展会自动探测并优先原地重建采集监听；若旧页面无响应，点扩展弹窗顶部的「修复本页」或刷新一次页面即可。
 > - ❗ **遇到相同图片会自动提示**：扩展内置查重，若图库已有此图，按住面板会弹出提醒，可自由选择【跳过】、【覆盖旧图】或【仍然保存】。
 
 ### 🦅 Eagle 库无损物化迁移向导
@@ -111,7 +111,7 @@
 PicNest 是专为创作者打造的绿色便携软件：
 
 1. 前往 [Releases 页面](https://github.com/Ranbow29/PicNest/releases) 下载最新的便携包：  
-   `PicNest-v1.1.0-windows-x64-portable.zip`
+   `PicNest-v1.1.1-windows-x64-portable.zip`
 2. 解压到你的电脑任意目录（如 `D:\PicNest`）。
 3. 双击运行 `PicNest.exe`，点击左侧添加你的本地图片文件夹，即刻开启极致看图体验！
 4. **一键热更新**：软件自带静默检测与帮助窗「检查新版本」入口，支持自动下载 GitHub Release 并完成 **SHA-256 校验与免安装热替换**（全自动保留你的本地配置与用户数据）。
@@ -200,7 +200,7 @@ powershell "$env:PICNEST_DEV='1'; Start-Process 'app\PicNest.exe' -ArgumentList 
 ### 浏览器采集扩展
 
 `edge://extensions` / `chrome://extensions` 打开开发者模式 → 「加载解压缩的扩展」→ 选择 `extension/`。
-当前扩展版本 **0.1.6**；已接入 `X-PicNest-Token` 本地鉴权、弹窗配对与一键解绑，支持 Pinterest 链接遮罩层右键采集。v0.1.5+ 会自动探测页面里的旧脚本/失效监听器：优先 cleanup + 原地重建，无 cleanup 的极旧脚本只在 Pinterest 页自动刷新一次；content script 每 2.5s 自检，页面清掉监听器也能自愈。扩展面板顶部可查看「本页采集」状态并点「修复本页」。回归测试：`npm run test:extension` / `npm run test:extension:e2e`。
+当前扩展版本 **0.3.3**；已接入 `X-PicNest-Token` 本地鉴权、弹窗配对与一键解绑，支持 **花瓣网（无损原图 + EdgeOne Referer 修复 + DOM 穿透）**、**Pinterest（链接遮罩层右键穿透 + `/originals/` 原图与 MP4 视频解析）**、**Pixiv（`img-original` 多扩展名推导）** 的原图升级与自动降级兜底链。扩展会自动探测页面里的旧脚本/失效监听器：优先 cleanup + 原地重建，无 cleanup 的极旧脚本只在 Pinterest 页自动刷新一次；content script 每 2.5s 自检，页面清掉监听器也能自愈。扩展面板顶部可查看「本页采集」状态并点「修复本页」。回归测试：`npm run test:extension` / `npm run test:extension:e2e`。
 
 ---
 

@@ -1,6 +1,6 @@
 {
   "name": "picnest-workspace",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "PicNest 图巢 - 本地素材管理中心",
   "private": true,
   "type": "module",

@@ -25,9 +25,78 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use trash_ops::*;
 use std::sync::{Arc, Mutex};
 
+#[cfg(windows)]
+fn apply_win32_window_icons(win: &tauri::WebviewWindow) {
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn GetSystemMetrics(nIndex: i32) -> i32;
+        fn LoadImageW(
+            hInst: isize,
+            name: *const u16,
+            r#type: u32,
+            cx: i32,
+            cy: i32,
+            fuLoad: u32,
+        ) -> isize;
+        fn SendMessageW(hwnd: isize, msg: u32, wparam: usize, lparam: isize) -> isize;
+        #[cfg(target_pointer_width = "64")]
+        fn SetClassLongPtrW(hwnd: isize, nIndex: i32, dwNewLong: isize) -> isize;
+        #[cfg(target_pointer_width = "32")]
+        #[link_name = "SetClassLongW"]
+        fn SetClassLongPtrW(hwnd: isize, nIndex: i32, dwNewLong: isize) -> isize;
+    }
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetModuleHandleW(lpModuleName: *const u16) -> isize;
+    }
+
+    const IMAGE_ICON: u32 = 1;
+    const LR_DEFAULTSIZE: u32 = 0x0040;
+    const LR_SHARED: u32 = 0x8000;
+    const SM_CXSMICON: i32 = 49;
+    const SM_CYSMICON: i32 = 50;
+    const WM_SETICON: u32 = 0x0080;
+    const ICON_SMALL: usize = 0;
+    const ICON_BIG: usize = 1;
+    const GCLP_HICON: i32 = -14;
+    const GCLP_HICONSM: i32 = -34;
+    const IDI_APP_ICON: usize = 32512;
+
+    let Ok(hwnd_val) = win.hwnd() else { return };
+    let hwnd = hwnd_val.0 as isize;
+    if hwnd == 0 {
+        return;
+    }
+
+    unsafe {
+        let hinst = GetModuleHandleW(std::ptr::null());
+        if hinst == 0 {
+            return;
+        }
+        let res_id = IDI_APP_ICON as *const u16;
+        let big_icon = LoadImageW(hinst, res_id, IMAGE_ICON, 0, 0, LR_DEFAULTSIZE | LR_SHARED);
+        let sm_w = GetSystemMetrics(SM_CXSMICON).max(16);
+        let sm_h = GetSystemMetrics(SM_CYSMICON).max(16);
+        let small_icon = LoadImageW(hinst, res_id, IMAGE_ICON, sm_w, sm_h, LR_SHARED);
+
+        if big_icon != 0 {
+            SetClassLongPtrW(hwnd, GCLP_HICON, big_icon);
+            SendMessageW(hwnd, WM_SETICON, ICON_BIG, big_icon);
+        }
+        if small_icon != 0 {
+            SetClassLongPtrW(hwnd, GCLP_HICONSM, small_icon);
+            SendMessageW(hwnd, WM_SETICON, ICON_SMALL, small_icon);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn apply_win32_window_icons(_win: &tauri::WebviewWindow) {}
+
 /// 托盘点击 / “打开窗口”菜单项共用：显示、恢复并聚焦主窗。
 fn show_main(app: &tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
+        apply_win32_window_icons(&w);
         let _ = w.show();
         let _ = w.unminimize();
         let _ = w.set_focus();
@@ -262,6 +331,9 @@ pub fn run() {
             }
             media_server::diag_push(&format!("webview args: {}", args));
             let win = builder.build()?;
+            apply_win32_window_icons(&win);
+            let win_for_icon = win.clone();
+            let _ = app.run_on_main_thread(move || apply_win32_window_icons(&win_for_icon));
 
             // —— 系统托盘 ——
             // 关窗只隐藏进托盘；托盘左键唤回窗口，右键菜单里“退出”才是真退。
@@ -294,9 +366,15 @@ pub fn run() {
             // （updater 的安装重启走 handle.exit(0)，不经过这里，不受影响）
             let win_for_close = win.clone();
             win.on_window_event(move |event| {
-                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                    api.prevent_close();
-                    let _ = win_for_close.hide();
+                match event {
+                    tauri::WindowEvent::CloseRequested { api, .. } => {
+                        api.prevent_close();
+                        let _ = win_for_close.hide();
+                    }
+                    tauri::WindowEvent::Focused(true) => {
+                        apply_win32_window_icons(&win_for_close);
+                    }
+                    _ => {}
                 }
             });
 

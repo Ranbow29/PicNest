@@ -290,23 +290,57 @@ export const useLibrary = defineStore('library', {
         /* 文件系统监听：库内目录有新增/删除/改名时自动同步。
            以前只在「切进目录 1.2 秒后」扫一次，停在目录里丢图不会自己更新。
            现在交给 Rust 侧的 ReadDirectoryChangesW（不轮询、不读文件内容）。 */
-        // 防抖后的真实同步（事件合并到 350ms 窗口后只跑一次）
+        // 防抖后的真实同步（事件合并到 150ms 窗口后只跑一次）
+        const findRelInTree = (node, targetRel) => {
+          if (!node || !targetRel) return null
+          const targetLow = String(targetRel).toLowerCase()
+          const stack = [node]
+          while (stack.length) {
+            const curNode = stack.pop()
+            if (curNode.rel && String(curNode.rel).toLowerCase() === targetLow) {
+              return curNode.rel
+            }
+            if (Array.isArray(curNode.children)) {
+              for (const child of curNode.children) stack.push(child)
+            }
+          }
+          return null
+        }
         const runFsSync = async () => {
           if (this._fsSyncing) {
-            this._fsSyncTimer = setTimeout(runFsSync, 200)
+            this._fsSyncTimer = setTimeout(runFsSync, 150)
             return
           }
+          const needReload = !!this._fsNeedReloadImages
+          this._fsNeedReloadImages = false
           this._fsSyncing = true
           try {
-            const cur = this.currentDirRel || ''
-            const abs = this.absPathOf(cur)
-            if (!abs) return
-            // 事件本身就是「磁盘变了」的信号。删除已经由 Rust 侧 watcher 直接软删（所以
-            // syncDirSnapshot 可能返回 false），不能再拿返回值二次判断是否刷新。
-            await api.syncDirSnapshot(this.activeRootId, abs)
             try { this._listCache?.clear() } catch {}
             await this.refreshTree()
-            await this.loadImages()
+            const cur = this.currentDirRel
+            if (cur) {
+              const matched = findRelInTree(this.tree?.tree, cur)
+              if (!matched) {
+                // 当前正在浏览的文件夹被外部删除/重命名/移走 → 自动退回最近的现存父目录或库根
+                const parts = cur.split('/')
+                let fallbackRel = null
+                for (let i = parts.length - 1; i >= 1; i--) {
+                  const cand = parts.slice(0, i).join('/')
+                  const hit = findRelInTree(this.tree?.tree, cand)
+                  if (hit) { fallbackRel = hit; break }
+                }
+                await this.openDir(fallbackRel)
+                return
+              }
+            }
+            if (needReload) {
+              const curRel = this.currentDirRel || ''
+              const abs = this.absPathOf(curRel)
+              if (abs) {
+                await api.syncDirSnapshot(this.activeRootId, abs).catch(() => {})
+              }
+              await this.loadImages()
+            }
           } catch { /* 静默 */ } finally {
             this._fsSyncing = false
             try { this._fsPendingDirs?.clear() } catch {}
@@ -329,18 +363,16 @@ export const useLibrary = defineStore('library', {
               else if (dn.startsWith(rn + '/')) rels.push(dn.slice(rn.length + 1))
             }
             if (!rels.length) return
-            const cur = this.currentDirRel || ''
-            const affected = rels.some(
-              (r) => r === cur || (cur && cur.startsWith(r + '/')) || (r && r.startsWith(cur + '/')),
-            )
-            if (!affected) return
-            /* 2026-11-15：事件防抖。批量导入/批量改名会打出一串 Create/Remove，
-               每条都跑一遍 sync + refreshTree(3 次 IPC) + loadImages(全量) 的话，
-               就是「用一阵子就卡一下」的来源。合并到 350ms 窗口，只跑最后一次。 */
+            const cur = String(this.currentDirRel || '').toLowerCase()
+            const affected = (this.view === 'all' && !cur) ||
+              (this.view === 'uncategorized' && rels.includes('')) ||
+              rels.some((r) => r === cur || (cur && cur.startsWith(r + '/')) || (r && r.startsWith(cur + '/')))
+            if (affected) this._fsNeedReloadImages = true
+            /* 只要变动落在当前库内，总是触发防抖同步刷新目录树与计数；仅按需决定是否重载主网格 */
             if (!this._fsPendingDirs) this._fsPendingDirs = new Set()
             for (const r of rels) this._fsPendingDirs.add(r)
             if (this._fsSyncTimer) clearTimeout(this._fsSyncTimer)
-            this._fsSyncTimer = setTimeout(() => runFsSync(), 350)
+            this._fsSyncTimer = setTimeout(() => runFsSync(), 150)
           })
         } catch { /* 监听失败不影响主流程 */ }
         if (this.roots.length && this.activeRootId == null) {

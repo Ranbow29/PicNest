@@ -240,8 +240,98 @@ fn parse_data_url(u: &str) -> Result<(Vec<u8>, String), String> {
     Ok((bytes, content_type))
 }
 
-fn download_media_curl(src: &str, referer: &str) -> Result<(Vec<u8>, String), String> {
-    download_media_curl_limited(src, referer, 500 * 1024 * 1024, false)
+fn is_domain_or_sub(host: &str, domain: &str) -> bool {
+    host == domain || host.ends_with(&format!(".{}", domain))
+}
+
+pub(crate) fn resolve_download_referer(target: &url::Url, referer: &str) -> String {
+    let clean_referer: String = referer
+        .trim()
+        .chars()
+        .filter(|c| !c.is_control())
+        .collect();
+    let target_host = target.host_str().unwrap_or("").to_ascii_lowercase();
+    let ref_host = url::Url::parse(&clean_referer)
+        .ok()
+        .and_then(|u| u.host_str().map(|h| h.to_ascii_lowercase()));
+
+    if is_domain_or_sub(&target_host, "pinimg.com") {
+        return "https://www.pinterest.com/".to_string();
+    }
+    if is_domain_or_sub(&target_host, "pximg.net") {
+        if let Some(rh) = ref_host.as_deref() {
+            if is_domain_or_sub(rh, "pixiv.net") {
+                return clean_referer;
+            }
+        }
+        return "https://www.pixiv.net/".to_string();
+    }
+    if is_domain_or_sub(&target_host, "huaban.com") || is_domain_or_sub(&target_host, "huabanimg.com") {
+        // gd-hbimg-edge.huaban.com 等图床子域绝不可作为 Referer，否则触发 EdgeOne HTTP 567
+        if matches!(ref_host.as_deref(), Some("huaban.com" | "www.huaban.com")) {
+            return clean_referer;
+        }
+        return "https://huaban.com/".to_string();
+    }
+
+    clean_referer
+}
+
+fn download_media_with_fallbacks(
+    primary: &str,
+    fallbacks: &[String],
+    referer: &str,
+) -> Result<(Vec<u8>, String, String), String> {
+    download_media_with_fallbacks_limited_with_proxy(
+        primary,
+        fallbacks,
+        referer,
+        500 * 1024 * 1024,
+        false,
+        crate::security::detect_curl_proxy(),
+    )
+}
+
+pub(crate) fn download_media_with_fallbacks_limited_with_proxy(
+    primary: &str,
+    fallbacks: &[String],
+    referer: &str,
+    max_bytes: usize,
+    allow_loopback_test: bool,
+    proxy: Option<String>,
+) -> Result<(Vec<u8>, String, String), String> {
+    let mut candidates: Vec<String> = Vec::new();
+    for cand in std::iter::once(primary).chain(fallbacks.iter().map(String::as_str)) {
+        let trimmed = cand.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if !candidates.iter().any(|existing| existing == trimmed) {
+            candidates.push(trimmed.to_string());
+        }
+        if candidates.len() >= 6 {
+            break;
+        }
+    }
+    if candidates.is_empty() {
+        return Err("缺少有效下载地址".to_string());
+    }
+    let mut last_err = None;
+    for url in candidates {
+        match download_media_curl_limited_with_proxy(
+            &url,
+            referer,
+            max_bytes,
+            allow_loopback_test,
+            proxy.clone(),
+        ) {
+            Ok((bytes, content_type)) => return Ok((bytes, content_type, url)),
+            Err(err) => {
+                last_err = Some(err);
+            }
+        }
+    }
+    Err(last_err.unwrap_or_else(|| "下载采集资源失败".to_string()))
 }
 
 pub(crate) fn download_media_curl_limited(
@@ -273,19 +363,7 @@ fn download_media_curl_limited_with_proxy(
     let hdr_path = temp_root.join("headers.tmp");
     let body_path = temp_root.join("body.tmp");
 
-    let is_pin = current.as_str().to_ascii_lowercase().contains("pinimg.com");
-    let clean_referer: String = referer
-        .trim()
-        .chars()
-        .filter(|c| !c.is_control())
-        .collect();
-    let ref_header = if is_pin {
-        "https://www.pinterest.com/".to_string()
-    } else if !clean_referer.is_empty() {
-        clean_referer
-    } else {
-        format!("{}/", current.origin().ascii_serialization())
-    };
+    let ref_header = resolve_download_referer(&current, referer);
 
     let mut content_type = String::new();
     for _ in 0..6 {
@@ -362,7 +440,7 @@ fn download_media_curl_limited_with_proxy(
             continue;
         }
         if !(200..300).contains(&status) {
-            return Err("远程服务器返回非 200 响应".to_string());
+            return Err(format!("远程服务器返回 HTTP {}", status));
         }
 
         let file = File::open(&body_path).map_err(|e| format!("读取临时文件失败: {}", e))?;
@@ -634,6 +712,17 @@ pub(crate) fn save_one_item_direct(
         .and_then(|v| v.as_str())
         .unwrap_or("image");
     let src = item.get("src").and_then(|v| v.as_str()).unwrap_or("");
+    let fallback_srcs: Vec<String> = item
+        .get("fallbackSrcs")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::trim))
+                .filter(|s| !s.is_empty())
+                .map(ToString::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
     let data_url = item.get("dataUrl").and_then(|v| v.as_str()).unwrap_or("");
     let title = item.get("title").and_then(|v| v.as_str()).unwrap_or("");
     let url = item.get("url").and_then(|v| v.as_str()).unwrap_or("");
@@ -652,23 +741,30 @@ pub(crate) fn save_one_item_direct(
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
-    let (buf, content_type): (Vec<u8>, String);
+    let (buf, content_type, matched_src): (Vec<u8>, String, String);
 
     if kind == "page" || kind == "screenshot" || (!data_url.is_empty() && src.is_empty()) {
         let (d_buf, d_ct) = parse_data_url(data_url)?;
         buf = d_buf;
         content_type = d_ct;
+        matched_src = String::new();
     } else if !src.is_empty() {
-        match download_media_curl(src, if referer.is_empty() { url } else { referer }) {
-            Ok((d_buf, d_ct)) => {
+        match download_media_with_fallbacks(
+            src,
+            &fallback_srcs,
+            if referer.is_empty() { url } else { referer },
+        ) {
+            Ok((d_buf, d_ct, used_url)) => {
                 buf = d_buf;
                 content_type = d_ct;
+                matched_src = used_url;
             }
             Err(e) => {
                 if !data_url.is_empty() {
                     let (d_buf, d_ct) = parse_data_url(data_url)?;
                     buf = d_buf;
                     content_type = d_ct;
+                    matched_src = String::new();
                 } else {
                     return Err(format!("下载采集资源失败: {}", e));
                 }
@@ -678,6 +774,7 @@ pub(crate) fn save_one_item_direct(
         let (d_buf, d_ct) = parse_data_url(data_url)?;
         buf = d_buf;
         content_type = d_ct;
+        matched_src = String::new();
     } else {
         return Err("缺少待采集的数据源 (src 或 dataUrl)".to_string());
     }
@@ -704,7 +801,14 @@ pub(crate) fn save_one_item_direct(
         }));
     }
 
-    let ext = guess_ext(&content_type, if src.is_empty() { data_url } else { src });
+    let ext_hint = if !matched_src.is_empty() {
+        matched_src.as_str()
+    } else if !src.is_empty() {
+        src
+    } else {
+        data_url
+    };
+    let ext = guess_ext(&content_type, ext_hint);
     let fallback_name = if kind == "video" {
         "采集视频"
     } else if kind == "page" || kind == "screenshot" {
@@ -1735,6 +1839,88 @@ mod tests {
         assert!(!root.join("fault.txt").exists());
         assert!(!std::fs::read_dir(&root).unwrap().any(|entry| entry.unwrap().file_name().to_string_lossy().starts_with(".picnest-part-")));
         assert_eq!(conn.query_row("SELECT COUNT(*) FROM picnest_operations", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
+    }
+
+    #[test]
+    fn resolve_download_referer_normalizes_huaban_pixiv_pinterest_and_generic() {
+        let hb_img = url::Url::parse("https://gd-hbimg-edge.huaban.com/abc_fw240webp?auth_key=1").unwrap();
+        assert_eq!(resolve_download_referer(&hb_img, ""), "https://huaban.com/");
+        assert_eq!(
+            resolve_download_referer(&hb_img, "https://www.pinterest.com/pin/7058355788/"),
+            "https://huaban.com/"
+        );
+        assert_eq!(
+            resolve_download_referer(&hb_img, "https://gd-hbimg-edge.huaban.com/"),
+            "https://huaban.com/"
+        );
+        assert_eq!(
+            resolve_download_referer(&hb_img, "https://huaban.com/pins/7274155613"),
+            "https://huaban.com/pins/7274155613"
+        );
+        assert_eq!(
+            resolve_download_referer(&hb_img, "https://www.huaban.com/discovery"),
+            "https://www.huaban.com/discovery"
+        );
+
+        let px_img = url::Url::parse("https://i.pximg.net/img-original/img/2026/01/01/00/00/00/123_p0.png").unwrap();
+        assert_eq!(resolve_download_referer(&px_img, ""), "https://www.pixiv.net/");
+        assert_eq!(
+            resolve_download_referer(&px_img, "https://www.pixiv.net/artworks/123"),
+            "https://www.pixiv.net/artworks/123"
+        );
+
+        let pin_img = url::Url::parse("https://i.pinimg.com/originals/ab/cd/ef.jpg").unwrap();
+        assert_eq!(
+            resolve_download_referer(&pin_img, "https://example.com/"),
+            "https://www.pinterest.com/"
+        );
+
+        let generic = url::Url::parse("https://cdn.example.com/a.jpg").unwrap();
+        assert_eq!(resolve_download_referer(&generic, ""), "");
+        assert_eq!(
+            resolve_download_referer(&generic, "https://example.com/post/1"),
+            "https://example.com/post/1"
+        );
+    }
+
+    #[test]
+    fn download_reports_http_status_falls_back_and_omits_empty_referer() {
+        let err_567 = b"HTTP/1.1 567 Unknown Status\r\nContent-Length: 0\r\nConnection: close\r\n\r\n" as &[u8];
+        let (port_567, server_567) = mock_server(err_567);
+        let err = download_media_curl_limited(
+            &format!("http://127.0.0.1:{}/img.webp", port_567),
+            "",
+            1024,
+            true,
+        )
+        .unwrap_err();
+        assert!(err.contains("HTTP 567"), "{err}");
+        let req_567 = server_567.join().unwrap().unwrap();
+        let has_referer = req_567
+            .lines()
+            .any(|line| line.to_ascii_lowercase().starts_with("referer:"));
+        assert!(!has_referer, "空 referer 不应伪造请求头: {req_567}");
+
+        let err_404 = b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n" as &[u8];
+        let ok_200 = b"HTTP/1.1 200 OK\r\nContent-Type: image/webp\r\nContent-Length: 4\r\nConnection: close\r\n\r\nRIFF" as &[u8];
+        let (p1, s1) = mock_server(err_404);
+        let (p2, s2) = mock_server(ok_200);
+        let u1 = format!("http://127.0.0.1:{}/orig.png", p1);
+        let u2 = format!("http://127.0.0.1:{}/fallback.webp", p2);
+        let (bytes, ct, used) = download_media_with_fallbacks_limited_with_proxy(
+            &u1,
+            &[u2.clone()],
+            "",
+            1024,
+            true,
+            None,
+        )
+        .unwrap();
+        assert_eq!(bytes, b"RIFF");
+        assert_eq!(ct, "image/webp");
+        assert_eq!(used, u2);
+        s1.join().unwrap().unwrap();
+        s2.join().unwrap().unwrap();
     }
 }
 

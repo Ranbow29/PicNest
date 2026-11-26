@@ -144,11 +144,17 @@ function createBackground(worlds, tabs, opts = {}) {
     storage: {
       local: {
         async get(keys) {
-          if (keys == null) return {}
-          if (Array.isArray(keys)) return {}
-          return { ...keys }
+          const store = opts.localStorage || {}
+          if (keys == null) return { ...store }
+          if (Array.isArray(keys)) {
+            const out = {}
+            for (const k of keys) if (k in store) out[k] = store[k]
+            return out
+          }
+          return { ...keys, ...store }
         },
         async set() {},
+        async remove() {},
       },
       session: {
         async get(key) { return session.has(key) ? { [key]: session.get(key) } : {} },
@@ -176,7 +182,7 @@ function createBackground(worlds, tabs, opts = {}) {
 
   const ctx = vm.createContext({
     chrome,
-    fetch: async () => { throw new Error('no network in test') },
+    fetch: opts.fetch || (async () => { throw new Error('no network in test') }),
     setTimeout: () => 0,
     clearTimeout: () => {},
     console,
@@ -351,6 +357,80 @@ function addTab(tabs, worlds, id, url, world = createPageWorld()) {
   await bg.events.onActivated.emit({ tabId: 7 })
   assert.equal(bg.reloads.length, 0)
   console.log('ok chrome:// 页面：unsupported，不注入不刷新')
+}
+
+/* ---------- 8. save-panel 与右键采集透传升级链与正确来源 URL ---------- */
+{
+  const worlds = new Map()
+  const tabs = new Map()
+  const posted = []
+  const bg = createBackground(worlds, tabs, {
+    activeTabId: 9,
+    localStorage: { rootId: 1, rel: '' },
+    fetch: async (url, init) => {
+      posted.push({ url, body: JSON.parse(init.body) })
+      return {
+        ok: true,
+        async json() { return { ok: true, saved: [{ name: 'test.png' }] } },
+      }
+    },
+  })
+  await settle()
+  const tab = addTab(tabs, worlds, 9, 'https://huaban.com/discovery')
+  bg.chrome.tabs.sendMessage = async (_tabId, msg) => {
+    if (msg?.type === 'get-contextmenu-media') {
+      return {
+        ok: true,
+        isVideo: false,
+        src: 'https://gd-hbimg-edge.huaban.com/xyz-1_fw240webp?auth_key=abc',
+        title: '花瓣图',
+        pageUrl: 'https://huaban.com/pins/7058355788',
+      }
+    }
+    return { ok: true }
+  }
+
+  // 8a. 右键菜单保存花瓣图
+  await bg.events.onMenuClicked.emit({ menuItemId: 'picnest-save-image', pageUrl: 'https://huaban.com/discovery' }, tab)
+  assert.equal(posted.length, 1)
+  assert.equal(posted[0].body.url, 'https://huaban.com/pins/7058355788')
+  assert.equal(posted[0].body.src, 'https://gd-hbimg-edge.huaban.com/xyz-1?auth_key=abc')
+  assert.deepEqual(posted[0].body.fallbackSrcs, [
+    'https://gd-hbimg-edge.huaban.com/xyz-1_fw1200webp?auth_key=abc',
+    'https://gd-hbimg-edge.huaban.com/xyz-1_fw240webp?auth_key=abc',
+  ])
+
+  // 8b. save-panel 保存 Pixiv 缩略图
+  const pxRes = await bg.message({
+    type: 'save-panel',
+    kind: 'image',
+    src: 'https://i.pximg.net/c/250x250_80_a2/img-master/img/2026/01/01/00/00/00/777_p0_square1200.jpg',
+    url: 'https://www.pixiv.net/artworks/777',
+    title: 'px',
+    rootId: 1,
+    rel: '',
+  })
+  assert.equal(pxRes.ok, true)
+  assert.equal(posted.length, 2)
+  assert.equal(posted[1].body.src, 'https://i.pximg.net/img-original/img/2026/01/01/00/00/00/777_p0.png')
+  assert.equal(posted[1].body.url, 'https://www.pixiv.net/artworks/777')
+  assert.equal(posted[1].body.fallbackSrcs.length, 4)
+
+  // 8c. save-panel 保存 Pinterest 236x 缩略图
+  const pinRes = await bg.message({
+    type: 'save-panel',
+    kind: 'image',
+    src: 'https://i.pinimg.com/236x/aa/bb/cc.jpg',
+    url: 'https://www.pinterest.com/pin/123/',
+    title: 'pin',
+    rootId: 1,
+    rel: '',
+  })
+  assert.equal(pinRes.ok, true)
+  assert.equal(posted.length, 3)
+  assert.equal(posted[2].body.src, 'https://i.pinimg.com/originals/aa/bb/cc.jpg')
+  assert.deepEqual(posted[2].body.fallbackSrcs, ['https://i.pinimg.com/236x/aa/bb/cc.jpg'])
+  console.log('ok save-panel 与右键采集透传三大站高清升级与降级候选')
 }
 
 console.log('\n全部通过')

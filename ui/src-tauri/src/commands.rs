@@ -1514,6 +1514,8 @@ pub async fn sync_folder_snapshot(path: String, state: State<'_, AppState>) -> R
         drop(rconn);
 
         let files = crate::scanner::collect_folder_files(&root);
+        let disk_set: std::collections::HashSet<String> =
+            files.iter().map(|(fp, _, _)| fp.to_lowercase()).collect();
         let mut diff: Vec<(String, i64, i64)> = Vec::new();
         for (fp, sz, mt) in files {
             match existing.get(&fp.to_lowercase()) {
@@ -1524,8 +1526,13 @@ pub async fn sync_folder_snapshot(path: String, state: State<'_, AppState>) -> R
                 _ => {}
             }
         }
+        let gone: Vec<String> = existing
+            .iter()
+            .filter(|(low, (_sz, _mt, del))| !*del && !disk_set.contains(*low))
+            .map(|(low, _)| low.clone())
+            .collect();
 
-        apply_file_snapshot_diff(&db, id, &diff, &[])
+        apply_file_snapshot_diff(&db, id, &diff, &gone)
     })
     .await
     .map_err(|e| e.to_string())?
