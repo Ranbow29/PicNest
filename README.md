@@ -12,7 +12,7 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue.svg" alt="License: GPL-3.0"></a>
   <img src="https://img.shields.io/badge/platform-Windows%2010%2F11%20x64-brightgreen.svg" alt="Platform">
-  <img src="https://img.shields.io/badge/version-v1.0.1-orange.svg" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.1.0-orange.svg" alt="Version">
   <img src="https://img.shields.io/badge/rust-1.80%2B-dea584.svg" alt="Rust">
   <img src="https://img.shields.io/badge/tauri-v2-24c8db.svg" alt="Tauri v2">
   <img src="https://img.shields.io/badge/vue-3.5-brightgreen.svg" alt="Vue">
@@ -37,7 +37,7 @@
 
 ### 🎨 创作者级视觉与交互手感
 - **纸金美学与浮岛微光**：主面板采用浮岛投影设计，卡片边缘配备细腻顶缘高光，搭配自然入场波浪。
-- **六套定制主题**：暖砂（温暖米金）、靛夜（深邃蓝紫）、灰白（中性低饱和）、炭黑（深沉微灰）、墨黑（纯粹极夜）、跟随系统。
+- **十一套定制主题与动效转场**：内置暖砂、靛夜、灰白、炭黑、墨黑、跟随系统等静谧阅读主题，以及**酸性印刷（Acid Print）、终末工业（Endfield · 白纸/暗夜）、黑曜棱镜（Obsidian Prism · 暗夜/冷晶）**等动态视觉主题，配备主题专属入场转场动画。
 - **Wenku8 灵动微动效**：文件夹展开与交互配备丝滑弹簧回弹手势，兼具高级感与灵动生命力。
 - **有界虚拟网格**：网格采用 1024px 有界缩略图缓存降级链，即使浏览十万张大图也不会击穿 Chromium 解码内存预算，彻底告别裂图与卡死。
 - **极简灯箱展示**：双击进入图片后，设有鼠标靠近才会浮现的隐蔽按钮机制，正常浏览观察缩放图片时享有极致的原生体验。
@@ -111,7 +111,7 @@
 PicNest 是专为创作者打造的绿色便携软件：
 
 1. 前往 [Releases 页面](https://github.com/Ranbow29/PicNest/releases) 下载最新的便携包：  
-   `PicNest-v1.0.1-windows-x64-portable.zip`
+   `PicNest-v1.1.0-windows-x64-portable.zip`
 2. 解压到你的电脑任意目录（如 `D:\PicNest`）。
 3. 双击运行 `PicNest.exe`，点击左侧添加你的本地图片文件夹，即刻开启极致看图体验！
 4. **一键热更新**：软件自带静默检测与帮助窗「检查新版本」入口，支持自动下载 GitHub Release 并完成 **SHA-256 校验与免安装热替换**（全自动保留你的本地配置与用户数据）。
