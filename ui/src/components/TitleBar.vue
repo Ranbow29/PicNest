@@ -17,6 +17,9 @@ const themeLabel = computed(() => {
 })
 const themeGlyph = computed(() => {
   const v = theme.resolved.value
+  if (v === 'acid-print') return '◈'
+  if (v.startsWith('endfield-')) return '⬡'
+  if (v.startsWith('obsidian-')) return '✦'
   if (v.startsWith('mono-')) return '◐'
   return v === 'dark' ? '☾' : '☀'
 })
@@ -270,7 +273,7 @@ function onKey(e) {
         <div v-if="themeOpen" class="vo-panel glass-card theme-panel" @click.stop>
           <div class="vo-cap">主题</div>
           <template v-for="m in theme.modes" :key="m.key">
-            <div v-if="m.key === 'mono-light'" class="theme-sep" />
+            <div v-if="m.key === 'mono-light' || m.key === 'acid-print'" class="theme-sep" />
             <button class="theme-opt" :class="{ on: theme.mode.value === m.key }" @click="pickTheme(m.key)">
               <span>{{ m.label }}</span><i v-if="theme.mode.value === m.key">✓</i>
             </button>
@@ -280,7 +283,7 @@ function onKey(e) {
             <span>纸质肌理</span>
             <span class="t-pill" :class="{ on: theme.paperGrain.value }"><i /></span>
           </button>
-          <div class="theme-hint">跟随系统随 Windows 明暗切换；黑白主题只改界面，不改变图片</div>
+          <div class="theme-hint">跟随系统随 Windows 明暗切换；风格主题含专属排版与动效，不改变图片色彩</div>
         </div>
       </div>
       <button class="tool help-btn" title="帮助与使用说明" @click.stop="lib.openHelp()">?</button>
@@ -319,6 +322,13 @@ function onKey(e) {
               <div class="set-desc">悬停时卡片视差微倾与柔光掠影</div>
             </div>
             <button class="set-switch" :class="{ on: lib.cardTilt3D }" type="button"><i /></button>
+          </div>
+          <div class="set-row" @click="lib.toggleMascots()">
+            <div class="set-meta">
+              <div class="set-title">像素双宠伴侣</div>
+              <div class="set-desc">侧栏底部的可爱像素小紫猫与小克</div>
+            </div>
+            <button class="set-switch" :class="{ on: lib.showMascots }" type="button"><i /></button>
           </div>
           <div class="set-row">
             <div class="set-meta" style="cursor: pointer;" @click.stop="copyCollectToken" title="点击一键复制完整 32 位配对密钥">

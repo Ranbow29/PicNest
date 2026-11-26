@@ -6,6 +6,7 @@ import { waveSeq, waveDelay, replayWave } from '../lib/wave'
 import { isExternalDT as isDnDExternal } from '../lib/dnd'
 import { isVideoPath, isTextPath, extOf } from '../lib/fileKinds'
 import { useTheme } from '../lib/theme'
+import { triggerOriginFrame } from '../lib/motionDirector'
 import FolderIcon from './FolderIcon.vue'
 
 const lib = useLibrary()
@@ -1154,6 +1155,7 @@ function onCellDblClick(e, img) {
   const el = e.currentTarget?.querySelector?.('.thumb') || e.currentTarget
   const r = el?.getBoundingClientRect?.()
   const rect = r && r.width > 0 ? { left: r.left, top: r.top, width: r.width, height: r.height } : null
+  if (rect) triggerOriginFrame(rect, img.extLabel)
   lib.openLightbox(img.file_path, rect)
 }
 /* 卡片 3D 微倾 + 柔光镜面跟随：直接写当前 DOM 节点的 CSS 变量，不触发 Vue 响应式重渲染 */
@@ -1201,8 +1203,8 @@ onBeforeUnmount(() => {
          @click.self="onBackgroundClick"
          @pointerdown.self="onMarqueeDown"
          @dragover="onCanvasDragOver" @dragleave="onCanvasDragLeave" @drop="onCanvasDrop">
-      <!-- 编辑排印头块：滚动时整体穿入玻璃顶栏（同 Wenku8） -->
-      <header :key="'head-' + waveSeq" class="page-head wi" style="--d: 0ms">
+      <!-- 编辑排印头块：滚动时整体穿入玻璃顶栏（同 Wenku8）；风格主题下随目录切换同拍刷新 -->
+      <header :key="(themeResolved === 'acid-print' || themeResolved.startsWith('endfield-') || themeResolved.startsWith('obsidian-')) ? ('head-' + waveSeq + '-' + locationKey) : ('head-' + waveSeq)" class="page-head wi" style="--d: 0ms">
         <h2 class="head-big">{{ header.big }}</h2>
         <div class="head-caption">{{ header.caption }}</div>
         <div class="head-rule"><i /></div>
@@ -1348,7 +1350,7 @@ onBeforeUnmount(() => {
 <style scoped>
 /* ZCode 式概览滑尺：正文右缘、详情左侧 */
 .ov-ruler {
-  position: fixed; right: 6px; top: 70px; width: 28px; height: calc(100vh - 100px); /* 主面板 上/右 8px、下 22px：右缘 10px 内缩、底部 8px 内缩、顶栏下 20px */
+  position: fixed; right: 10px; top: 70px; width: 28px; height: calc(100vh - 100px); /* 稳稳落在主面板右内沿内侧，不擦碰面板外框与阴影 */
   z-index: 10; /* 钉死窗口右缘不随详情缩放；详情浮岛(12/15)打开时覆盖滑尺 */
   cursor: pointer; touch-action: none;
 }

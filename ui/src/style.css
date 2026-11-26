@@ -211,14 +211,16 @@ html, body, #app { height: 100%; margin: 0; }
 body {
   font-family: var(--font-sans);
   color: var(--text);
-  background: var(--bg);
+  /* 顶部柔光直接画在整张底层画布上，避免被 .sidebar 右边界一刀垂直切断造成水带色阶割裂 */
+  background: linear-gradient(180deg, var(--sidebar-glow) 0, transparent 150px) no-repeat, var(--bg);
   overflow: hidden;
   user-select: none;
   position: relative;
 }
 /* 关闭纸质肌理时平滑隐去 */
 :root[data-paper="off"] { --paper-opacity: 0 !important; }
-/* 底座装帧纸纹：透在侧栏底子与主面板四周水带上，绝不盖住前景图片 */
+/* 底座装帧纸纹：透在侧栏底子与主面板四周水带上，绝不盖住前景图片；
+   顶部按钮层保持干净无纸纹，从「根文件 / 文件夹」标题区往下淡淡渐变显影出纸质纹理 */
 body::before {
   content: '';
   position: fixed;
@@ -230,6 +232,8 @@ body::before {
   background-size: 320px 320px;
   opacity: var(--paper-opacity, 0.16);
   mix-blend-mode: var(--paper-blend, multiply);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0px, transparent 150px, rgba(0, 0, 0, 0.45) 235px, #000 330px);
+  mask-image: linear-gradient(to bottom, transparent 0px, transparent 150px, rgba(0, 0, 0, 0.45) 235px, #000 330px);
   transition: opacity 0.28s ease;
 }
 #app { position: relative; z-index: 1; }

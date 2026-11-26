@@ -160,6 +160,9 @@ async function onDrop(e) {
       <i v-if="dropMark === 'before'" class="drop-line top" />
       <i v-if="dropMark === 'after'" class="drop-line bottom" />
       <span class="caret" :class="{ open: expanded, leaf: !node.children?.length }" @click.stop="toggleExpand">▸</span>
+      <svg v-if="isActive" class="acid-mark" viewBox="0 0 12 12" aria-hidden="true">
+        <path d="M2.6 2.6 9.4 9.4M9.4 2.6 2.6 9.4" />
+      </svg>
       <AnimIcon name="folder" :size="17" :open="expanded" :tint="folderTint(colorKey)" :mount-shake="false" :stroke="1.6" :active="isActive" />
       <span class="name" :title="lib.dispName(node.name)">{{ lib.dispName(node.name) }}</span>
       <span class="count">{{ node.total }}</span>
@@ -217,6 +220,7 @@ async function onDrop(e) {
 }
 .caret.open { transform: rotate(90deg); }
 .caret.leaf { visibility: hidden; }
+.acid-mark { display: none; flex: none; width: 10px; height: 10px; fill: none; stroke: currentColor; stroke-width: 2.1; stroke-linecap: square; }
 .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
 .count { flex: none; font-size: 10.5px; color: var(--text-2); font-variant-numeric: tabular-nums; opacity: 0.72; transition: opacity 0.15s; }
 </style>

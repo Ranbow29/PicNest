@@ -1,0 +1,608 @@
+/* ==========================================================================
+   PicNest 风格主题：Acid Print · 酸性印刷（动效版）
+   设计哲学：
+   1. 色彩手术刀法则：主画布坚持冷白铜版纸基 (#f4f5f7) + 极淡建筑点阵，保证画师看图 0 偏色；
+      高饱和克莱因电光蓝 (#183bff) + 工业纯黑 (#111216) 仅作为选中、导航与转场的高能锚点。
+   2. 四维风格协议：材质（点阵硬线）× 几何（2px 锐角 + 偏移硬影）× 排版（杂志档案卡）× 动效（斜切机械卡位）。
+   3. 100% 作用域隔离于 :root[data-theme="acid-print"] 与 :root[data-motion="acid"]，零污染原有主题。
+   ========================================================================== */
+
+:root[data-theme="acid-print"] {
+  --bg: #e2e5ec;
+  --bg-2: #d7dce6;
+  --panel: rgba(244, 245, 248, 0.88);
+  --panel-strong: #f5f6f8;
+  --text: #111216;
+  --text-2: #525766;
+  --accent: #183bff;
+  --accent-weak: rgba(24, 59, 255, 0.12);
+  --acid-ink: #111216;
+  --acid-blue: #183bff;
+  --acid-blue-deep: #0b24b8;
+  --folder-default: #111216;
+  --border: rgba(17, 18, 22, 0.22);
+
+  /* 硬朗印刷偏移影，取代模糊空气影 */
+  --shadow: 4px 4px 0 rgba(17, 18, 22, 0.9);
+  --shadow-float: 6px 6px 0 #111216;
+  --shadow-tile: 2px 2px 0 rgba(17, 18, 22, 0.16);
+  --shadow-tile-hover: 4px 4px 0 #111216;
+
+  --tile-edge: transparent;
+  --sidebar-glow: rgba(24, 59, 255, 0.08);
+  --panel-edge: transparent;
+
+  --overlay-grad: linear-gradient(transparent, rgba(17, 18, 22, 0.92));
+  --overlay-text: #ffffff;
+  --overlay-halo: none;
+
+  --glass-strong: rgba(245, 246, 248, 0.96);
+  --glass-weak: rgba(245, 246, 248, 0.88);
+  --panel-inspector: #f8f9fb;
+  --panel-insp-top: #f8f9fb;
+  --panel-insp-mid: #f8f9fb;
+  --panel-insp-low: #f5f6f8;
+  --panel-insp-bot: #f2f4f7;
+
+  --amb-blur: 60px;
+  --amb-sat: 1.1;
+  --amb-bright: 1.0;
+  --amb-opacity: 0.12;
+  --amb-veil: rgba(17, 18, 22, 0.03);
+
+  /* 建筑十字点阵底纹：替代棉浆纸纹，data-paper="off" 仍可一键关闭 */
+  --paper-grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='28' viewBox='0 0 28 28'%3E%3Cg fill='none' stroke='%23111216' stroke-width='0.75' opacity='0.28'%3E%3Cpath d='M14 11.5v5M11.5 14h5'/%3E%3C/g%3E%3Ccircle cx='1' cy='1' r='0.75' fill='%23183bff' opacity='0.22'/%3E%3C/svg%3E");
+  --paper-opacity: 0.42;
+  --paper-blend: normal;
+
+  --radius: 2px;
+  --radius-panel: 2px;
+  --blur: 0px;
+  --font-serif: 'Segoe UI Black', 'Arial Black', 'Microsoft YaHei UI', 'Segoe UI', sans-serif;
+  --font-sans: 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Cascadia Code', Consolas, monospace;
+}
+
+/* 底座点阵尺寸校准（比 320px 棉浆纸更精细） */
+:root[data-theme="acid-print"] body::before,
+:root[data-theme="acid-print"] .main-panel::before {
+  background-size: 28px 28px;
+}
+
+/* 底座印刷刀版裁切基准框（距顶 18px，让主面板上半部稳稳破框越界 11px，配合下方深黑影形成强烈悬空立体感） */
+:root[data-theme="acid-print"] body::after {
+  content: '';
+  position: fixed;
+  top: 18px;
+  left: 10px;
+  right: 10px;
+  bottom: 10px;
+  z-index: 0;
+  pointer-events: none;
+  border: 1px dashed rgba(17, 18, 22, 0.34);
+  background:
+    linear-gradient(var(--acid-blue), var(--acid-blue)) left top / 10px 2px no-repeat,
+    linear-gradient(var(--acid-blue), var(--acid-blue)) left top / 2px 10px no-repeat,
+    linear-gradient(var(--acid-blue), var(--acid-blue)) right top / 10px 2px no-repeat,
+    linear-gradient(var(--acid-blue), var(--acid-blue)) right top / 2px 10px no-repeat,
+    linear-gradient(var(--acid-ink), var(--acid-ink)) left bottom / 10px 2px no-repeat,
+    linear-gradient(var(--acid-ink), var(--acid-ink)) left bottom / 2px 10px no-repeat,
+    linear-gradient(var(--acid-ink), var(--acid-ink)) right bottom / 10px 2px no-repeat,
+    linear-gradient(var(--acid-ink), var(--acid-ink)) right bottom / 2px 10px no-repeat;
+}
+
+/* ---- 1. 主面板：上半部破框越界 11px + 下半部 11px 立体深黑影 ---- */
+:root[data-theme="acid-print"] .main-panel {
+  border: 1.5px solid var(--acid-ink);
+  border-radius: 2px;
+  box-shadow: 10px 11px 0 var(--acid-ink);
+  margin: 7px 20px 22px 12px;
+}
+
+/* ---- 2. 顶栏：去模糊拖尾，改实底清透细线（顶部不做粗黑压顶，把黑色留给底部阴影锚点） ---- */
+:root[data-theme="acid-print"] .titlebar .glass {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background: rgba(245, 246, 248, 0.96);
+  border-bottom: 1px solid rgba(17, 18, 22, 0.2);
+}
+:root[data-theme="acid-print"] .titlebar::after {
+  display: none;
+}
+:root[data-theme="acid-print"] .titlebar .tool,
+:root[data-theme="acid-print"] .titlebar .nav-arrow,
+:root[data-theme="acid-print"] .titlebar .ctl.back,
+:root[data-theme="acid-print"] .titlebar .crumb-link {
+  border-radius: 2px;
+}
+:root[data-theme="acid-print"] .titlebar .tool.on {
+  background: var(--acid-blue);
+  color: #ffffff;
+  box-shadow: 2px 2px 0 var(--acid-ink);
+}
+:root[data-theme="acid-print"] .titlebar .tool:hover:not(.on) {
+  background: var(--acid-ink);
+  color: #ffffff;
+}
+:root[data-theme="acid-print"] .titlebar .search {
+  border-radius: 2px;
+  border: 1px solid var(--acid-ink);
+  background: #ffffff;
+}
+:root[data-theme="acid-print"] .titlebar .wc {
+  border-radius: 2px;
+  border: 1px solid rgba(17, 18, 22, 0.25);
+}
+:root[data-theme="acid-print"] .titlebar .wc.on {
+  background: var(--acid-blue);
+  color: #ffffff;
+  border-color: var(--acid-ink);
+}
+:root[data-theme="acid-print"] .titlebar .vo-panel,
+:root[data-theme="acid-print"] .titlebar .glass-card {
+  border-radius: 2px;
+  border: 1.5px solid var(--acid-ink);
+  box-shadow: 5px 5px 0 var(--acid-ink);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background: #f8f9fb;
+}
+:root[data-theme="acid-print"] .titlebar .theme-opt.on,
+:root[data-theme="acid-print"] .titlebar .vo-cell.on {
+  background: var(--acid-blue);
+  color: #ffffff;
+  border-radius: 2px;
+}
+
+/* ---- 3. 侧边栏：杂志目录索引风（内缩避让 top:18px/left:10px 刀版裁切框，透明底共享 body 连续微蓝光，左右留白对称） ---- */
+:root[data-theme="acid-print"] .sidebar {
+  padding: 24px 6px 12px 16px;
+  background: transparent;
+}
+:root[data-theme="acid-print"] .sidebar.collapsed {
+  padding-left: 0;
+  padding-right: 0;
+}
+:root[data-theme="acid-print"] .sidebar.brand-collapsed {
+  padding-top: 19px;
+}
+/* 概览滑尺：主面板在 acid-print 下 margin-right:20px + 10px 纯黑硬投影，
+   滑尺必须内缩到 right:23px 稳稳落在白纸画布内部，彻底避免蓝刻度骑跨黑影混色 */
+:root[data-theme="acid-print"] .ov-ruler {
+  right: 23px;
+}
+:root[data-theme="acid-print"] .sidebar .brand {
+  border-bottom: 1.5px solid var(--acid-blue);
+  padding: 0 2px 8px 4px;
+  gap: 9px;
+  position: relative;
+}
+:root[data-theme="acid-print"] .sidebar .brand h1 {
+  font-size: 22px;
+  font-weight: 900;
+  letter-spacing: 1.5px;
+  font-style: italic;
+  line-height: 1;
+  white-space: nowrap;
+}
+/* 双排精致刊头信息：上排 PICNEST + 下排 ACID//01，总高度与左侧「图巢」严丝合缝顶底齐平 */
+:root[data-theme="acid-print"] .sidebar .brand-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+  line-height: 1;
+}
+:root[data-theme="acid-print"] .sidebar .brand .sub {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--acid-ink);
+  opacity: 0.72;
+}
+:root[data-theme="acid-print"] .sidebar .brand .acid-tag {
+  display: inline-block;
+  padding: 1.5px 5px;
+  background: var(--acid-blue);
+  color: #ffffff;
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  line-height: 1.1;
+  border-radius: 1px;
+}
+:root[data-theme="acid-print"] .sidebar .brand .brand-fold-btn {
+  border-radius: 2px;
+  border-color: rgba(17, 18, 22, 0.28);
+  background: #f5f6f8;
+}
+:root[data-theme="acid-print"] .sidebar .brand .brand-fold-btn:hover {
+  background: var(--acid-blue);
+  border-color: var(--acid-blue);
+  color: #ffffff;
+}
+:root[data-theme="acid-print"] .sidebar .brand-reopen {
+  border-radius: 2px;
+  background: transparent;
+}
+:root[data-theme="acid-print"] .sidebar .brand-reopen:hover {
+  background: rgba(24, 59, 255, 0.12);
+  color: var(--acid-blue);
+}
+:root[data-theme="acid-print"] .sidebar .view-item,
+:root[data-theme="acid-print"] .sidebar .lib-item,
+:root[data-theme="acid-print"] .sidebar .tree .row {
+  border-radius: 2px;
+}
+:root[data-theme="acid-print"] .sidebar .view-item.chip {
+  background: #f5f6f8;
+  box-shadow: inset 0 0 0 1px rgba(17, 18, 22, 0.24);
+}
+:root[data-theme="acid-print"] .sidebar .view-item.active,
+:root[data-theme="acid-print"] .sidebar .lib-item.active {
+  background: var(--acid-blue);
+  color: #ffffff;
+  box-shadow: 2px 2px 0 var(--acid-ink);
+}
+:root[data-theme="acid-print"] .sidebar .view-item.active .count,
+:root[data-theme="acid-print"] .sidebar .lib-item.active .count {
+  color: rgba(255, 255, 255, 0.88);
+  font-family: var(--font-mono);
+}
+:root[data-theme="acid-print"] .sidebar .view-item.primary.active::before {
+  background: var(--acid-ink);
+  width: 4px;
+  border-radius: 0;
+}
+:root[data-theme="acid-print"] .sidebar .tree .row.active {
+  background: var(--acid-ink);
+  color: #ffffff;
+  box-shadow: inset 3px 0 0 var(--acid-blue);
+}
+:root[data-theme="acid-print"] .sidebar .tree .row.active .acid-mark {
+  display: inline-block;
+  color: #ffffff;
+  filter: drop-shadow(1px 1px 0 var(--acid-blue));
+  animation: acid-mark-spin 300ms cubic-bezier(0.18, 0.88, 0.32, 1.15) both;
+}
+@keyframes acid-mark-spin {
+  0% { opacity: 0; transform: scale(0.28) rotate(-180deg); }
+  68% { opacity: 1; transform: scale(1.22) rotate(14deg); }
+  100% { opacity: 1; transform: scale(1) rotate(0deg); }
+}
+:root[data-theme="acid-print"] .sidebar .tree .row.active .count,
+:root[data-theme="acid-print"] .sidebar .tree .row.active .cnt {
+  color: #a9b8ff;
+  font-family: var(--font-mono);
+}
+:root[data-theme="acid-print"] .sidebar .section-head {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  letter-spacing: 1.2px;
+  color: var(--acid-ink);
+  border-top: 1px dashed rgba(17, 18, 22, 0.22);
+  margin-top: 4px;
+}
+:root[data-theme="acid-print"] .sidebar .sh-badge {
+  border-radius: 2px;
+  background: var(--acid-ink);
+  color: #ffffff;
+  font-family: var(--font-mono);
+}
+
+/* ---- 4. 网格画布与印刷样张卡片 ---- */
+:root[data-theme="acid-print"] .page-head .head-big {
+  font-weight: 900;
+  letter-spacing: 0.5px;
+  font-style: italic;
+  text-transform: uppercase;
+}
+:root[data-theme="acid-print"] .page-head .head-caption {
+  font-family: var(--font-mono);
+  letter-spacing: 2.5px;
+  color: var(--acid-blue);
+  font-weight: 700;
+}
+:root[data-theme="acid-print"] .page-head .head-rule i {
+  height: 2px;
+  background: linear-gradient(90deg, var(--acid-blue) 0, var(--acid-blue) 68px, var(--acid-ink) 68px, rgba(17, 18, 22, 0.25) 75%, transparent);
+}
+:root[data-theme="acid-print"] .page-head .head-rule::after {
+  width: 8px;
+  height: 8px;
+  background: var(--acid-blue);
+  transform: skewX(-18deg);
+}
+
+/* 缩略图样张：锐利直角 + 1px 黑框 + 硬偏移影 */
+:root[data-theme="acid-print"] .thumb,
+:root[data-theme="acid-print"] .sf-cover {
+  border-radius: 2px;
+  border: 1px solid rgba(17, 18, 22, 0.32);
+  box-shadow: 2px 2px 0 rgba(17, 18, 22, 0.14);
+}
+:root[data-theme="acid-print"] .thumb::after {
+  box-shadow: none;
+}
+:root[data-theme="acid-print"] .cell:hover .thumb,
+:root[data-theme="acid-print"] .sf-card:hover .sf-cover {
+  border-color: var(--acid-ink);
+  transform: translate(-2px, -2px);
+  box-shadow: 4px 4px 0 var(--acid-ink);
+}
+:root[data-theme="acid-print"] .cell.selected .thumb,
+:root[data-theme="acid-print"] .sf-card.sel .sf-cover {
+  border: 2px solid var(--acid-blue);
+  box-shadow: 5px 5px 0 var(--acid-blue);
+}
+:root[data-theme="acid-print"] .cell.selected:hover .thumb {
+  transform: translate(-2px, -2px);
+  box-shadow: 6px 6px 0 var(--acid-blue);
+}
+:root[data-theme="acid-print"] .format-badge {
+  border-radius: 1px;
+  background: var(--acid-ink);
+  border: 1px solid var(--acid-blue);
+  color: #ffffff;
+}
+:root[data-theme="acid-print"] .hover-overlay::after {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.4px;
+}
+
+/* ---- 5. 详情浮岛 → 酸性印刷画作档案卡 ---- */
+:root[data-theme="acid-print"] .inspector {
+  border-radius: 2px !important;
+  border: 1.5px solid var(--acid-ink) !important;
+  /* 实体硬影回归工业纯黑，与主面板光源方向/影色完全统一，彻底避免与顶部蓝标同色混杂 */
+  box-shadow: 5px 5px 0 var(--acid-ink) !important;
+  background: #f8f9fb !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+/* 档案卡顶部克莱因蓝白受光索引带（上蓝亮受光 / 下黑硬投影，冷暖明度彻底分离；随选图 --echo-step 横向步进咬合） */
+:root[data-theme="acid-print"] .inspector::before {
+  content: '';
+  display: block;
+  flex: none;
+  height: 5px;
+  width: 100%;
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--acid-blue),
+    var(--acid-blue) 4px,
+    #eef2ff 4px,
+    #eef2ff 8px
+  );
+  background-position-x: calc(var(--echo-step, 0) * 17px);
+  transition: background-position-x 220ms cubic-bezier(0.16, 1, 0.3, 1);
+  border-bottom: 1px solid rgba(24, 59, 255, 0.28);
+}
+:root[data-theme="acid-print"] .inspector .preview,
+:root[data-theme="acid-print"] .inspector .stack-card {
+  border-radius: 2px;
+  border: 1.5px solid var(--acid-ink);
+  box-shadow: 3px 3px 0 rgba(17, 18, 22, 0.22);
+}
+:root[data-theme="acid-print"] .inspector .sec {
+  border-top: 1px solid rgba(17, 18, 22, 0.18);
+}
+:root[data-theme="acid-print"] .inspector .sec-head {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 1.4px;
+  color: var(--acid-ink);
+}
+:root[data-theme="acid-print"] .inspector .kv b {
+  font-family: var(--font-mono);
+}
+/* 色板改工业连排色票 */
+:root[data-theme="acid-print"] .inspector .swatches {
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--acid-ink);
+  background: #ffffff;
+}
+:root[data-theme="acid-print"] .inspector .swatches i {
+  border-radius: 0;
+  border: none;
+  height: 24px;
+}
+:root[data-theme="acid-print"] .inspector .tag-chip,
+:root[data-theme="acid-print"] .inspector .folder-chip {
+  border-radius: 1px;
+  background: var(--acid-ink);
+  color: #ffffff;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+:root[data-theme="acid-print"] .inspector .actions button,
+:root[data-theme="acid-print"] .inspector .move-btn,
+:root[data-theme="acid-print"] .inspector .tag-add input,
+:root[data-theme="acid-print"] .inspector .tag-add button,
+:root[data-theme="acid-print"] .inspector .line-input {
+  border-radius: 2px;
+  border-color: rgba(17, 18, 22, 0.35);
+}
+:root[data-theme="acid-print"] .inspector .actions button:hover,
+:root[data-theme="acid-print"] .inspector .move-btn:hover {
+  background: var(--acid-blue);
+  border-color: var(--acid-ink);
+  color: #ffffff;
+  box-shadow: 2px 2px 0 var(--acid-ink);
+  transform: translate(-1px, -1px);
+}
+
+/* ---- 6. 动效性格：data-motion="acid" 统一矢量流 + 有重点的冲突张力 ----
+   核心法则：日常浏览与切页 100% 收敛到「左 → 右」丝网推演主轴，避免多方向打架；
+   高能纵向/放射冲突仅留给「聚焦选图（详情曝光）」与「双击进灯箱（取景框拉镜）」。 */
+
+/* 6.1 网格入场波：与标题同向（左 → 右推演），并关闭图片内层反向缩放避免双重矢量打架 */
+:root[data-motion="acid"] .thumb.wi {
+  animation: acid-card-sweep 250ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
+  animation-delay: calc(40ms + var(--d, 0ms) * 0.45);
+}
+@keyframes acid-card-sweep {
+  from {
+    opacity: 0;
+    transform: translate3d(-16px, 0, 0);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+/* 取消内层图片 scale(1.018)->1 的向内收缩，只保留干脆的显影，彻底消除矢量冲突 */
+:root[data-motion="acid"] .thumb img,
+:root[data-motion="acid"] .sf-cover img {
+  transform: none !important;
+  transition: opacity 0.18s ease-out !important;
+}
+
+/* 6.2 标题头块「三段非对称左 → 右剪切展开」（消除图片动、标题不动的割裂感） */
+:root[data-motion="acid"] .page-head.wi {
+  animation: none; /* 交由内部三层错拍编排，不做整体平推 */
+}
+:root[data-motion="acid"] .page-head .head-big {
+  transform-origin: left center;
+  animation: acid-head-slash 240ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+:root[data-motion="acid"] .page-head .head-caption {
+  animation: acid-caption-slide 220ms cubic-bezier(0.16, 1, 0.3, 1) 50ms both;
+}
+:root[data-motion="acid"] .page-head .head-rule i {
+  transform-origin: left center;
+  animation: acid-rule-shoot 320ms cubic-bezier(0.16, 1, 0.3, 1) 20ms both;
+}
+:root[data-motion="acid"] .page-head .head-rule::after {
+  animation: acid-rule-dot 220ms cubic-bezier(0.16, 1, 0.3, 1) 140ms both;
+}
+@keyframes acid-head-slash {
+  0% {
+    opacity: 0;
+    transform: translate3d(-24px, 0, 0) skewX(-12deg);
+    clip-path: inset(0 85% 0 0);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+    clip-path: inset(0 0 0 0);
+  }
+}
+@keyframes acid-caption-slide {
+  0% {
+    opacity: 0;
+    transform: translate3d(-14px, 0, 0);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes acid-rule-shoot {
+  0% {
+    opacity: 0.2;
+    transform: scaleX(0);
+  }
+  100% {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+}
+@keyframes acid-rule-dot {
+  0% {
+    opacity: 0;
+    transform: translate3d(-10px, 0, 0) skewX(-18deg) scale(0.4);
+  }
+  100% {
+    opacity: 1;
+    transform: skewX(-18deg) scale(1);
+  }
+}
+
+/* 6.3 印刷机开版因果序列：刮墨后主体面板从底座“咔哒”弹起破框悬空（上破裁切线 + 下拉深黑影） */
+:root[data-theme="acid-print"][data-stage="boot"] .sidebar {
+  animation: acid-boot-lr 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+:root[data-theme="acid-print"][data-stage="boot"] .main-panel {
+  animation: acid-panel-popout 360ms cubic-bezier(0.22, 1.24, 0.36, 1) 20ms both;
+}
+:root[data-theme="acid-print"][data-stage="boot"] .inspector {
+  animation: acid-boot-lr 240ms cubic-bezier(0.16, 1, 0.3, 1) 110ms both;
+}
+@keyframes acid-boot-lr {
+  from { opacity: 0; transform: translate3d(-14px, 0, 0); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes acid-panel-popout {
+  0% {
+    transform: translate3d(7px, 8px, 0);
+    box-shadow: 1px 1px 0 var(--acid-ink);
+  }
+  100% {
+    transform: none;
+    box-shadow: 10px 11px 0 var(--acid-ink);
+  }
+}
+
+/* 6.4 有重点的冲突张力：网格选图 ↔ 详情档案卡（横向画廊流 → 纵向曝光锁焦） */
+:root[data-motion="acid"] .inspector .preview {
+  position: relative;
+  animation: acid-expose 190ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+@keyframes acid-expose {
+  0% {
+    opacity: 0.65;
+    clip-path: inset(0 0 100% 0);
+    transform: translate3d(0, -4px, 0);
+  }
+  100% {
+    opacity: 1;
+    clip-path: inset(0 0 0 0);
+    transform: none;
+  }
+}
+:root[data-motion="acid"] .inspector.acid-echo {
+  animation: acid-insp-kick 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes acid-insp-kick {
+  0% { transform: translate3d(3px, 0, 0); }
+  100% { transform: none; }
+}
+:root[data-motion="acid"] .inspector .swatches i {
+  animation: acid-swatch-pop 200ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
+  animation-delay: calc(var(--si, 0) * 26ms);
+}
+@keyframes acid-swatch-pop {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 7px, 0) scaleY(0.5);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-motion="acid"] .wi,
+  :root[data-motion="acid"] .page-head .head-big,
+  :root[data-motion="acid"] .page-head .head-caption,
+  :root[data-motion="acid"] .page-head .head-rule i,
+  :root[data-motion="acid"] .page-head .head-rule::after,
+  :root[data-theme="acid-print"][data-stage="boot"] .sidebar,
+  :root[data-theme="acid-print"][data-stage="boot"] .main-panel,
+  :root[data-theme="acid-print"][data-stage="boot"] .inspector,
+  :root[data-motion="acid"] .inspector .preview,
+  :root[data-motion="acid"] .inspector.acid-echo,
+  :root[data-motion="acid"] .inspector .swatches i,
+  :root[data-theme="acid-print"] .sidebar .tree .row.active .acid-mark {
+    animation: none !important;
+  }
+}

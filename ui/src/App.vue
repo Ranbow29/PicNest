@@ -17,6 +17,9 @@ import { api } from './api.js'
 import { refreshPluginThemes } from './lib/plugins'
 import ResizeHandle from './components/ResizeHandle.vue'
 import InspResize from './components/InspResize.vue'
+import AcidBanner from './components/AcidBanner.vue'
+import ObsidianHorizon from './components/ObsidianHorizon.vue'
+import { useTheme } from './lib/theme'
 
 // 重型弹窗与全屏视图按需懒加载：独立分包，大幅减轻首屏 bundle 解析与挂载开销
 const Lightbox = defineAsyncComponent(() => import('./components/Lightbox.vue'))
@@ -31,6 +34,7 @@ const VisualSearchDialog = defineAsyncComponent(() => import('./components/Visua
 // ZCode 式嵌套结构：左栏底层(可拖宽) → 主面板工作区（浏览 ⇄ 大图双模式）→ 详情计划式浮岛(可收起可拖宽)
 // 外部拖入 = 位置即意图：主展示区/树行/缝隙/资料库栏各自高亮 + 跟随光标的落点提示
 const lib = useLibrary()
+const { resolved: themeResolved } = useTheme()
 
 const updateDialogRef = ref(null)
 let silentUpdateTimer = null
@@ -243,7 +247,8 @@ const chipStyle = computed(() => {
   >
     <SideBar />
     <ResizeHandle v-if="!lib.sidebarCollapsed" store="sidebar" />
-    <section class="main-panel">
+    <section class="main-panel" :class="{ 'sb-collapsed': lib.sidebarCollapsed }">
+      <ObsidianHorizon v-if="themeResolved.startsWith('obsidian-')" />
       <TitleBar />
       <div class="main-inner">
         <!-- 浏览模式：网格 + 详情浮岛（灯箱时保留布局只隐身，滚动位置不丢，与简报退出一致） -->
@@ -285,6 +290,7 @@ const chipStyle = computed(() => {
   <HelpDialog v-if="lib.helpOpen" />
   <UpdateDialog ref="updateDialogRef" />
   <VisualSearchDialog v-if="lib.visualSearch?.open" />
+  <AcidBanner />
 </template>
 
 <style scoped>
@@ -302,20 +308,25 @@ const chipStyle = computed(() => {
 @keyframes chip-in { from { opacity: 0; transform: translateY(4px) scale(0.96); } to { opacity: 1; transform: none; } }
 .main-panel {
   flex: 1; min-width: 0; display: flex; flex-direction: column;
-  position: relative;
-  /* 四边留白 + 悬浮阴影：白窗体压在左栏之上
-     上/右 8px（让右上角窗控按钮贴角、行为正常），下 22 / 左 20 保留孤岛水带 */
+  position: relative; z-index: 4; isolation: isolate;
+  /* 四边留白 + 悬浮阴影：白窗体压在左栏之上（z-index:4 > sidebar z-index:1）
+     上/右 8px（让右上角窗控按钮贴角、行为正常），下 22 / 左 14 保留孤岛水带 */
   margin: 8px 8px 22px 14px; /* 左水带 20→14：把宽度让给文件夹栏 */ background: var(--panel-strong);
   border: 1px solid var(--border); border-radius: var(--radius-panel);
   box-shadow: var(--shadow-float), inset 0 1px 0 var(--panel-edge);
   overflow: hidden;
+  transition: margin-left 0.34s cubic-bezier(0.22, 1, 0.36, 1);
 }
-/* 主画纸底纹：铺在 .main-panel 最底层，留白/缝隙/页头透出纸张触感，z-index:0 绝不盖在作品图片上 */
+.main-panel.sb-collapsed {
+  margin-left: 8px;
+}
+/* 主画纸底纹：借助 isolation:isolate + z-index:-1 锁死在 .main-panel 最底层，
+   不破坏 .main-inner 内部子元素（详情窗 z-index:24）与顶栏（z-index:5/20）的层级关系 */
 .main-panel::before {
   content: '';
   position: absolute;
   inset: 0;
-  z-index: 0;
+  z-index: -1;
   border-radius: inherit;
   pointer-events: none;
   background-image: var(--paper-grain);
@@ -325,7 +336,7 @@ const chipStyle = computed(() => {
   mix-blend-mode: var(--paper-blend, multiply);
   transition: opacity 0.28s ease;
 }
-.main-inner { flex: 1; display: flex; min-height: 0; position: relative; z-index: 1; } /* 头块自己让位玻璃顶栏 */
+.main-inner { flex: 1; display: flex; min-height: 0; position: relative; } /* 不设 z-index，让详情窗(24)正常压在顶栏玻璃(20)之上 */
 .browse { flex: 1; display: flex; min-height: 0; position: relative; --insp-reserve: 0px; }
 .browse.lb-behind { position: absolute; inset: 0; visibility: hidden; pointer-events: none; }
 .browse.insp-open { --insp-reserve: calc(var(--insp-w, 296px) + 16px); }

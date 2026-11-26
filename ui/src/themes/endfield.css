@@ -1,0 +1,616 @@
+/* ==========================================================================
+   PicNest 风格主题：Endfield HUD · 终末工业（白纸 / 暗夜 双生版）
+   灵感与设计规范参考 hhikr/endfield-ui-skill：
+   1. 单强调色铁律：全场仅一个高能工业荧光黄 (#FFFA00)，严禁铺底；
+      所有黄底元素强制配纯黑文字 (#111214) 保证极致对比度，画布保持绝对中性，看图 0 偏色。
+   2. 零阴影 + 1px 精密结构线 + 45° 切角几何（缩略图四角绝不裁切，保护画作完整画幅）。
+   3. 三档精密机械动效 (data-motion="mech")：snap / mech / ease，统一左→右水平 HUD 扫描流。
+   4. 100% 作用域隔离，零污染原有主题与酸性印刷主题。
+   ========================================================================== */
+
+:root[data-theme="endfield-light"],
+:root[data-theme="endfield-dark"] {
+  --ef-yellow: #fffa00;
+  --ef-yellow-ink: #111214;
+  --ef-danger: #e53935;
+  --ef-snap: cubic-bezier(0.2, 0, 0, 1);
+  --ef-mech: cubic-bezier(0.12, 0.88, 0.2, 1);
+  --ef-ease: cubic-bezier(0.25, 0.1, 0.25, 1);
+  --ef-cut-sm: polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 0 100%);
+  --ef-cut-md: polygon(0 0, calc(100% - 9px) 0, 100% 9px, 100% 100%, 0 100%);
+
+  --shadow: none;
+  --shadow-float: none;
+  --shadow-tile: none;
+  --shadow-tile-hover: none;
+  --tile-edge: transparent;
+  --panel-edge: transparent;
+  --radius: 0px;
+  --radius-panel: 0px;
+  --blur: 0px;
+
+  /* 严格禁衬线：宽体硬朗无衬线 + 工业等宽数字 */
+  --font-serif: 'Segoe UI', 'Microsoft YaHei UI', 'PingFang SC', sans-serif;
+  --font-sans: 'Segoe UI', 'Microsoft YaHei UI', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Cascadia Code', Consolas, monospace;
+}
+
+/* ---- 浅色版：终末工业 · 白纸 ---- */
+:root[data-theme="endfield-light"] {
+  --bg: #e5e7eb;
+  --bg-2: #d8dce2;
+  --panel: rgba(244, 245, 247, 0.94);
+  --panel-strong: #f3f4f6;
+  --text: #121417;
+  --text-2: #5b616b;
+  --accent: #121417; /* 白底文本类强调色保持纯黑高对比；高亮块走 --ef-yellow */
+  --accent-weak: rgba(18, 20, 23, 0.08);
+  --folder-default: #22252a;
+  --border: rgba(18, 20, 23, 0.16);
+  --ef-line-strong: rgba(18, 20, 23, 0.34);
+  --ef-surface: #ffffff;
+  --ef-active-bg: #fffa00;
+  --ef-active-fg: #111214;
+  --ef-row-active-bg: #121417;
+  --ef-row-active-fg: #ffffff;
+  --ef-row-active-sub: #fffa00;
+  --ef-chip-bg: #121417;
+  --ef-chip-fg: #fffa00;
+  --sidebar-glow: rgba(18, 20, 23, 0.03);
+  --overlay-grad: linear-gradient(transparent, rgba(18, 20, 23, 0.9));
+  --overlay-text: #ffffff;
+  --overlay-halo: none;
+  --glass-strong: rgba(243, 244, 246, 0.98);
+  --glass-weak: rgba(243, 244, 246, 0.94);
+  --panel-inspector: #f7f8fa;
+  --panel-insp-top: #f7f8fa;
+  --panel-insp-mid: #f7f8fa;
+  --panel-insp-low: #f3f4f6;
+  --panel-insp-bot: #eef0f3;
+  --amb-blur: 50px;
+  --amb-sat: 1.05;
+  --amb-bright: 1.0;
+  --amb-opacity: 0.08;
+  --amb-veil: rgba(18, 20, 23, 0.02);
+
+  /* 极淡 45° 工业斜线 + 微坐标刻度底纹 */
+  --paper-grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Cpath d='M-4 4L4 -4M0 32L32 0M28 36L36 28' stroke='%23121417' stroke-width='0.6' opacity='0.11'/%3E%3Cpath d='M0 0h32M0 0v32' stroke='%23121417' stroke-width='0.5' opacity='0.06'/%3E%3C/svg%3E");
+  --paper-opacity: 0.65;
+  --paper-blend: normal;
+}
+
+/* ---- 暗色版：终末工业 · 暗夜 ---- */
+:root[data-theme="endfield-dark"] {
+  --bg: #0c0e11;
+  --bg-2: #191d23;
+  --panel: rgba(20, 23, 28, 0.94);
+  --panel-strong: #13161b;
+  --text: #eef1f5;
+  --text-2: #8a929e;
+  --accent: #fffa00;
+  --accent-weak: rgba(255, 250, 0, 0.14);
+  --folder-default: #cfd5df;
+  --border: rgba(255, 255, 255, 0.11);
+  --ef-line-strong: rgba(255, 255, 255, 0.24);
+  --ef-surface: #1a1e25;
+  --ef-active-bg: #fffa00;
+  --ef-active-fg: #0c0e11;
+  --ef-row-active-bg: #222730;
+  --ef-row-active-fg: #ffffff;
+  --ef-row-active-sub: #fffa00;
+  --ef-chip-bg: #fffa00;
+  --ef-chip-fg: #0c0e11;
+  --sidebar-glow: rgba(255, 250, 0, 0.03);
+  --overlay-grad: linear-gradient(transparent, rgba(8, 10, 13, 0.92));
+  --overlay-text: #ffffff;
+  --overlay-halo: none;
+  --glass-strong: rgba(19, 22, 27, 0.98);
+  --glass-weak: rgba(19, 22, 27, 0.94);
+  --panel-inspector: #171b21;
+  --panel-insp-top: #171b21;
+  --panel-insp-mid: #171b21;
+  --panel-insp-low: #14181e;
+  --panel-insp-bot: #11151a;
+  --amb-blur: 60px;
+  --amb-sat: 1.15;
+  --amb-bright: 0.9;
+  --amb-opacity: 0.16;
+  --amb-veil: rgba(0, 0, 0, 0.25);
+
+  --paper-grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Cpath d='M-4 4L4 -4M0 32L32 0M28 36L36 28' stroke='%23ffffff' stroke-width='0.6' opacity='0.06'/%3E%3Cpath d='M0 0h32M0 0v32' stroke='%23ffffff' stroke-width='0.5' opacity='0.04'/%3E%3C/svg%3E");
+  --paper-opacity: 0.72;
+  --paper-blend: normal;
+}
+
+:root[data-theme^="endfield-"] body::before,
+:root[data-theme^="endfield-"] .main-panel::before {
+  background-size: 32px 32px;
+}
+
+/* ---- 1. 主面板：零阴影、1px 精密结构框 + 左上工业黄标尺点缀 ---- */
+:root[data-theme^="endfield-"] .main-panel {
+  margin: 8px 8px 10px 6px;
+  border: 1px solid var(--ef-line-strong);
+  border-radius: 0;
+  box-shadow: none;
+}
+:root[data-theme^="endfield-"] .main-panel::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 56px;
+  height: 2px;
+  background: var(--ef-yellow);
+  z-index: 60;
+  pointer-events: none;
+}
+
+/* ---- 2. 顶栏：实底 1px 细线 + 45° 切角按钮 ---- */
+:root[data-theme^="endfield-"] .titlebar .glass {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background: var(--glass-strong);
+  border-bottom: 1px solid var(--border);
+}
+:root[data-theme^="endfield-"] .titlebar::after {
+  display: none;
+}
+:root[data-theme^="endfield-"] .titlebar .tool,
+:root[data-theme^="endfield-"] .titlebar .nav-arrow,
+:root[data-theme^="endfield-"] .titlebar .ctl.back,
+:root[data-theme^="endfield-"] .titlebar .crumb-link,
+:root[data-theme^="endfield-"] .titlebar .wc {
+  border-radius: 0;
+  transition: background 95ms var(--ef-snap), color 95ms var(--ef-snap), border-color 95ms var(--ef-snap);
+}
+:root[data-theme^="endfield-"] .titlebar .tool.on,
+:root[data-theme^="endfield-"] .titlebar .wc.on {
+  background: var(--ef-active-bg);
+  color: var(--ef-active-fg);
+  box-shadow: none;
+  clip-path: var(--ef-cut-sm);
+  font-weight: 700;
+}
+:root[data-theme^="endfield-"] .titlebar .tool:hover:not(.on),
+:root[data-theme^="endfield-"] .titlebar .wc:hover:not(.on):not(.close) {
+  background: var(--ef-row-active-bg);
+  color: var(--ef-row-active-fg);
+}
+:root[data-theme^="endfield-"] .titlebar .wc.close:hover {
+  background: var(--ef-danger);
+  color: #ffffff;
+}
+:root[data-theme^="endfield-"] .titlebar .search {
+  border-radius: 0;
+  border: 1px solid var(--border);
+  background: var(--ef-surface);
+}
+:root[data-theme^="endfield-"] .titlebar .search:focus-within {
+  border-color: var(--ef-yellow);
+}
+:root[data-theme^="endfield-"] .titlebar .zoom-slider input {
+  accent-color: var(--ef-yellow);
+}
+:root[data-theme^="endfield-"] .titlebar .vo-panel,
+:root[data-theme^="endfield-"] .titlebar .glass-card {
+  border-radius: 0;
+  border: 1px solid var(--ef-line-strong);
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background: var(--panel-inspector);
+}
+:root[data-theme^="endfield-"] .titlebar .vo-cap {
+  font-family: var(--font-mono);
+  letter-spacing: 1.6px;
+}
+:root[data-theme^="endfield-"] .titlebar .theme-opt,
+:root[data-theme^="endfield-"] .titlebar .vo-cell {
+  border-radius: 0;
+}
+:root[data-theme^="endfield-"] .titlebar .theme-opt.on,
+:root[data-theme^="endfield-"] .titlebar .vo-cell.on {
+  background: var(--ef-active-bg);
+  color: var(--ef-active-fg);
+  font-weight: 700;
+  clip-path: var(--ef-cut-sm);
+}
+
+/* ---- 3. 侧边栏：战术目录终端 ---- */
+:root[data-theme^="endfield-"] .sidebar {
+  background: transparent;
+}
+:root[data-theme^="endfield-"] .sidebar .brand {
+  border-bottom: 1px solid var(--ef-line-strong);
+  padding-bottom: 8px;
+}
+:root[data-theme^="endfield-"] .sidebar .brand h1 {
+  font-family: var(--font-sans);
+  font-weight: 800;
+  letter-spacing: 2px;
+}
+:root[data-theme^="endfield-"] .sidebar .brand::after {
+  content: 'EF//HUD';
+  margin-left: auto;
+  padding: 2px 6px;
+  background: var(--ef-chip-bg);
+  color: var(--ef-chip-fg);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  clip-path: var(--ef-cut-sm);
+}
+:root[data-theme^="endfield-"] .sidebar .view-item,
+:root[data-theme^="endfield-"] .sidebar .lib-item,
+:root[data-theme^="endfield-"] .sidebar .tree .row {
+  border-radius: 0;
+  transition: background 95ms var(--ef-snap), color 95ms var(--ef-snap);
+}
+:root[data-theme^="endfield-"] .sidebar .view-item.chip {
+  background: var(--ef-surface);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+:root[data-theme^="endfield-"] .sidebar .view-item.active,
+:root[data-theme^="endfield-"] .sidebar .lib-item.active {
+  background: var(--ef-active-bg);
+  color: var(--ef-active-fg);
+  box-shadow: none;
+  font-weight: 700;
+  clip-path: var(--ef-cut-sm);
+}
+:root[data-theme^="endfield-"] .sidebar .view-item.active .count,
+:root[data-theme^="endfield-"] .sidebar .lib-item.active .count {
+  color: var(--ef-active-fg);
+  font-family: var(--font-mono);
+  font-weight: 700;
+}
+:root[data-theme^="endfield-"] .sidebar .view-item.primary.active::before {
+  background: var(--ef-active-fg);
+  width: 3px;
+  border-radius: 0;
+}
+:root[data-theme^="endfield-"] .sidebar .tree .row.active {
+  background: var(--ef-row-active-bg);
+  color: var(--ef-row-active-fg);
+  box-shadow: inset 3px 0 0 var(--ef-yellow);
+}
+:root[data-theme^="endfield-"] .sidebar .tree .row.active .count,
+:root[data-theme^="endfield-"] .sidebar .tree .row.active .cnt {
+  color: var(--ef-row-active-sub);
+  font-family: var(--font-mono);
+}
+:root[data-theme^="endfield-"] .sidebar .section-head {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.4px;
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+}
+:root[data-theme^="endfield-"] .sidebar .section-head::before {
+  content: '//';
+  color: var(--text-2);
+  margin-right: 2px;
+  opacity: 0.7;
+}
+:root[data-theme^="endfield-"] .sidebar .sh-badge {
+  border-radius: 0;
+  background: var(--ef-row-active-bg);
+  color: var(--ef-row-active-sub);
+  font-family: var(--font-mono);
+}
+:root[data-theme^="endfield-"] .sidebar .add-btn,
+:root[data-theme^="endfield-"] .sidebar .plugin-entry {
+  border-radius: 0;
+}
+
+/* ---- 4. 主画布排印头块 & 网格画作卡片（绝不切角裁图） ---- */
+:root[data-theme^="endfield-"] .page-head .head-big {
+  font-family: var(--font-sans);
+  font-weight: 800;
+  letter-spacing: 1.5px;
+}
+:root[data-theme^="endfield-"] .page-head .head-caption {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 3px;
+  font-weight: 600;
+}
+:root[data-theme^="endfield-"] .page-head .head-caption::before {
+  content: '// ';
+  color: var(--ef-yellow);
+  background: var(--ef-row-active-bg);
+  padding: 0 4px 0 5px;
+  margin-right: 6px;
+}
+:root[data-theme^="endfield-"] .page-head .head-rule i {
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    var(--ef-yellow) 0,
+    var(--ef-yellow) 52px,
+    var(--ef-line-strong) 52px,
+    var(--border) 82%,
+    transparent
+  );
+}
+:root[data-theme^="endfield-"] .page-head .head-rule::after {
+  width: 6px;
+  height: 6px;
+  background: var(--ef-yellow);
+  border: 1px solid var(--ef-line-strong);
+  transform: none;
+}
+
+/* 网格卡片：零阴影、1px 细线，选中时弹出高对比工业黄定位框 */
+:root[data-theme^="endfield-"] .thumb,
+:root[data-theme^="endfield-"] .sf-cover {
+  border-radius: 0;
+  border: 1px solid var(--border);
+  box-shadow: none;
+  transition: border-color 95ms var(--ef-snap), transform 120ms var(--ef-snap);
+}
+:root[data-theme^="endfield-"] .thumb::after {
+  box-shadow: none;
+}
+:root[data-theme^="endfield-"] .cell:hover .thumb,
+:root[data-theme^="endfield-"] .sf-card:hover .sf-cover {
+  border-color: var(--ef-line-strong);
+  transform: translate3d(0, -2px, 0);
+  box-shadow: none;
+}
+:root[data-theme="endfield-light"] .cell.selected .thumb,
+:root[data-theme="endfield-light"] .sf-card.sel .sf-cover {
+  border-color: var(--ef-yellow-ink);
+  box-shadow: 0 0 0 2px var(--ef-yellow), 0 0 0 3px var(--ef-yellow-ink);
+}
+:root[data-theme="endfield-dark"] .cell.selected .thumb,
+:root[data-theme="endfield-dark"] .sf-card.sel .sf-cover {
+  border-color: var(--ef-yellow);
+  box-shadow: 0 0 0 2px var(--ef-yellow);
+}
+:root[data-theme^="endfield-"] .format-badge {
+  border-radius: 0;
+  background: #111214;
+  border: 1px solid var(--ef-yellow);
+  color: var(--ef-yellow);
+  clip-path: var(--ef-cut-sm);
+  padding: 2px 8px 2px 5px;
+}
+:root[data-theme^="endfield-"] .hover-overlay::after {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+:root[data-theme^="endfield-"] .tf-btn.danger {
+  color: var(--ef-danger);
+}
+
+/* ---- 5. 详情浮岛 → 终末地资产终端面板 (ASSET TERMINAL) ---- */
+:root[data-theme^="endfield-"] .inspector {
+  border-radius: 0 !important;
+  border: 1px solid var(--ef-line-strong) !important;
+  box-shadow: none !important;
+  background: var(--panel-inspector) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+/* 终端顶部工业眉标带（左荧光黄块 + 等宽规格代号） */
+:root[data-theme^="endfield-"] .inspector::before {
+  content: ' // ASSET_TERMINAL · SPEC';
+  display: flex;
+  align-items: center;
+  flex: none;
+  height: 22px;
+  padding: 0 10px 0 16px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  color: var(--ef-row-active-fg);
+  background:
+    linear-gradient(90deg, var(--ef-yellow) 0, var(--ef-yellow) 8px, var(--ef-row-active-bg) 8px, var(--ef-row-active-bg) 100%);
+  border-bottom: 1px solid var(--ef-line-strong);
+}
+:root[data-theme^="endfield-"] .inspector .preview,
+:root[data-theme^="endfield-"] .inspector .stack-card {
+  border-radius: 0;
+  border: 1px solid var(--border);
+  box-shadow: none;
+}
+:root[data-theme^="endfield-"] .inspector .sec {
+  border-top: 1px solid var(--border);
+}
+:root[data-theme^="endfield-"] .inspector .sec-head {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 1.4px;
+}
+:root[data-theme^="endfield-"] .inspector .kv b {
+  font-family: var(--font-mono);
+}
+:root[data-theme^="endfield-"] .inspector .swatches {
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  background: var(--ef-surface);
+}
+:root[data-theme^="endfield-"] .inspector .swatches i {
+  border-radius: 0;
+  border: none;
+  height: 22px;
+}
+:root[data-theme^="endfield-"] .inspector .tag-chip,
+:root[data-theme^="endfield-"] .inspector .folder-chip {
+  border-radius: 0;
+  background: var(--ef-row-active-bg);
+  color: var(--ef-row-active-fg);
+  border-left: 3px solid var(--ef-yellow);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  clip-path: var(--ef-cut-sm);
+  padding-right: 9px;
+}
+:root[data-theme^="endfield-"] .inspector .actions button,
+:root[data-theme^="endfield-"] .inspector .move-btn,
+:root[data-theme^="endfield-"] .inspector .tag-add input,
+:root[data-theme^="endfield-"] .inspector .tag-add button,
+:root[data-theme^="endfield-"] .inspector .line-input {
+  border-radius: 0;
+  border: 1px solid var(--border);
+  transition: background 95ms var(--ef-snap), color 95ms var(--ef-snap), border-color 95ms var(--ef-snap);
+}
+:root[data-theme^="endfield-"] .inspector .actions button,
+:root[data-theme^="endfield-"] .inspector .move-btn {
+  clip-path: var(--ef-cut-sm);
+}
+:root[data-theme^="endfield-"] .inspector .actions button:hover,
+:root[data-theme^="endfield-"] .inspector .move-btn:hover {
+  background: var(--ef-active-bg);
+  border-color: var(--ef-active-bg);
+  color: var(--ef-active-fg);
+  font-weight: 600;
+}
+:root[data-theme^="endfield-"] .inspector .star.on,
+:root[data-theme^="endfield-"] .inspector .star.preview {
+  color: var(--ef-yellow);
+  text-shadow: 0 0 1px rgba(17, 18, 20, 0.75);
+}
+
+/* ---- 6. 精密机械动效性格：data-motion="mech"（统一左 → 右 HUD 扫描流） ---- */
+
+/* 6.1 网格卡片：短促精密水平锁止（无弹簧过冲，关闭内层图片反向缩放消除冲突） */
+:root[data-motion="mech"] .thumb.wi {
+  animation: ef-card-lock 210ms var(--ef-mech) backwards;
+  animation-delay: calc(30ms + var(--d, 0ms) * 0.4);
+}
+@keyframes ef-card-lock {
+  from {
+    opacity: 0;
+    transform: translate3d(-12px, 0, 0);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+:root[data-motion="mech"] .thumb img,
+:root[data-motion="mech"] .sf-cover img {
+  transform: none !important;
+  transition: opacity 150ms var(--ef-ease) !important;
+}
+
+/* 6.2 标题头块：三段水平 HUD 扫描揭示（与下方图片严格同向合拍） */
+:root[data-motion="mech"] .page-head.wi {
+  animation: none;
+}
+:root[data-motion="mech"] .page-head .head-big {
+  animation: ef-head-scan 200ms var(--ef-mech) both;
+}
+:root[data-motion="mech"] .page-head .head-caption {
+  animation: ef-cap-lock 190ms var(--ef-mech) 40ms both;
+}
+:root[data-motion="mech"] .page-head .head-rule i {
+  transform-origin: left center;
+  animation: ef-rule-scan 260ms var(--ef-mech) 15ms both;
+}
+:root[data-motion="mech"] .page-head .head-rule::after {
+  animation: ef-dot-snap 160ms var(--ef-snap) 140ms both;
+}
+@keyframes ef-head-scan {
+  0% {
+    opacity: 0;
+    transform: translate3d(-14px, 0, 0);
+    clip-path: inset(0 80% 0 0);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+    clip-path: inset(0 0 0 0);
+  }
+}
+@keyframes ef-cap-lock {
+  0% {
+    opacity: 0;
+    transform: translate3d(-10px, 0, 0);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes ef-rule-scan {
+  0% {
+    opacity: 0.25;
+    transform: scaleX(0);
+  }
+  100% {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+}
+@keyframes ef-dot-snap {
+  0% { opacity: 0; transform: scale(0.3); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+/* 6.3 终端启动序列（严格精密水平推进，零弹跳） */
+:root[data-theme^="endfield-"][data-stage="boot"] .sidebar {
+  animation: ef-boot-lr 190ms var(--ef-mech) both;
+}
+:root[data-theme^="endfield-"][data-stage="boot"] .main-panel {
+  animation: ef-boot-lr 210ms var(--ef-mech) 35ms both;
+}
+:root[data-theme^="endfield-"][data-stage="boot"] .inspector {
+  animation: ef-boot-lr 210ms var(--ef-mech) 75ms both;
+}
+@keyframes ef-boot-lr {
+  from { opacity: 0; transform: translate3d(-10px, 0, 0); }
+  to { opacity: 1; transform: none; }
+}
+
+/* 6.4 详情资产终端选图回声：水平仪器扫描揭示 + 色票机械步进 */
+:root[data-motion="mech"] .inspector .preview {
+  animation: ef-preview-scan 170ms var(--ef-mech) both;
+}
+@keyframes ef-preview-scan {
+  0% {
+    opacity: 0.55;
+    clip-path: inset(0 100% 0 0);
+  }
+  100% {
+    opacity: 1;
+    clip-path: inset(0 0 0 0);
+  }
+}
+:root[data-motion="mech"] .inspector .swatches i {
+  animation: ef-swatch-lock 170ms var(--ef-mech) backwards;
+  animation-delay: calc(var(--si, 0) * 22ms);
+}
+@keyframes ef-swatch-lock {
+  0% {
+    opacity: 0;
+    transform: translate3d(-6px, 0, 0);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-motion="mech"] .thumb.wi,
+  :root[data-motion="mech"] .page-head .head-big,
+  :root[data-motion="mech"] .page-head .head-caption,
+  :root[data-motion="mech"] .page-head .head-rule i,
+  :root[data-motion="mech"] .page-head .head-rule::after,
+  :root[data-theme^="endfield-"][data-stage="boot"] .sidebar,
+  :root[data-theme^="endfield-"][data-stage="boot"] .main-panel,
+  :root[data-theme^="endfield-"][data-stage="boot"] .inspector,
+  :root[data-motion="mech"] .inspector .preview,
+  :root[data-motion="mech"] .inspector .swatches i {
+    animation: none !important;
+  }
+}

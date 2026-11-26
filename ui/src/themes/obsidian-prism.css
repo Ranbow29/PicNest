@@ -1,0 +1,670 @@
+/* ==========================================================================
+   PicNest 风格主题：Obsidian Prism · 黑曜棱镜（暗夜 / 冷晶 双生光学版）
+   设计灵感致谢：RMvdesi/obsidian-prism (GPL-3.0)
+   设计哲学：
+   1. 珠宝级光学黑曜展柜：5 阶冷调中性灰（绝不污染画作色彩），靠 1px 顶缘微米高光
+      (--op-spec) 与深邃多段浮影立出立体感；选中/聚焦才折射克制的四色光学棱镜光谱。
+   2. 阻尼弹簧物理手感 (data-motion="prism")：统一左 → 右柔滑推演，无生硬切角与碰撞。
+   3. 100% 作用域隔离，零污染老主题、酸性印刷与终末工业主题。
+   ========================================================================== */
+
+@property --op-rim-angle {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
+}
+
+@keyframes op-rim-spin {
+  to {
+    --op-rim-angle: 360deg;
+  }
+}
+
+:root[data-theme="obsidian-dark"],
+:root[data-theme="obsidian-light"] {
+  --op-spring: cubic-bezier(0.22, 1.16, 0.36, 1);
+  --op-smooth: cubic-bezier(0.16, 1, 0.3, 1);
+  --op-ease: cubic-bezier(0.2, 0, 0, 1);
+
+  --radius: 10px;
+  --radius-panel: 10px;
+  --blur: 18px;
+  --font-serif: 'Segoe UI', 'Microsoft YaHei UI', 'PingFang SC', system-ui, sans-serif;
+  --font-sans: 'Segoe UI', 'Microsoft YaHei UI', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Cascadia Code', Consolas, monospace;
+}
+
+/* ---- 暗夜版：深空黑曜 (Obsidian Dark) ---- */
+:root[data-theme="obsidian-dark"] {
+  --bg: #08090c;
+  --bg-2: #13161e;
+  --panel: rgba(19, 22, 30, 0.88);
+  --panel-strong: #0e1015;
+  --text: #f2f3f7;
+  --text-2: #8a8f9e;
+  --accent: #669df6;
+  --accent-weak: rgba(102, 157, 246, 0.14);
+  --folder-default: #8ab4f8;
+  --border: rgba(218, 228, 255, 0.085);
+
+  --op-spec: rgba(255, 255, 255, 0.095);
+  --op-card: #141720;
+  --op-hover-wash: rgba(255, 255, 255, 0.055);
+  --op-prism-line: linear-gradient(90deg, #4285f4 0%, #9b72cb 36%, #ea4335 72%, #fbbc04 100%);
+  --op-prism-vert: linear-gradient(180deg, #4285f4 0%, #9b72cb 40%, #ea4335 76%, #fbbc04 100%);
+  --op-halo-sel: 0 0 0 2px #669df6, 0 0 0 4px rgba(155, 114, 203, 0.34), 0 8px 26px -6px rgba(66, 133, 244, 0.32);
+
+  --shadow: 0 12px 32px -8px rgba(0, 0, 0, 0.56);
+  --shadow-float: 0 16px 42px -12px rgba(0, 0, 0, 0.68), 0 2px 10px rgba(0, 0, 0, 0.42);
+  --shadow-tile: 0 2px 6px rgba(0, 0, 0, 0.42), 0 10px 24px -8px rgba(0, 0, 0, 0.48);
+  --shadow-tile-hover: 0 4px 12px rgba(0, 0, 0, 0.54), 0 16px 34px -8px rgba(0, 0, 0, 0.58);
+
+  --tile-edge: rgba(255, 255, 255, 0.13);
+  --sidebar-glow: rgba(102, 157, 246, 0.045);
+  --panel-edge: rgba(255, 255, 255, 0.095);
+  --overlay-grad: linear-gradient(transparent, rgba(8, 9, 12, 0.90));
+  --overlay-text: #f2f3f7;
+  --overlay-halo: 0 1px 3px rgba(0, 0, 0, 0.85);
+  --glass-strong: rgba(14, 16, 21, 0.90);
+  --glass-weak: rgba(14, 16, 21, 0.46);
+  --panel-inspector: rgba(20, 22, 30, 0.94);
+  --panel-insp-top: rgba(22, 25, 34, 0.97);
+  --panel-insp-mid: rgba(20, 22, 30, 0.94);
+  --panel-insp-low: rgba(17, 19, 27, 0.90);
+  --panel-insp-bot: rgba(14, 16, 23, 0.80);
+
+  --amb-blur: 76px;
+  --amb-sat: 1.25;
+  --amb-bright: 0.92;
+  --amb-opacity: 0.24;
+  --amb-veil: rgba(8, 9, 12, 0.24);
+
+  /* 极淡星尘光学微格底纹 */
+  --paper-grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='36' height='36' viewBox='0 0 36 36'%3E%3Ccircle cx='1' cy='1' r='0.75' fill='%23ffffff' opacity='0.14'/%3E%3Ccircle cx='19' cy='19' r='0.6' fill='%238ab4f8' opacity='0.16'/%3E%3C/svg%3E");
+  --paper-opacity: 0.55;
+  --paper-blend: normal;
+}
+
+/* ---- 冷晶版：白昼冷晶 (Obsidian Light / Crystal) ---- */
+:root[data-theme="obsidian-light"] {
+  --bg: #e8eef6;
+  --bg-2: #dde6f2;
+  --panel: rgba(255, 255, 255, 0.84);
+  --panel-strong: #f6f9fd;
+  --text: #0f172a;
+  --text-2: #5b6b82;
+  --accent: #2563eb;
+  --accent-weak: rgba(37, 99, 235, 0.11);
+  --folder-default: #3b66a8;
+  --border: rgba(15, 23, 42, 0.11);
+
+  --op-spec: rgba(255, 255, 255, 0.92);
+  --op-card: #ffffff;
+  --op-hover-wash: rgba(15, 23, 42, 0.048);
+  --op-prism-line: linear-gradient(90deg, #2563eb 0%, #7c3aed 38%, #ea4335 74%, #d97706 100%);
+  --op-prism-vert: linear-gradient(180deg, #2563eb 0%, #7c3aed 40%, #ea4335 76%, #d97706 100%);
+  --op-halo-sel: 0 0 0 2px #2563eb, 0 0 0 4px rgba(124, 58, 237, 0.24), 0 8px 24px -6px rgba(37, 99, 235, 0.26);
+
+  --shadow: 0 10px 28px -6px rgba(15, 23, 42, 0.14);
+  --shadow-float: 0 14px 36px -10px rgba(30, 58, 138, 0.15), 0 2px 8px rgba(15, 23, 42, 0.07);
+  --shadow-tile: 0 1px 3px rgba(15, 23, 42, 0.07), 0 8px 20px -6px rgba(30, 58, 138, 0.09);
+  --shadow-tile-hover: 0 3px 8px rgba(15, 23, 42, 0.11), 0 14px 30px -8px rgba(30, 58, 138, 0.16);
+
+  --tile-edge: rgba(255, 255, 255, 0.88);
+  --sidebar-glow: rgba(255, 255, 255, 0.82);
+  --panel-edge: rgba(255, 255, 255, 0.92);
+  --overlay-grad: linear-gradient(transparent, rgba(248, 250, 252, 0.94));
+  --overlay-text: #0f172a;
+  --overlay-halo: 0 1px 3px rgba(255, 255, 255, 0.92);
+  --glass-strong: rgba(246, 249, 253, 0.92);
+  --glass-weak: rgba(246, 249, 253, 0.48);
+  --panel-inspector: rgba(255, 255, 255, 0.96);
+  --panel-insp-top: rgba(255, 255, 255, 0.98);
+  --panel-insp-mid: rgba(255, 255, 255, 0.95);
+  --panel-insp-low: rgba(246, 249, 253, 0.90);
+  --panel-insp-bot: rgba(238, 243, 250, 0.82);
+
+  --amb-blur: 86px;
+  --amb-sat: 1.12;
+  --amb-bright: 1.03;
+  --amb-opacity: 0.16;
+  --amb-veil: rgba(37, 99, 235, 0.03);
+
+  --paper-grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='36' height='36' viewBox='0 0 36 36'%3E%3Ccircle cx='1' cy='1' r='0.75' fill='%230f172a' opacity='0.10'/%3E%3Ccircle cx='19' cy='19' r='0.6' fill='%232563eb' opacity='0.14'/%3E%3C/svg%3E");
+  --paper-opacity: 0.55;
+  --paper-blend: normal;
+}
+
+:root[data-theme^="obsidian-"] body::before,
+:root[data-theme^="obsidian-"] .main-panel::before {
+  background-size: 36px 36px;
+}
+
+/* ---- 1. 主面板：黑曜光学展柜（圆角 10px + 顶缘微米高光 + 极细四色棱镜折射线） ---- */
+:root[data-theme^="obsidian-"] .main-panel {
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-float), inset 0 1px 0 var(--op-spec);
+}
+:root[data-theme^="obsidian-"] .main-panel::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 16px;
+  right: 16px;
+  height: 1.5px;
+  z-index: 60;
+  pointer-events: none;
+  background: var(--op-prism-line);
+  opacity: calc(0.70 + 0.30 * var(--op-tide, 0));
+  filter: drop-shadow(0 1px calc(8px * var(--op-tide, 0)) rgba(102, 157, 246, 0.55));
+  -webkit-mask-image: linear-gradient(90deg, transparent 0%, #000 14%, #000 78%, transparent 100%);
+          mask-image: linear-gradient(90deg, transparent 0%, #000 14%, #000 78%, transparent 100%);
+}
+
+/* ---- 2. 顶栏：烟熏黑曜玻璃 + 微米高光高亮控件 ---- */
+:root[data-theme^="obsidian-"] .titlebar .glass {
+  background: linear-gradient(180deg, var(--glass-strong) 0%, var(--glass-weak) 100%);
+  backdrop-filter: blur(20px) saturate(1.22);
+  -webkit-backdrop-filter: blur(20px) saturate(1.22);
+}
+:root[data-theme^="obsidian-"] .titlebar .tool,
+:root[data-theme^="obsidian-"] .titlebar .nav-arrow,
+:root[data-theme^="obsidian-"] .titlebar .ctl.back {
+  border-radius: 7px;
+  transition: background 140ms var(--op-ease), color 140ms var(--op-ease), transform 180ms var(--op-spring), box-shadow 140ms ease;
+}
+:root[data-theme^="obsidian-"] .titlebar .tool.on,
+:root[data-theme^="obsidian-"] .titlebar .wc.on {
+  background: var(--accent-weak);
+  color: var(--accent);
+  box-shadow: inset 0 1px 0 var(--op-spec), inset 0 0 0 1px color-mix(in srgb, var(--accent) 44%, transparent);
+}
+:root[data-theme^="obsidian-"] .titlebar .tool:active,
+:root[data-theme^="obsidian-"] .titlebar .wc:active {
+  transform: scale(0.95);
+}
+:root[data-theme^="obsidian-"] .titlebar .vo-panel,
+:root[data-theme^="obsidian-"] .titlebar .glass-card {
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-float), inset 0 1px 0 var(--op-spec);
+  background: var(--panel-inspector);
+}
+:root[data-theme^="obsidian-"] .titlebar .theme-opt.on,
+:root[data-theme^="obsidian-"] .titlebar .vo-cell.on {
+  background: var(--accent-weak);
+  color: var(--accent);
+  box-shadow: inset 0 1px 0 var(--op-spec), inset 0 0 0 1px color-mix(in srgb, var(--accent) 36%, transparent);
+}
+
+/* ---- 3. 侧边栏：光学索引与四色棱镜激活条 ---- */
+:root[data-theme^="obsidian-"] .sidebar .brand::after {
+  content: 'PRISM';
+  margin-left: auto;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 1.2px;
+  color: var(--accent);
+  background: var(--accent-weak);
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent);
+  box-shadow: inset 0 1px 0 var(--op-spec);
+}
+:root[data-theme^="obsidian-"] .sidebar .brand h1 {
+  font-family: var(--font-sans);
+  font-weight: 700;
+  letter-spacing: 2.5px;
+}
+:root[data-theme^="obsidian-"] .sidebar .view-item,
+:root[data-theme^="obsidian-"] .sidebar .lib-item,
+:root[data-theme^="obsidian-"] .sidebar .tree .row {
+  border-radius: 7px;
+  transition: background 140ms var(--op-ease), color 140ms var(--op-ease), box-shadow 140ms var(--op-ease);
+}
+:root[data-theme^="obsidian-"] .sidebar .view-item.active,
+:root[data-theme^="obsidian-"] .sidebar .lib-item.active {
+  background: var(--accent-weak);
+  color: var(--accent);
+  box-shadow: inset 0 1px 0 var(--op-spec), inset 0 0 0 1px color-mix(in srgb, var(--accent) 34%, transparent);
+}
+:root[data-theme^="obsidian-"] .sidebar .view-item.primary.active::before,
+:root[data-theme^="obsidian-"] .sidebar .tree .row.active::before {
+  background: var(--op-prism-vert);
+}
+:root[data-theme^="obsidian-"] .sidebar .tree .row.active {
+  background: var(--op-hover-wash);
+  color: var(--text);
+  box-shadow: inset 3px 0 0 var(--accent), inset 0 1px 0 var(--op-spec);
+}
+
+/* ---- 4. 主画布排印头块 & 展柜缩略图（不裁切画角，克制棱镜选中光环） ---- */
+:root[data-theme^="obsidian-"] .page-head .head-big {
+  font-family: var(--font-sans);
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+:root[data-theme^="obsidian-"] .page-head .head-caption {
+  font-family: var(--font-mono);
+  letter-spacing: 3px;
+}
+:root[data-theme^="obsidian-"] .page-head .head-rule i {
+  height: 1.5px;
+  background: var(--op-prism-line);
+  -webkit-mask-image: linear-gradient(90deg, #000 0%, #000 58%, transparent 100%);
+          mask-image: linear-gradient(90deg, #000 0%, #000 58%, transparent 100%);
+}
+:root[data-theme^="obsidian-"] .page-head .head-rule::after {
+  width: 6px;
+  height: 6px;
+  background: var(--accent);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 70%, transparent);
+}
+:root[data-theme^="obsidian-"] .thumb,
+:root[data-theme^="obsidian-"] .sf-cover {
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-tile);
+}
+:root[data-theme^="obsidian-"] .thumb::after {
+  box-shadow: inset 0 1px 0 var(--tile-edge);
+}
+:root[data-theme^="obsidian-"] .cell:hover .thumb,
+:root[data-theme^="obsidian-"] .sf-card:hover .sf-cover {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
+  box-shadow: var(--shadow-tile-hover);
+}
+:root[data-theme^="obsidian-"] .cell.selected .thumb,
+:root[data-theme^="obsidian-"] .sf-card.sel .sf-cover {
+  border-color: var(--accent);
+  box-shadow: var(--op-halo-sel);
+}
+
+@keyframes op-sel-prism-glide {
+  0% {
+    --op-rim-angle: 0deg;
+    opacity: 0;
+  }
+  18% {
+    opacity: 0.96;
+  }
+  68% {
+    opacity: 0.82;
+  }
+  100% {
+    --op-rim-angle: 360deg;
+    opacity: 0;
+  }
+}
+
+:root[data-theme^="obsidian-"] .cell.selected::before {
+  content: '';
+  position: absolute;
+  inset: -2.5px;
+  border-radius: 10.5px;
+  padding: 2px;
+  pointer-events: none;
+  z-index: 3;
+  background: conic-gradient(
+    from var(--op-rim-angle),
+    #4285f4 0deg,
+    #9b72cb 85deg,
+    #ea4335 170deg,
+    #fbbc04 250deg,
+    #34a853 310deg,
+    #4285f4 360deg
+  );
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+          mask-composite: exclude;
+  opacity: 0;
+  animation: op-sel-prism-glide 1.35s cubic-bezier(0.22, 1, 0.36, 1) 1 forwards;
+}
+
+/* ---- 5. 详情浮岛 → 黑曜棱镜光学档案柜 ---- */
+:root[data-theme^="obsidian-"] .inspector {
+  border-radius: 12px !important;
+  border: 1px solid var(--border) !important;
+  box-shadow: var(--shadow-float), inset 0 1px 0 var(--op-spec) !important;
+  background: var(--panel-inspector) !important;
+  overflow-x: hidden;
+}
+:root[data-theme^="obsidian-"] .inspector::before {
+  content: '';
+  display: block;
+  flex: none;
+  height: 2px;
+  width: 100%;
+  background: var(--op-prism-line);
+  opacity: 0.88;
+}
+:root[data-theme^="obsidian-"] .inspector .preview,
+:root[data-theme^="obsidian-"] .inspector .stack-card {
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-tile), inset 0 1px 0 var(--op-spec);
+}
+:root[data-theme^="obsidian-"] .inspector .swatches i {
+  border-radius: 4px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.24);
+}
+:root[data-theme^="obsidian-"] .inspector .actions button,
+:root[data-theme^="obsidian-"] .inspector .move-btn {
+  border-radius: 7px;
+  box-shadow: inset 0 1px 0 var(--op-spec);
+  transition: background 140ms var(--op-ease), border-color 140ms var(--op-ease), transform 180ms var(--op-spring);
+}
+:root[data-theme^="obsidian-"] .inspector .actions button:active,
+:root[data-theme^="obsidian-"] .inspector .move-btn:active {
+  transform: scale(0.97);
+}
+
+/* ---- 5.5 五彩流动棱镜按钮高亮 + 光标追踪镜面反光 ---- */
+:root[data-theme^="obsidian-"] :is(
+  .titlebar .tool,
+  .titlebar .wc:not(.close),
+  .titlebar .nav-arrow,
+  .titlebar .ctl.back,
+  .titlebar .theme-opt,
+  .titlebar .vo-cell,
+  .sidebar .view-item:not(.disabled),
+  .sidebar .lib-item,
+  .sidebar .plugin-entry,
+  .inspector .actions button,
+  .inspector .move-btn
+) {
+  position: relative;
+  isolation: isolate;
+  transition:
+    background-color 140ms var(--op-ease),
+    color 140ms var(--op-ease),
+    border-color 140ms var(--op-ease),
+    transform 220ms var(--op-spring),
+    box-shadow 160ms ease;
+}
+
+:root[data-theme^="obsidian-"] :is(
+  .titlebar .tool,
+  .titlebar .wc:not(.close),
+  .titlebar .nav-arrow,
+  .titlebar .ctl.back,
+  .titlebar .theme-opt,
+  .titlebar .vo-cell,
+  .sidebar .view-item:not(.disabled),
+  .sidebar .lib-item,
+  .sidebar .plugin-entry,
+  .inspector .actions button,
+  .inspector .move-btn
+)::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1.5px;
+  pointer-events: none;
+  z-index: 2;
+  opacity: 0;
+  background: conic-gradient(
+    from var(--op-rim-angle),
+    #4285f4 0deg,
+    #9b72cb 85deg,
+    #ea4335 170deg,
+    #fbbc04 250deg,
+    #34a853 310deg,
+    #4285f4 360deg
+  );
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+          mask-composite: exclude;
+  transition: opacity 150ms ease;
+}
+
+:root[data-theme="obsidian-dark"] :is(
+  .titlebar .tool,
+  .titlebar .wc:not(.close),
+  .titlebar .nav-arrow,
+  .titlebar .ctl.back,
+  .titlebar .theme-opt,
+  .titlebar .vo-cell,
+  .sidebar .view-item:not(.disabled),
+  .sidebar .lib-item,
+  .sidebar .plugin-entry,
+  .inspector .actions button,
+  .inspector .move-btn
+):hover:not(:disabled) {
+  background-color: var(--op-hover-wash);
+  background-image: radial-gradient(
+    circle 68px at var(--px, 50%) var(--py, 50%),
+    rgba(255, 255, 255, 0.14) 0%,
+    rgba(102, 157, 246, 0.08) 46%,
+    transparent 76%
+  );
+  color: var(--text);
+  transform: translate3d(0, -1px, 0);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16), 0 4px 14px -4px rgba(0, 0, 0, 0.45);
+}
+
+:root[data-theme="obsidian-light"] :is(
+  .titlebar .tool,
+  .titlebar .wc:not(.close),
+  .titlebar .nav-arrow,
+  .titlebar .ctl.back,
+  .titlebar .theme-opt,
+  .titlebar .vo-cell,
+  .sidebar .view-item:not(.disabled),
+  .sidebar .lib-item,
+  .sidebar .plugin-entry,
+  .inspector .actions button,
+  .inspector .move-btn
+):hover:not(:disabled) {
+  background-color: rgba(37, 99, 235, 0.06);
+  background-image: radial-gradient(
+    circle 68px at var(--px, 50%) var(--py, 50%),
+    rgba(255, 255, 255, 0.85) 0%,
+    rgba(37, 99, 235, 0.10) 48%,
+    transparent 76%
+  );
+  color: var(--text);
+  transform: translate3d(0, -1px, 0);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.92), 0 4px 14px -4px rgba(30, 58, 138, 0.14);
+}
+
+:root[data-theme^="obsidian-"] :is(
+  .titlebar .tool,
+  .titlebar .wc:not(.close),
+  .titlebar .nav-arrow,
+  .titlebar .ctl.back,
+  .titlebar .theme-opt,
+  .titlebar .vo-cell,
+  .sidebar .view-item:not(.disabled),
+  .sidebar .lib-item,
+  .sidebar .plugin-entry,
+  .inspector .actions button,
+  .inspector .move-btn
+):hover:not(:disabled)::after {
+  opacity: 0.92;
+  animation: op-rim-spin 2.2s linear infinite;
+}
+
+:root[data-theme^="obsidian-"] :is(
+  .titlebar .tool.on,
+  .titlebar .wc.on,
+  .titlebar .theme-opt.on,
+  .titlebar .vo-cell.on,
+  .sidebar .view-item.active,
+  .sidebar .lib-item.active
+):hover:not(:disabled) {
+  background-color: var(--accent-weak);
+  color: var(--accent);
+}
+
+/* 详情面板底层在黑曜主题下保留轻微半透质感，与底部地平线淡光自然交融 */
+:root[data-theme="obsidian-dark"] .inspector {
+  background: rgba(18, 20, 28, 0.90) !important;
+  backdrop-filter: blur(18px) saturate(1.18);
+  -webkit-backdrop-filter: blur(18px) saturate(1.18);
+}
+:root[data-theme="obsidian-light"] .inspector {
+  background: rgba(255, 255, 255, 0.92) !important;
+  backdrop-filter: blur(18px) saturate(1.12);
+  -webkit-backdrop-filter: blur(18px) saturate(1.12);
+}
+
+/* ---- 6. 阻尼弹簧动效性格：data-motion="prism"（统一左 → 右柔滑推演） ---- */
+
+/* 6.1 网格缩略图：阻尼平滑入场，并取消内层反向缩放防止矢量冲突 */
+:root[data-motion="prism"] .thumb.wi {
+  animation: op-card-glide 260ms var(--op-smooth) backwards;
+  animation-delay: calc(35ms + var(--d, 0ms) * 0.45);
+}
+@keyframes op-card-glide {
+  from {
+    opacity: 0;
+    transform: translate3d(-14px, 0, 0);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+:root[data-motion="prism"] .thumb img,
+:root[data-motion="prism"] .sf-cover img {
+  transform: none !important;
+  transition: opacity 180ms ease-out !important;
+}
+
+/* 6.2 标题头块：三段左 → 右光学揭示（与下方网格同向合拍） */
+:root[data-motion="prism"] .page-head.wi {
+  animation: none;
+}
+:root[data-motion="prism"] .page-head .head-big {
+  animation: op-head-glide 260ms var(--op-smooth) both;
+}
+:root[data-motion="prism"] .page-head .head-caption {
+  animation: op-cap-glide 240ms var(--op-smooth) 45ms both;
+}
+:root[data-motion="prism"] .page-head .head-rule i {
+  transform-origin: left center;
+  animation: op-rule-glide 320ms var(--op-smooth) 20ms both;
+}
+:root[data-motion="prism"] .page-head .head-rule::after {
+  animation: op-dot-spring 240ms var(--op-spring) 140ms both;
+}
+@keyframes op-head-glide {
+  0% {
+    opacity: 0;
+    transform: translate3d(-14px, 0, 0);
+    clip-path: inset(0 70% 0 0);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+    clip-path: inset(0 0 0 0);
+  }
+}
+@keyframes op-cap-glide {
+  0% {
+    opacity: 0;
+    transform: translate3d(-10px, 0, 0);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes op-rule-glide {
+  0% {
+    opacity: 0.25;
+    transform: scaleX(0);
+  }
+  100% {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+}
+@keyframes op-dot-spring {
+  0% { opacity: 0; transform: rotate(45deg) scale(0.2); }
+  100% { opacity: 1; transform: rotate(45deg) scale(1); }
+}
+
+/* 6.3 光学开版因果序列（左 → 右阻尼推进） */
+:root[data-theme^="obsidian-"][data-stage="boot"] .sidebar {
+  animation: op-boot-lr 240ms var(--op-smooth) both;
+}
+:root[data-theme^="obsidian-"][data-stage="boot"] .main-panel {
+  animation: op-boot-lr 260ms var(--op-smooth) 45ms both;
+}
+:root[data-theme^="obsidian-"][data-stage="boot"] .inspector {
+  animation: op-boot-lr 260ms var(--op-smooth) 90ms both;
+}
+@keyframes op-boot-lr {
+  from { opacity: 0; transform: translate3d(-12px, 0, 0); }
+  to { opacity: 1; transform: none; }
+}
+
+/* 6.4 详情面板跨区回声：光学显影揭示 + 色票阻尼琴键弹入 */
+:root[data-motion="prism"] .inspector .preview {
+  animation: op-preview-reveal 210ms var(--op-smooth) both;
+}
+@keyframes op-preview-reveal {
+  0% {
+    opacity: 0.45;
+    clip-path: inset(0 0 16% 0);
+    transform: translate3d(0, 4px, 0);
+  }
+  100% {
+    opacity: 1;
+    clip-path: inset(0 0 0 0);
+    transform: none;
+  }
+}
+:root[data-motion="prism"] .inspector .swatches i {
+  animation: op-swatch-spring 240ms var(--op-spring) backwards;
+  animation-delay: calc(var(--si, 0) * 28ms);
+}
+@keyframes op-swatch-spring {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 6px, 0) scaleY(0.65);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-theme^="obsidian-"] :is(
+    .titlebar .tool,
+    .titlebar .wc:not(.close),
+    .titlebar .nav-arrow,
+    .titlebar .ctl.back,
+    .titlebar .theme-opt,
+    .titlebar .vo-cell,
+    .sidebar .view-item:not(.disabled),
+    .sidebar .lib-item,
+    .sidebar .plugin-entry,
+    .inspector .actions button,
+    .inspector .move-btn
+  ):hover:not(:disabled)::after {
+    animation: none !important;
+  }
+  :root[data-motion="prism"] .thumb.wi,
+  :root[data-motion="prism"] .page-head .head-big,
+  :root[data-motion="prism"] .page-head .head-caption,
+  :root[data-motion="prism"] .page-head .head-rule i,
+  :root[data-motion="prism"] .page-head .head-rule::after,
+  :root[data-theme^="obsidian-"][data-stage="boot"] .sidebar,
+  :root[data-theme^="obsidian-"][data-stage="boot"] .main-panel,
+  :root[data-theme^="obsidian-"][data-stage="boot"] .inspector,
+  :root[data-motion="prism"] .inspector .preview,
+  :root[data-motion="prism"] .inspector .swatches i {
+    animation: none !important;
+  }
+  :root[data-theme^="obsidian-"] .cell.selected::before {
+    animation: none !important;
+    opacity: 0 !important;
+  }
+}

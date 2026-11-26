@@ -184,6 +184,13 @@ export const useLibrary = defineStore('library', {
     brief: { open: false, path: null, scale: 1, tx: 0, ty: 0 }, // 简报模式（全屏演示）
     grayscaleMode: localStorage.getItem('picnest.grayscale') === '1', // 黑白预览（全局显示开关）
     cardTilt3D: localStorage.getItem('picnest.cardTilt3D') === '1', // 网格卡片 3D 视差微倾 + 柔光掠影（默认关闭，个性化开启）
+    showMascots: (() => {
+      try {
+        const s = localStorage.getItem('picnest.mascots')
+        if (s !== null) return s === '1'
+        return String(localStorage.getItem('picnest.theme') || '').startsWith('obsidian-')
+      } catch { return false }
+    })(), // 侧栏底部像素双宠伴侣（小紫猫 & 小克）
     docPrivacyMode: localStorage.getItem('picnest.docPrivacyMode') !== '0', // 文档隐私折叠（默认开启：保护敏感文档隐私，未显式设为 '0' 即生效）
     contextMenu: { open: false, x: 0, y: 0, image: null },
     renaming: false,
@@ -3354,6 +3361,15 @@ export const useLibrary = defineStore('library', {
     toggleCardTilt3D() {
       this.cardTilt3D = !this.cardTilt3D
       localStorage.setItem('picnest.cardTilt3D', this.cardTilt3D ? '1' : '0')
+    },
+    toggleMascots() {
+      this.showMascots = !this.showMascots
+      try { localStorage.setItem('picnest.mascots', this.showMascots ? '1' : '0') } catch {}
+    },
+    autoEnableMascotsIfUnset() {
+      try {
+        if (localStorage.getItem('picnest.mascots') === null) this.showMascots = true
+      } catch {}
     },
     toggleDocPrivacyMode() {
       this.docPrivacyMode = !this.docPrivacyMode

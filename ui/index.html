@@ -6,14 +6,15 @@
     <title>PicNest 图巢</title>
     <script>
       /* 首屏防闪白：在样式/应用加载前落定 data-theme（运行期由 src/lib/theme.js 接管）
-         支持 light | dark | mono-light | mono-charcoal | mono-dark；auto 跟随系统解析 */
+         支持 light | dark | mono-light | mono-charcoal | mono-dark | acid-print | endfield-light | endfield-dark | obsidian-dark | obsidian-light；auto 跟随系统解析 */
       ;(function () {
         try {
           var m = localStorage.getItem('picnest.theme') || 'auto'
-          var allowed = { light: 1, dark: 1, 'mono-light': 1, 'mono-charcoal': 1, 'mono-dark': 1 }
+          var allowed = { light: 1, dark: 1, 'mono-light': 1, 'mono-charcoal': 1, 'mono-dark': 1, 'acid-print': 1, 'endfield-light': 1, 'endfield-dark': 1, 'obsidian-dark': 1, 'obsidian-light': 1 }
           var t = allowed[m] ? m : (m === 'auto' ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'mono-dark' : 'mono-light') : 'mono-light')
           document.documentElement.dataset.theme = t
-          document.documentElement.style.colorScheme = (t === 'light' || t === 'mono-light') ? 'light' : 'dark'
+          document.documentElement.dataset.motion = t === 'acid-print' ? 'acid' : (t.indexOf('endfield-') === 0 ? 'mech' : (t.indexOf('obsidian-') === 0 ? 'prism' : 'ink'))
+          document.documentElement.style.colorScheme = (t === 'light' || t === 'mono-light' || t === 'acid-print' || t === 'endfield-light' || t === 'obsidian-light') ? 'light' : 'dark'
           document.documentElement.dataset.paper = localStorage.getItem('picnest.paperGrain') === '0' ? 'off' : 'on'
         } catch (e) {}
       })()

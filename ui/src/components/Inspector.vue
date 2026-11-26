@@ -111,7 +111,22 @@ function onPreviewError() {
   }
   previewDead.value = true
 }
-watch(() => lib.selectedPath, () => { previewFallback.value = false; previewDead.value = false })
+/* 跨面板回声（供酸性印刷等风格主题驱动曝光揭幕与警示带步进，老主题零视觉影响） */
+const echoStep = ref(0)
+const echoPulse = ref(false)
+let echoTimer = 0
+watch(() => lib.selectedPath, (p, old) => {
+  previewFallback.value = false
+  previewDead.value = false
+  if (!p || p === old) return
+  echoStep.value = (echoStep.value + 1) % 8
+  echoPulse.value = false
+  clearTimeout(echoTimer)
+  requestAnimationFrame(() => {
+    echoPulse.value = true
+    echoTimer = setTimeout(() => { echoPulse.value = false }, 260)
+  })
+})
 watch(() => lib.selectedPath, async (p) => {
   palette.value = []
   if (!p) { paletteLoading.value = false; return }
@@ -390,10 +405,10 @@ async function exportFolder() {
 </script>
 
 <template>
-  <aside class="inspector">
+  <aside class="inspector" :class="{ 'acid-echo': echoPulse }" :style="{ '--echo-step': echoStep }">
     <!-- ========== 单选图片 ========== -->
     <template v-if="mode === 'img' && img">
-      <div class="preview">
+      <div class="preview" :key="img.file_path">
         <img v-if="!previewDead && !isTextImg && !isVideoImg" :src="previewFallback ? thumbSrc(img) : fullSrc(img)"
              :class="{ gray: lib.grayscaleMode }" loading="lazy" decoding="async" draggable="false" @error="onPreviewError" />
         <img v-else-if="!previewDead && img.thumbnail_path && img.thumbnail_path !== 'SKIP'" :src="thumbSrc(img)"
@@ -423,10 +438,10 @@ async function exportFolder() {
         <div class="sec-head" @click="toggle('palette')"><span>色板</span><i>{{ sections.palette ? '▾' : '▸' }}</i></div>
         <div v-show="sections.palette" class="sec-body">
           <div v-if="paletteLoading" class="muted">分析中…</div>
-          <div v-else-if="palette.length" class="swatches">
+          <div v-else-if="palette.length" class="swatches" :key="img.file_path + ':pal'">
             <i v-for="(c, i) in palette" :key="i"
                :class="{ on: lib.filters.color.value && lib.filters.color.value.join() === c.color.join() }"
-               :style="{ background: `rgb(${c.color?.[0] ?? 128},${c.color?.[1] ?? 128},${c.color?.[2] ?? 128})` }"
+               :style="{ '--si': i, background: `rgb(${c.color?.[0] ?? 128},${c.color?.[1] ?? 128},${c.color?.[2] ?? 128})` }"
                :title="(c.ratio != null ? c.ratio + '% · ' : '') + '点击筛选此色'" @click="filterByPaletteColor(c.color)" />
           </div>
           <div v-else class="muted">—</div>

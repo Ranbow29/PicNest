@@ -7,10 +7,16 @@ import DirTreeItem from './DirTreeItem.vue'
 import FolderIcon from './FolderIcon.vue'
 import NamePromptDialog from './NamePromptDialog.vue'
 import DirContextMenu from './DirContextMenu.vue'
+import PixelMascots from './PixelMascots.vue'
+import { useTheme } from '../lib/theme'
 
 const EagleImportWizard = defineAsyncComponent(() => import('./EagleImportWizard.vue'))
 
 const lib = useLibrary()
+const { resolved: themeResolved } = useTheme()
+watch(themeResolved, (v) => {
+  if (v.startsWith('obsidian-')) lib.autoEnableMascotsIfUnset()
+}, { immediate: true })
 /* 插件宿主只在旧版 Electron 预加载层里真实存在；Rust 版 picrand 的 Proxy 给未知键返回 null 桩，
    所以这里必须真调一次看有没有 ok 响应，别把空插件库当可用功能摆出来 */
 const pluginHostReady = ref(false)
@@ -61,6 +67,12 @@ function toggleRootsFolded() {
   rootsFolded.value = !rootsFolded.value
   localStorage.setItem('picnest.rootsFolded', rootsFolded.value ? '1' : '0')
 }
+/* 顶部 Logo 可收起：平时不需要一直盯着看，收起后把纵向空间还给视图与文件夹树（持久化） */
+const brandCollapsed = ref(localStorage.getItem('picnest.brandCollapsed') === '1')
+function toggleBrandCollapsed() {
+  brandCollapsed.value = !brandCollapsed.value
+  localStorage.setItem('picnest.brandCollapsed', brandCollapsed.value ? '1' : '0')
+}
 const visibleLibs = computed(() => (rootsFolded.value ? libs.value.filter((l) => l.active) : libs.value))
 
 const askNewFolder = ref(false)
@@ -97,6 +109,10 @@ async function pickFolder() {
 
 function openNode(node) {
   lib.openDir(node.rel || null) // 树根 → null(全部)；子目录 → rel
+}
+function onSwitchView(_e, key) {
+  if (lib.view === key) return
+  lib.switchView(key)
 }
 function onViewMenu(e, entry) {
   if (entry.key !== 'trash') return
@@ -220,19 +236,34 @@ async function dropOnLib(e, l) {
 
 <template>
   <aside
-    class="sidebar" :class="{ collapsed: lib.sidebarCollapsed }"
+    class="sidebar" :class="{ collapsed: lib.sidebarCollapsed, 'brand-collapsed': brandCollapsed }"
     :style="{ width: (lib.sidebarCollapsed ? 0 : lib.sidebarWidth) + 'px', '--sb-target-w': lib.sidebarWidth + 'px' }"
     @dragover="onSidebarDragOver" @dragleave="onSidebarDragLeave" @drop.prevent="dropToRoot"
   >
-    <div class="brand">
+    <div v-if="!brandCollapsed" class="brand">
       <h1>图巢</h1>
-      <span class="sub">PicNest</span>
+      <div class="brand-meta">
+        <span class="sub">PicNest</span>
+        <span class="acid-tag">ACID//01</span>
+      </div>
+      <button class="brand-fold-btn" title="收起顶部 Logo" aria-label="收起顶部 Logo" @click="toggleBrandCollapsed">
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M3 4.2h10M4.5 11.2 8 7.6l3.5 3.6" />
+        </svg>
+      </button>
     </div>
+    <button v-else class="brand-reopen" title="展开图巢 Logo" aria-label="展开图巢 Logo" @click="toggleBrandCollapsed">
+      <i />
+      <svg viewBox="0 0 16 10" aria-hidden="true">
+        <path d="M4.5 3.2 8 6.8l3.5-3.6" />
+      </svg>
+      <i />
+    </button>
 
     <nav class="views">
       <div
         class="view-item primary" :class="{ active: isEntryActive(primaryEntry) }"
-        @click="lib.view !== primaryEntry.key && lib.switchView(primaryEntry.key)"
+        @click="onSwitchView($event, primaryEntry.key)"
       >
         <svg class="v-ico" viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2" width="5" height="5" rx="1.2" /><rect x="9" y="2" width="5" height="5" rx="1.2" /><rect x="2" y="9" width="5" height="5" rx="1.2" /><rect x="9" y="9" width="5" height="5" rx="1.2" /></svg>
         <span class="label">{{ primaryEntry.label }}</span>
@@ -243,7 +274,7 @@ async function dropOnLib(e, l) {
           v-for="e in gridEntries" :key="e.key"
           class="view-item chip" :class="{ active: isEntryActive(e), disabled: !e.enabled, 'drop-trash': e.key === 'trash' && trashOver, 'drop-uncat': e.key === 'uncategorized' && uncatOver }"
           :title="e.count != null ? `${e.label} · ${e.count.toLocaleString()}` : e.label"
-          @click="e.enabled && lib.view !== e.key && lib.switchView(e.key)"
+          @click="e.enabled && onSwitchView($event, e.key)"
           @contextmenu="onViewMenu($event, e)"
           @dragover="onViewDragOver($event, e)" @dragleave="onViewDragLeave(e)" @drop.prevent="onViewDrop($event, e)"
         >
@@ -289,6 +320,8 @@ async function dropOnLib(e, l) {
 
     <div v-if="lib.error" class="error">{{ lib.error }}</div>
 
+    <PixelMascots v-if="lib.showMascots && !lib.sidebarCollapsed" />
+
     <div v-if="pluginHostReady" class="sb-foot">
       <button class="plugin-entry" title="插件库（主题 / 界面插件）" @click="lib.openPlugins()">
         <span class="pe-ico">🧩</span><span>插件库</span>
@@ -308,33 +341,67 @@ async function dropOnLib(e, l) {
 
 <style scoped>
 .sidebar {
-  /* 左侧栏 = 底层（不是浮岛卡）：主面板浮在它上面，ZCode 同构；宽度可拖 */
+  /* 左侧栏 = 底层（z-index:1 位于正文浮岛 z-index:4 正下方）：
+     收起时正文浮岛向左舒展覆盖它，侧栏原地微沉、柔焦并融进浮岛阴影中消失 */
+  position: relative; z-index: 1;
   flex: none; display: flex; flex-direction: column;
   padding: 10px 8px 8px; overflow: hidden;
   box-sizing: border-box;
-  /* 不再 will-change: width —— 那是 layout 属性，声明它只会让浏览器每帧重排。
-     contain: layout paint 把重排限在侧栏内部，折叠/展开不再拖累整个网格重排。*/
   contain: layout paint;
-  will-change: transform, opacity;
-  transform: translateZ(0);
-  /* padding 不参与过渡（也是 layout），时长缩短以减少过渡帧数 */
-  transition: width 0.18s cubic-bezier(0.16, 1, 0.3, 1),
-              opacity 0.18s ease,
-              transform 0.18s cubic-bezier(0.16, 1, 0.3, 1);
-  /* 底子顶部白色渐变：从栏顶亮起，150px 内渐隐回 --bg（范围对齐品牌区+「全部」行） */
-  background: linear-gradient(180deg, var(--sidebar-glow) 0, rgba(255, 255, 255, 0) 150px);
+  transform-origin: right center;
+  will-change: transform, opacity, filter;
+  transform: translate3d(0, 0, 0) scale(1);
+  filter: blur(0px);
+  transition: width 0.34s cubic-bezier(0.22, 1, 0.36, 1),
+              padding 0.34s cubic-bezier(0.22, 1, 0.36, 1),
+              opacity 0.26s ease,
+              transform 0.34s cubic-bezier(0.22, 1, 0.36, 1),
+              filter 0.28s ease;
+  /* 保持完全透明，共享 body 连续无断层的顶部柔光与底层纸纹，消除侧栏右缘色阶割裂线 */
+  background: transparent;
 }
 .sidebar.collapsed {
   padding-left: 0; padding-right: 0;
   opacity: 0; pointer-events: none;
-  transform: translate3d(-18px, 0, 0);
+  /* 往右沉入正在向左压过来的正文浮岛之下，并微缩失焦融为一体 */
+  transform: translate3d(20px, 0, 0) scale(0.955);
+  filter: blur(2.5px);
 }
 .sidebar > * {
   min-width: calc(var(--sb-target-w, 240px) - 16px);
 }
-.brand { display: flex; align-items: baseline; gap: 8px; padding: 1px 10px 8px; border-bottom: 1px solid var(--border); user-select: none; }
-.brand h1 { font-family: var(--font-serif); font-size: 19px; margin: 0; letter-spacing: 4px; }
-.brand .sub { font-size: 10px; color: var(--text-2); letter-spacing: 1.5px; }
+.brand { display: flex; align-items: center; gap: 8px; padding: 1px 4px 8px 10px; border-bottom: 1px solid var(--border); user-select: none; }
+.brand h1 { font-family: var(--font-serif); font-size: 19px; margin: 0; letter-spacing: 3px; line-height: 1.15; white-space: nowrap; flex-shrink: 0; }
+.brand-meta { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.brand .sub { font-size: 10px; color: var(--text-2); letter-spacing: 1.4px; white-space: nowrap; }
+.brand .acid-tag { display: none; }
+.brand-fold-btn {
+  margin-left: auto; flex-shrink: 0;
+  width: 22px; height: 22px; padding: 0;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: color-mix(in srgb, var(--panel-strong) 55%, transparent);
+  color: var(--text-2);
+  display: inline-flex; align-items: center; justify-content: center;
+  cursor: pointer; opacity: 0.78;
+  transition: opacity 0.15s, background 0.15s, color 0.15s, border-color 0.15s;
+}
+.brand-fold-btn svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.brand-fold-btn:hover { opacity: 1; background: var(--accent-weak); color: var(--accent); border-color: var(--accent); }
+.brand-reopen {
+  width: 100%; height: 8px; padding: 0 6px; margin: 0;
+  border: none; border-radius: 4px;
+  background: transparent;
+  color: var(--text-2); cursor: pointer;
+  display: flex; align-items: center; gap: 6px;
+  opacity: 0.45;
+  transition: opacity 0.16s, color 0.16s, background 0.16s;
+}
+.sidebar.brand-collapsed { padding-top: 6px; }
+.sidebar.brand-collapsed .views { padding-top: 2px; }
+.brand-reopen i { flex: 1; height: 1px; background: var(--border); transition: background 0.16s; }
+.brand-reopen svg { width: 12px; height: 8px; flex-shrink: 0; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.brand-reopen:hover { opacity: 1; color: var(--accent); background: var(--accent-weak); }
+.brand-reopen:hover i { background: var(--accent); }
 
 /* ---- 视图区：主入口一行 + 2×2 小卡网格 ---- */
 .views { display: flex; flex-direction: column; gap: 4px; padding: 7px 2px 6px; }
@@ -409,14 +476,16 @@ async function dropOnLib(e, l) {
 .lib-item .count { font-size: 11px; font-variant-numeric: tabular-nums; }
 .lib-item.drop-into { background: var(--accent-weak); outline: 1.5px dashed var(--accent); outline-offset: -2px; }
 
-/* 文件夹树：占满剩余高度；上下边缘渐隐，滚动时不会被硬切 */
+/* 文件夹树：占满剩余高度；上下边缘渐隐，滚动时不会被硬切；
+   margin-right:-4px 抵消 4px 滚动条占位，让目录树选中条与上方「图源」/视图按钮右缘严格齐平 */
 .tree {
   flex: 1; min-height: 120px; overflow-y: auto; padding: 4px 0 10px;
+  margin-right: -4px;
   -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 8px, #000 calc(100% - 14px), transparent 100%);
           mask-image: linear-gradient(180deg, transparent 0, #000 8px, #000 calc(100% - 14px), transparent 100%);
 }
-.tree::-webkit-scrollbar { width: 6px; }
-.tree::-webkit-scrollbar-thumb { background: transparent; border-radius: 3px; }
+.tree::-webkit-scrollbar { width: 4px; }
+.tree::-webkit-scrollbar-thumb { background: transparent; border-radius: 2px; }
 .tree:hover::-webkit-scrollbar-thumb { background: var(--border); }
 
 .scanning, .empty { padding: 12px; font-size: 12px; color: var(--text-2); }

@@ -2,6 +2,9 @@ import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 import App from './App.vue'
 import './style.css'
+import './themes/acid-print.css'
+import './themes/endfield.css'
+import './themes/obsidian-prism.css'
 
 // PicRand 主进程会拦截窗口关闭并发 confirm-close；M0 阶段直接应答放行
 window.picrand?.onConfirmClose?.(() => window.picrand.respondCloseConfirm(true))
