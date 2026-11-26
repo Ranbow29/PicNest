@@ -66,40 +66,46 @@ fn collect_dirs(
 /// 把被删掉的文件在库里标记为删除（软删，可在回收站视图恢复）。
 /// 只动 file_path 完全对得上的行；目录被删的情况由外层的目录刷新处理。
 fn mark_removed(app: &tauri::AppHandle, paths: &[PathBuf]) {
-    if paths.is_empty() {
-        return;
-    }
+    let _filesystem_guard = crate::operation_journal::filesystem_operation_guard();
     let Some(state) = app.try_state::<crate::commands::AppState>() else {
         return;
     };
-    let Ok(conn) = state.db.lock() else {
-        return;
-    };
-    let Ok(tx) = conn.unchecked_transaction() else {
-        return;
-    };
+    let result = state.db.lock().map_err(|e| e.to_string()).and_then(|conn| mark_removed_inner(&conn, paths));
+    if let Err(e) = result {
+        crate::media_server::diag_push(&format!("watcher mark removed failed: {}", e));
+    }
+}
+
+pub(crate) fn mark_removed_inner(conn: &rusqlite::Connection, paths: &[PathBuf]) -> Result<(), String> {
+    if paths.is_empty() {
+        return Ok(());
+    }
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
     for p in paths {
+        match std::fs::symlink_metadata(p) {
+            Ok(_) => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("检查监听路径失败 {}: {error}", p.display())),
+        }
         let s = p.to_string_lossy().to_string();
-        let updated = tx
-            .execute(
-                "UPDATE images SET deleted_at = ?1 \
-                 WHERE file_path = ?2 AND deleted_at IS NULL",
-                rusqlite::params![now, s],
-            )
-            .unwrap_or(0);
+        let updated = tx.execute(
+            "UPDATE images SET deleted_at = ?1 \
+             WHERE file_path = ?2 AND deleted_at IS NULL",
+            rusqlite::params![now, s],
+        ).map_err(|e| e.to_string())?;
         if updated == 0 {
-            let _ = tx.execute(
+            tx.execute(
                 "UPDATE images SET deleted_at = ?1 \
                  WHERE file_path = ?2 COLLATE NOCASE AND deleted_at IS NULL",
                 rusqlite::params![now, s],
-            );
+            ).map_err(|e| e.to_string())?;
         }
     }
-    let _ = tx.commit();
+    tx.commit().map_err(|e| e.to_string())
 }
 
 pub fn start(app: tauri::AppHandle, roots: Vec<PathBuf>) {
@@ -160,4 +166,52 @@ pub fn start(app: tauri::AppHandle, roots: Vec<PathBuf>) {
             let _ = app.emit("fs-dir-changed", serde_json::json!({ "dirs": list }));
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mark_removed_does_not_soft_delete_a_recreated_file() {
+        let dir = crate::testutil::TempDir::new("picnest_watcher_recreated");
+        let conn = crate::db::init_db(&dir.join("test.db")).unwrap();
+        conn.execute("INSERT INTO folders (path) VALUES (?1)", [dir.path().to_string_lossy().to_string()]).unwrap();
+        let path = dir.join("image.png");
+        conn.execute(
+            "INSERT INTO images (folder_id, file_path, size, mtime) VALUES (?1, ?2, 5, 1)",
+            rusqlite::params![conn.last_insert_rowid(), path.to_string_lossy().to_string()],
+        ).unwrap();
+        std::fs::write(&path, b"recreated").unwrap();
+        mark_removed_inner(&conn, std::slice::from_ref(&path)).unwrap();
+        let deleted: Option<i64> = conn.query_row("SELECT deleted_at FROM images", [], |r| r.get(0)).unwrap();
+        assert_eq!(deleted, None);
+        assert_eq!(std::fs::read(&path).unwrap(), b"recreated");
+    }
+
+    #[test]
+    fn mark_removed_propagates_sql_and_commit_failures() {
+        let dir = crate::testutil::TempDir::new("picnest_watcher_fault");
+        let conn = crate::db::init_db(&dir.join("test.db")).unwrap();
+        conn.execute("INSERT INTO folders (path) VALUES (?1)", [dir.path().to_string_lossy().to_string()]).unwrap();
+        let folder_id = conn.last_insert_rowid();
+        let path = dir.join("image.png");
+        std::fs::write(&path, b"image").unwrap();
+        conn.execute(
+            "INSERT INTO images (folder_id, file_path, size, mtime) VALUES (?1, ?2, 5, 1)",
+            rusqlite::params![folder_id, path.to_string_lossy().to_string()],
+        ).unwrap();
+        conn.execute_batch("CREATE TRIGGER reject_remove BEFORE UPDATE OF deleted_at ON images BEGIN SELECT RAISE(ABORT, 'injected watcher failure'); END;").unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let error = mark_removed_inner(&conn, std::slice::from_ref(&path)).unwrap_err();
+        assert!(error.contains("injected watcher failure"), "{error}");
+        let deleted: Option<i64> = conn.query_row("SELECT deleted_at FROM images", [], |r| r.get(0)).unwrap();
+        assert_eq!(deleted, None);
+        conn.execute_batch("DROP TRIGGER reject_remove").unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA defer_foreign_keys = ON; CREATE TRIGGER defer_failure AFTER UPDATE OF deleted_at ON images BEGIN INSERT INTO images (folder_id, file_path, size, mtime) VALUES (999999, 'orphan.png', 1, 1); END;").unwrap();
+        let error = mark_removed_inner(&conn, std::slice::from_ref(&path)).unwrap_err();
+        assert!(error.contains("FOREIGN KEY"), "{error}");
+        let deleted: Option<i64> = conn.query_row("SELECT deleted_at FROM images", [], |r| r.get(0)).unwrap();
+        assert_eq!(deleted, None);
+    }
 }

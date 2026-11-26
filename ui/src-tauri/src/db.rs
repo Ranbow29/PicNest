@@ -10,11 +10,78 @@ pub fn open_conn_with_pragmas(db_path: &Path) -> Result<Connection> {
     Ok(conn)
 }
 
+fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let rows = stmt.query_map([], |r| r.get::<_, String>(1))?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?.iter().any(|name| name.eq_ignore_ascii_case(column)))
+}
+
+fn ensure_column(conn: &Connection, table: &str, column: &str, definition: &str) -> Result<()> {
+    if !has_column(conn, table, column)? {
+        conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {column} {definition}"), [])?;
+    }
+    Ok(())
+}
+
+fn migrate_v1(conn: &Connection) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    for (table, column, definition) in [
+        ("folders", "display_name", "TEXT DEFAULT ''"),
+        ("images", "sort_order", "INTEGER DEFAULT 0"),
+        ("images", "dir_rel", "TEXT"),
+        ("images", "deleted_at", "INTEGER DEFAULT NULL"),
+        ("images", "last_opened_at", "INTEGER DEFAULT 0"),
+        ("images", "size", "INTEGER DEFAULT 0"),
+        ("images", "rating", "INTEGER DEFAULT 0"),
+        ("images", "is_favorite", "INTEGER DEFAULT 0"),
+        ("images", "palettes", "TEXT DEFAULT NULL"),
+        ("images", "trash_group", "INTEGER DEFAULT NULL"),
+        ("picnest_trash_folders", "image_count", "INTEGER DEFAULT 0"),
+        ("picnest_trash_folders", "size", "INTEGER DEFAULT 0"),
+    ] {
+        ensure_column(&tx, table, column, definition)?;
+    }
+    tx.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_images_dirrel ON images(folder_id, dir_rel, sort_order, id);
+         CREATE INDEX IF NOT EXISTS idx_images_nav ON images(folder_id, deleted_at, dir_rel, sort_order, id);
+         CREATE INDEX IF NOT EXISTS idx_images_folder_size ON images(folder_id, size) WHERE deleted_at IS NULL;
+         DROP INDEX IF EXISTS idx_images_dir_rel;
+         DROP INDEX IF EXISTS idx_images_file_path;
+         DROP INDEX IF EXISTS idx_images_folder;
+         CREATE TABLE IF NOT EXISTS picnest_img_hash (
+            file_path TEXT PRIMARY KEY,
+            size INTEGER NOT NULL,
+            mtime INTEGER NOT NULL,
+            dhash INTEGER NOT NULL,
+            dhash_flip INTEGER NOT NULL,
+            color BLOB NOT NULL,
+            phash0 INTEGER NOT NULL,
+            phash1 INTEGER NOT NULL,
+            phash_flip0 INTEGER NOT NULL,
+            phash_flip1 INTEGER NOT NULL
+         );
+         CREATE TABLE IF NOT EXISTS picnest_operations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind TEXT NOT NULL,
+            state TEXT NOT NULL,
+            source_path TEXT NOT NULL,
+            target_path TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            last_error TEXT
+         );
+         CREATE INDEX IF NOT EXISTS idx_picnest_operations_state ON picnest_operations(state, created_at);
+         PRAGMA user_version = 1;",
+    )?;
+    tx.commit()
+}
+
 pub fn init_db(db_path: &Path) -> Result<Connection> {
     if let Some(parent) = db_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let conn = Connection::open(db_path)?;
+    let mut conn = Connection::open(db_path)?;
 
     // WAL 模式 + 8MB 内存缓存限制，保障极致读写速度与内存低开销
     conn.execute_batch("
@@ -25,6 +92,14 @@ pub fn init_db(db_path: &Path) -> Result<Connection> {
         PRAGMA cache_size = -8000;
         PRAGMA temp_store = MEMORY;
     ")?;
+
+    let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if version > 1 {
+        return Err(rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("数据库版本 {version} 高于当前支持的版本 1"),
+        ))));
+    }
 
     // 初始化 PicNest 基础核心表
     conn.execute_batch("
@@ -53,11 +128,6 @@ pub fn init_db(db_path: &Path) -> Result<Connection> {
             trash_group INTEGER DEFAULT NULL,
             FOREIGN KEY (folder_id) REFERENCES folders(id) ON DELETE CASCADE
         );
-
-        CREATE INDEX IF NOT EXISTS idx_images_deleted ON images(deleted_at);
-        CREATE INDEX IF NOT EXISTS idx_images_folder_deleted ON images(folder_id, deleted_at, trash_group);
-        CREATE INDEX IF NOT EXISTS idx_images_last_opened ON images(last_opened_at);
-        CREATE INDEX IF NOT EXISTS idx_images_folder_size ON images(folder_id, size) WHERE deleted_at IS NULL;
 
         CREATE TABLE IF NOT EXISTS picnest_trash_folders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -104,47 +174,32 @@ pub fn init_db(db_path: &Path) -> Result<Connection> {
             value TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS picnest_operations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind TEXT NOT NULL,
+            state TEXT NOT NULL,
+            source_path TEXT NOT NULL,
+            target_path TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            last_error TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_picnest_operations_state ON picnest_operations(state, created_at);
+
         CREATE INDEX IF NOT EXISTS idx_image_tags_tag ON image_tags(tag_id);
     ")?;
 
-    let _ = conn.execute("ALTER TABLE images ADD COLUMN sort_order INTEGER DEFAULT 0", []);
-    // 目录指纹：相对根的小写目录（正斜杠）。用来把「全库 LIKE 扫描」换成索引定位。
-    // 允许 NULL：NULL 表示尚未回填，查询会把它当兵底一并纳入，不会漏图。
-    let _ = conn.execute("ALTER TABLE images ADD COLUMN dir_rel TEXT", []);
-    let _ = conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_images_dirrel ON images(folder_id, dir_rel, sort_order, id)",
-        [],
-    );
-    // 把过滤条件（deleted_at）一并放进索引前缀，查询计划才会选它而不是 folder_deleted
-    let _ = conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_images_nav ON images(folder_id, deleted_at, dir_rel, sort_order, id)",
-        [],
-    );
-    // sync_dir_snapshot 按 (folder_id, dir_rel) 取本层行做 diff。
-    // idx_images_dirrel 已经是 (folder_id, dir_rel, sort_order, id)，前缀直接命中；
-    // 之前多建了一个同名近似的索引（idx_images_dir_rel），这里删掉避免重复写放大。
-    let _ = conn.execute("DROP INDEX IF EXISTS idx_images_dir_rel", []);
-    let _ = conn.execute("DROP INDEX IF EXISTS idx_images_file_path", []);
-    let _ = conn.execute("DROP INDEX IF EXISTS idx_images_folder", []);
-    let _ = conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_images_folder_size ON images(folder_id, size) WHERE deleted_at IS NULL",
-        [],
-    );
-    let _ = conn.execute(
-        "CREATE TABLE IF NOT EXISTS picnest_img_hash (
-            file_path TEXT PRIMARY KEY,
-            size INTEGER NOT NULL,
-            mtime INTEGER NOT NULL,
-            dhash INTEGER NOT NULL,
-            dhash_flip INTEGER NOT NULL,
-            color BLOB NOT NULL,
-            phash0 INTEGER NOT NULL,
-            phash1 INTEGER NOT NULL,
-            phash_flip0 INTEGER NOT NULL,
-            phash_flip1 INTEGER NOT NULL
-        )",
-        [],
-    );
+    if version < 1 {
+        migrate_v1(&conn)?;
+    }
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_images_deleted ON images(deleted_at);
+         CREATE INDEX IF NOT EXISTS idx_images_folder_deleted ON images(folder_id, deleted_at, trash_group);
+         CREATE INDEX IF NOT EXISTS idx_images_last_opened ON images(last_opened_at);
+         CREATE INDEX IF NOT EXISTS idx_images_folder_size ON images(folder_id, size) WHERE deleted_at IS NULL;",
+    )?;
+
     // 历史脏数据：早期版本把根层顺序写成 "<folder>|__root__"，而 dir_tree 读的是 "<folder>|"，
     // 那批行永远读不到。能搬到正确 key 的搬，搬不了（已有新值）的删。
     if let Ok(mut stmt) = conn.prepare("SELECT key, names FROM picnest_dir_order WHERE key LIKE '%|__root__'") {
@@ -175,9 +230,6 @@ pub fn init_db(db_path: &Path) -> Result<Connection> {
         "INSERT OR REPLACE INTO picnest_kv (key, value) VALUES ('thumbs_jpeg_v1', '1')",
         [],
     );
-    let _ = conn.execute("ALTER TABLE images ADD COLUMN rating INTEGER DEFAULT 0", []);
-    let _ = conn.execute("ALTER TABLE images ADD COLUMN is_favorite INTEGER DEFAULT 0", []);
-    let _ = conn.execute("ALTER TABLE folders ADD COLUMN display_name TEXT DEFAULT ''", []);
     let palettes_cleaned: bool = conn
         .query_row(
             "SELECT 1 FROM picnest_kv WHERE key = 'palettes_v2_cleaned'",
@@ -186,25 +238,37 @@ pub fn init_db(db_path: &Path) -> Result<Connection> {
         )
         .unwrap_or(false);
     if !palettes_cleaned {
-        let _ = conn.execute(
+        let tx = conn.unchecked_transaction()?;
+        tx.execute(
             "UPDATE images SET palettes = NULL WHERE palettes IS NOT NULL AND palettes != '[]' AND CAST(json_extract(palettes, '$[0].percent') AS REAL) <= 1.0",
             [],
-        );
-        let _ = conn.execute(
+        )?;
+        tx.execute(
             "UPDATE images SET palettes = NULL WHERE palettes = '[]' AND thumbnail_path IS NOT NULL AND thumbnail_path != 'SKIP'",
             [],
-        );
-        let _ = conn.execute(
+        )?;
+        tx.execute(
             "INSERT OR REPLACE INTO picnest_kv (key, value) VALUES ('palettes_v2_cleaned', '1')",
             [],
-        );
+        )?;
+        tx.commit()?;
     }
 
     // 一次性兼容导入旧版 Electron (AppData\Roaming\PicNest\config.json 与 picrand.db) 的文件夹颜色、标签与手动排序
     migrate_legacy_electron_config(&conn);
     migrate_legacy_electron_data(&conn);
     heal_renamed_folders(&conn);
-    backfill_dir_rel(&conn);
+    backfill_dir_rel(&conn).map_err(|e| {
+        rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("回填目录索引失败，请先备份数据库: {e}"),
+        )))
+    })?;
+
+    let errors = crate::operation_journal::recover_all(&mut conn);
+    for error in errors {
+        crate::media_server::diag_push(&format!("operation recovery: {}", error));
+    }
 
     Ok(conn)
 }
@@ -592,41 +656,81 @@ pub(crate) fn dir_rel_of(root_path: &str, file_path: &str) -> String {
 }
 
 /// 回填 dir_rel（只处理 NULL 行，所以既是一次性迁移也是增量补齐）。
-pub(crate) fn backfill_dir_rel(conn: &Connection) {
-    let folders: Vec<(i64, String)> = match conn.prepare("SELECT id, path FROM folders") {
-        Ok(mut s) => s
-            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
-            .map(|rows| rows.flatten().collect())
-            .unwrap_or_default(),
-        Err(_) => return,
+pub(crate) fn backfill_dir_rel(conn: &Connection) -> Result<(), String> {
+    let folders: Vec<(i64, String)> = {
+        let mut stmt = conn.prepare("SELECT id, path FROM folders").map_err(|e| e.to_string())?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?
     };
     for (fid, root) in folders {
-        let rows: Vec<(i64, String)> = match conn
-            .prepare("SELECT id, file_path FROM images WHERE folder_id = ?1 AND dir_rel IS NULL")
-        {
-            Ok(mut s) => s
-                .query_map([fid], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
-                .map(|r| r.flatten().collect())
-                .unwrap_or_default(),
-            Err(_) => continue,
+        let rows: Vec<(i64, String)> = {
+            let mut stmt = conn
+                .prepare("SELECT id, file_path FROM images WHERE folder_id = ?1 AND dir_rel IS NULL")
+                .map_err(|e| e.to_string())?;
+            let rows = stmt.query_map([fid], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
+                .map_err(|e| e.to_string())?;
+            rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?
         };
         if rows.is_empty() {
             continue;
         }
-        if let Ok(tx) = conn.unchecked_transaction() {
-            if let Ok(mut stmt) = tx.prepare("UPDATE images SET dir_rel = ?1 WHERE id = ?2") {
-                for (id, fp) in rows {
-                    let _ = stmt.execute(rusqlite::params![dir_rel_of(&root, &fp), id]);
-                }
+        let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        {
+            let mut stmt = tx.prepare("UPDATE images SET dir_rel = ?1 WHERE id = ?2")
+                .map_err(|e| e.to_string())?;
+            for (id, fp) in rows {
+                stmt.execute(rusqlite::params![dir_rel_of(&root, &fp), id])
+                    .map_err(|e| e.to_string())?;
             }
-            let _ = tx.commit();
         }
+        tx.commit().map_err(|e| e.to_string())?;
     }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn migration_upgrades_partial_v0_schema_idempotently() {
+        let base = crate::testutil::TempDir::new("picnest_migration_v1");
+        let db_path = base.join("old.db");
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE folders (id INTEGER PRIMARY KEY, path TEXT NOT NULL UNIQUE);
+                 CREATE TABLE images (
+                    id INTEGER PRIMARY KEY, folder_id INTEGER NOT NULL, file_path TEXT NOT NULL UNIQUE,
+                    thumbnail_path TEXT, width INTEGER DEFAULT 0, height INTEGER DEFAULT 0,
+                    size INTEGER DEFAULT 0, mtime INTEGER DEFAULT 0, last_opened_at INTEGER DEFAULT 0,
+                    annotation TEXT DEFAULT '', url TEXT DEFAULT '', deleted_at INTEGER DEFAULT NULL,
+                    trash_group INTEGER DEFAULT NULL
+                 );
+                 PRAGMA user_version = 0;",
+            ).unwrap();
+            conn.execute("INSERT INTO folders (id, path) VALUES (1, 'D:\\old')", []).unwrap();
+            conn.execute("INSERT INTO images (folder_id, file_path) VALUES (1, 'D:\\old\\a.png')", []).unwrap();
+        }
+
+        let conn = init_db(&db_path).unwrap();
+        let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(version, 1);
+        for column in ["sort_order", "dir_rel", "rating", "is_favorite", "palettes"] {
+            assert!(has_column(&conn, "images", column).unwrap(), "missing {column}");
+        }
+        assert!(has_column(&conn, "folders", "display_name").unwrap());
+        assert!(has_column(&conn, "picnest_operations", "payload").unwrap());
+        let rel: Option<String> = conn.query_row("SELECT dir_rel FROM images WHERE id = 1", [], |r| r.get(0)).unwrap();
+        assert_eq!(rel.as_deref(), Some(""));
+        drop(conn);
+
+        let conn = init_db(&db_path).unwrap();
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM images", [], |r| r.get(0)).unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
+    }
 
     #[test]
     fn heals_desynced_root_folder_path_from_images() {

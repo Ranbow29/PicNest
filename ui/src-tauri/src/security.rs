@@ -249,7 +249,12 @@ fn registry_proxy(raw: &str) -> Option<String> {
                     continue;
                 };
                 if name.trim().eq_ignore_ascii_case(scheme) {
-                    return normalize_proxy(value);
+                    let proxy = normalize_proxy(value)?;
+                    return Some(if scheme == "socks" && !proxy.contains("://") {
+                        format!("socks5h://{}", proxy)
+                    } else {
+                        proxy
+                    });
                 }
             }
         }
@@ -427,6 +432,14 @@ mod tests {
         assert_eq!(
             registry_proxy("http=127.0.0.1:7890;https=127.0.0.1:7891;socks=127.0.0.1:7892"),
             Some("127.0.0.1:7891".to_string())
+        );
+        assert_eq!(
+            registry_proxy("socks=127.0.0.1:7892"),
+            Some("socks5h://127.0.0.1:7892".to_string())
+        );
+        assert_eq!(
+            registry_proxy("socks=socks5://127.0.0.1:7892"),
+            Some("socks5://127.0.0.1:7892".to_string())
         );
         assert_eq!(
             registry_proxy("127.0.0.1:7890"),

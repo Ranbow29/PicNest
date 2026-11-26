@@ -19,32 +19,32 @@ pub(crate) fn is_supported_drop_ext(ext: &str) -> bool {
 /// 将已在目标目录磁盘上存在、但数据库未录入（或处于软删回收站）的文件补录/恢复到 images 表。
 /// 返回本次新补录或恢复的条目数量；已在库且处于激活态（deleted_at IS NULL）的文件不计入。
 /// 在循环外预读 `folders` 列表并开启单个事务批量写入，大幅降低大批量导入时的 DB 事务开销。
-pub(crate) fn index_disk_paths(conn: &Connection, paths: &[PathBuf], restore_soft_deleted: bool) -> usize {
+pub(crate) fn index_disk_paths(conn: &Connection, paths: &[PathBuf], restore_soft_deleted: bool) -> Result<usize, String> {
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let count = index_disk_paths_in_tx(&tx, paths, restore_soft_deleted)?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(count)
+}
+
+pub(crate) fn index_disk_paths_in_tx(tx: &rusqlite::Transaction<'_>, paths: &[PathBuf], restore_soft_deleted: bool) -> Result<usize, String> {
     if paths.is_empty() {
-        return 0;
+        return Ok(0);
     }
 
-    // 预读 folders 列表：(id, raw_root_path, norm_lowercase_root)
-    let folders: Vec<(i64, String, String)> = match conn.prepare("SELECT id, path FROM folders") {
-        Ok(mut stmt) => stmt
-            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
-            .map(|rows| {
-                rows.flatten()
-                    .filter_map(|(id, rp)| {
-                        let norm = rp.replace('/', "\\").trim_end_matches('\\').to_lowercase();
-                        if norm.is_empty() {
-                            None
-                        } else {
-                            Some((id, rp, norm))
-                        }
-                    })
-                    .collect()
+    let folders: Vec<(i64, String, String)> = {
+        let mut stmt = tx.prepare("SELECT id, path FROM folders").map_err(|e| e.to_string())?;
+        stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?
+            .into_iter()
+            .filter_map(|(id, rp)| {
+                let norm = rp.replace('/', "\\").trim_end_matches('\\').to_lowercase();
+                if norm.is_empty() { None } else { Some((id, rp, norm)) }
             })
-            .unwrap_or_default(),
-        Err(_) => return 0,
+            .collect()
     };
     if folders.is_empty() {
-        return 0;
+        return Ok(0);
     }
 
     let match_folder = |target: &Path| -> Option<(i64, &str)> {
@@ -69,10 +69,6 @@ pub(crate) fn index_disk_paths(conn: &Connection, paths: &[PathBuf], restore_sof
         best.map(|(_, id, rp)| (id, rp))
     };
 
-    let Ok(tx) = conn.unchecked_transaction() else {
-        return 0;
-    };
-
     let mut registered = 0usize;
     for path in paths {
         let Ok(meta) = std::fs::metadata(path) else {
@@ -88,46 +84,99 @@ pub(crate) fn index_disk_paths(conn: &Connection, paths: &[PathBuf], restore_sof
         let fp_norm = fp.replace('/', "\\");
         let (size, mtime) = file_size_and_mtime(Some(&meta));
         let dir_rel = crate::db::dir_rel_of(root_path, &fp_norm);
-        let existing: Option<(i64, bool)> = tx
-            .query_row(
-                "SELECT id, deleted_at IS NOT NULL FROM images WHERE LOWER(REPLACE(file_path, '/', '\\')) = LOWER(?1) LIMIT 1",
-                [&fp_norm],
-                |r| Ok((r.get::<_, i64>(0)?, r.get::<_, bool>(1)?)),
-            )
-            .ok();
+        let existing: Option<(i64, bool)> = match tx.query_row(
+            "SELECT id, deleted_at IS NOT NULL FROM images WHERE LOWER(REPLACE(file_path, '/', '\\')) = LOWER(?1) LIMIT 1",
+            [&fp_norm],
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, bool>(1)?)),
+        ) {
+            Ok(row) => Some(row),
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(e) => return Err(e.to_string()),
+        };
         match existing {
             Some((_, false)) => {}
             Some((id, true)) => {
                 if restore_soft_deleted {
-                    if tx
-                        .execute(
-                            "UPDATE images SET folder_id = ?1, file_path = ?2, dir_rel = ?3, size = ?4, mtime = ?5, deleted_at = NULL, trash_group = NULL WHERE id = ?6",
-                            params![folder_id, fp, dir_rel, size, mtime, id],
-                        )
-                        .is_ok()
-                    {
-                        registered += 1;
-                    }
-                }
-            }
-            None => {
-                if tx
-                    .execute(
-                        "INSERT INTO images (folder_id, file_path, size, mtime, dir_rel)
-                         VALUES (?1, ?2, ?3, ?4, ?5)
-                         ON CONFLICT(file_path) DO UPDATE SET
-                           folder_id = ?1, size = ?3, mtime = ?4, dir_rel = ?5, deleted_at = NULL, trash_group = NULL",
-                        params![folder_id, fp, size, mtime, dir_rel],
-                    )
-                    .is_ok()
-                {
+                    tx.execute(
+                        "UPDATE images SET folder_id = ?1, file_path = ?2, dir_rel = ?3, size = ?4, mtime = ?5, deleted_at = NULL, trash_group = NULL WHERE id = ?6",
+                        params![folder_id, fp, dir_rel, size, mtime, id],
+                    ).map_err(|e| e.to_string())?;
                     registered += 1;
                 }
             }
+            None => {
+                tx.execute(
+                    "INSERT INTO images (folder_id, file_path, size, mtime, dir_rel)
+                     VALUES (?1, ?2, ?3, ?4, ?5)
+                     ON CONFLICT(file_path) DO UPDATE SET
+                       folder_id = ?1, size = ?3, mtime = ?4, dir_rel = ?5, deleted_at = NULL, trash_group = NULL",
+                    params![folder_id, fp, size, mtime, dir_rel],
+                ).map_err(|e| e.to_string())?;
+                registered += 1;
+            }
         }
     }
-    let _ = tx.commit();
-    registered
+    Ok(registered)
+}
+
+fn commit_staged_imports(
+    db: &Arc<Mutex<Connection>>,
+    staged: Vec<crate::fs_ops::StagedFile>,
+    replacements: &[String],
+    thumbs_dir: &Path,
+) -> Result<usize, String> {
+    if staged.is_empty() {
+        return Ok(0);
+    }
+    let conn = db.lock().map_err(|e| e.to_string())?;
+    let mut seen_replacements = std::collections::HashSet::new();
+    let replacements: Vec<&str> = replacements.iter()
+        .map(|old| old.as_str())
+        .filter(|old| seen_replacements.insert(old.to_lowercase()))
+        .collect();
+    let first = staged.first().ok_or("替换操作缺少新文件")?;
+    let replacement_ids = crate::operation_journal::begin_file_replacements(&conn, &replacements, first)?;
+    for old in &replacements {
+        let path = Path::new(old);
+        if path.exists() {
+            if let Err(e) = trash::delete(path) {
+                let mut cleanup_errors = Vec::new();
+                for file in &staged {
+                    if let Err(error) = crate::fs_ops::rollback_staged(file) {
+                        cleanup_errors.push(error);
+                    }
+                }
+                for id in &replacement_ids {
+                    let _ = crate::operation_journal::mark_manual(
+                        &conn,
+                        *id,
+                        &format!("{e}; 新文件回滚: {}", cleanup_errors.join("; ")),
+                    );
+                }
+                return Err(format!("覆盖文件移入回收站失败: {e}; 回滚: {}", cleanup_errors.join("; ")));
+            }
+        }
+    }
+    let mut items: Vec<(crate::fs_ops::StagedFile, serde_json::Value)> = staged
+        .into_iter()
+        .map(|file| (file, json!({})))
+        .collect();
+    items[0].1 = json!({ "finishOperationIds": replacement_ids });
+    let result = crate::operation_journal::commit_new_files(&conn, items, |tx, files| {
+        let paths: Vec<PathBuf> = files.iter().map(|f| f.final_path.clone()).collect();
+        let registered = index_disk_paths_in_tx(tx, &paths, true)?;
+        for old in &replacements {
+            tx.execute("DELETE FROM images WHERE LOWER(file_path) = LOWER(?1)", [old])
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(registered)
+    });
+    if result.is_ok() {
+        for old in &replacements {
+            crate::trash_ops::remove_thumbs_for(thumbs_dir, old);
+        }
+    }
+    result
 }
 
 fn is_junk_filename(name: &str) -> bool {
@@ -530,6 +579,7 @@ fn import_files_sync(
     replace_old: Option<Vec<String>>,
     thumbs_dir: &Path,
 ) -> serde_json::Value {
+    let _filesystem_guard = crate::operation_journal::filesystem_operation_guard();
     let dst_dir = Path::new(&target_dir);
     if !dst_dir.exists() || !dst_dir.is_dir() {
         return json!({ "ok": false, "error": "目标目录不存在", "dirs": [] });
@@ -542,10 +592,10 @@ fn import_files_sync(
         .filter(|s| !s.is_empty())
         .collect();
     let replace_set: HashSet<String> = replace_list.iter().map(|s| s.to_lowercase()).collect();
-    let mut already_trashed: HashSet<String> = HashSet::new();
     let mut dest_paths: Vec<String> = Vec::new();
     let mut dest_set: HashSet<String> = HashSet::new();
-    let mut copied_paths: Vec<PathBuf> = Vec::new();
+    let mut staged_files: Vec<crate::fs_ops::StagedFile> = Vec::new();
+    let mut replacements: Vec<String> = Vec::new();
     let mut skip_check_paths: Vec<PathBuf> = Vec::new();
 
     let mut dirs = Vec::new();
@@ -586,68 +636,60 @@ fn import_files_sync(
         let same_name = dst_dir.join(&base);
         let same_low = same_name.to_string_lossy().to_lowercase();
         let is_self_drop = raw.to_lowercase() == same_low;
-        if let Ok(_dst_st) = std::fs::metadata(&same_name) {
-            if !is_self_drop && replace_set.contains(&same_low) {
-                if trash::delete(&same_name).is_ok() {
-                    already_trashed.insert(same_low.clone());
-                    replaced += 1;
-                }
-            } else if is_self_drop {
-                dest_set.insert(same_low);
-                dest_paths.push(same_name.to_string_lossy().to_string());
-                skip_check_paths.push(same_name);
-                continue;
-            }
+        if same_name.exists() && !is_self_drop && replace_set.contains(&same_low) {
+            replacements.push(same_name.to_string_lossy().to_string());
+        } else if is_self_drop {
+            dest_set.insert(same_low);
+            dest_paths.push(same_name.to_string_lossy().to_string());
+            skip_check_paths.push(same_name);
+            continue;
         }
-        let dest = if same_name.exists() && !is_self_drop {
+        let dest = if same_name.exists() && !is_self_drop && !replace_set.contains(&same_low) {
             unique_dest_path(dst_dir, &base)
         } else {
             same_name
         };
-        match std::fs::copy(p, &dest) {
-            Ok(_) => {
+        match crate::fs_ops::stage_copy_new(p, &dest) {
+            Ok(staged) => {
                 copied += 1;
                 let d_str = dest.to_string_lossy().to_string();
                 dest_set.insert(d_str.to_lowercase());
                 dest_paths.push(d_str);
-                copied_paths.push(dest);
+                staged_files.push(staged);
             }
             Err(_) => failed += 1,
         }
     }
 
-    let mut db_removed: Vec<String> = Vec::new();
     for old_p in replace_list {
         let low = old_p.to_lowercase();
-        if already_trashed.contains(&low) {
-            db_removed.push(old_p);
-            continue;
-        }
-        if dest_set.contains(&low) {
-            continue;
-        }
-        if Path::new(&old_p).exists() && trash::delete(&old_p).is_ok() {
-            already_trashed.insert(low);
-            replaced += 1;
-            db_removed.push(old_p);
+        if !dest_set.contains(&low) && !replacements.iter().any(|p| p.to_lowercase() == low) {
+            replacements.push(old_p);
         }
     }
+    if !staged_files.is_empty() {
+        match commit_staged_imports(db, staged_files, &replacements, thumbs_dir) {
+            Ok(count) => registered += count,
+            Err(e) => return json!({
+                "ok": false, "error": e, "dirs": dirs, "copied": 0, "registered": 0,
+                "failed": failed + 1, "skipped": skipped, "replaced": 0,
+                "destPaths": [], "unsupported": unsupported, "unsupportedNames": unsupported_names
+            }),
+        }
+        replaced = replacements.len();
+    }
 
-    if let Ok(conn) = db.lock() {
-        for op in db_removed {
-            // 覆盖模式把旧图丢进回收站，缩略图也要同步清，否则又攒孤儿
-            crate::trash_ops::remove_thumbs_for(thumbs_dir, &op);
-            let _ = conn.execute("DELETE FROM images WHERE LOWER(file_path) = LOWER(?1)", [&op]);
+    if !skip_check_paths.is_empty() {
+        match db.lock() {
+            Ok(conn) => {
+                registered = match index_disk_paths(&conn, &skip_check_paths, true) {
+                    Ok(count) => count,
+                    Err(e) => return json!({ "ok": false, "error": e }),
+                };
+                skipped += skip_check_paths.len().saturating_sub(registered);
+            }
+            Err(e) => return json!({ "ok": false, "error": e.to_string() }),
         }
-        if !copied_paths.is_empty() {
-            let _ = index_disk_paths(&conn, &copied_paths, true);
-        }
-        if !skip_check_paths.is_empty() {
-            registered = index_disk_paths(&conn, &skip_check_paths, true);
-            skipped += skip_check_paths.len().saturating_sub(registered);
-        }
-    } else {
-        skipped += skip_check_paths.len();
     }
 
     json!({
@@ -834,6 +876,7 @@ fn import_dir_copy_sync(
     opts: Option<serde_json::Value>,
     thumbs_dir: &Path,
 ) -> serde_json::Value {
+    let _filesystem_guard = crate::operation_journal::filesystem_operation_guard();
     let policy = opts
         .as_ref()
         .and_then(|o| o.get("policy"))
@@ -883,7 +926,7 @@ fn import_dir_copy_sync(
     let dest_existed = dest.exists();
 
     let mut made_dirs: HashSet<PathBuf> = HashSet::new();
-    let mut copied_paths: Vec<PathBuf> = Vec::new();
+    let mut staged_files: Vec<crate::fs_ops::StagedFile> = Vec::new();
     let mut skip_check_paths: Vec<PathBuf> = Vec::new();
     let mut copied = 0usize;
     let mut registered = 0usize;
@@ -945,10 +988,10 @@ fn import_dir_copy_sync(
         }
 
         let out_file = unique_dest_path(&dest_parent, &fname);
-        match std::fs::copy(&fp, &out_file) {
-            Ok(_) => {
+        match crate::fs_ops::stage_copy_new(&fp, &out_file) {
+            Ok(staged) => {
                 copied += 1;
-                copied_paths.push(out_file.clone());
+                staged_files.push(staged);
                 if policy == "replace" {
                     if let Some(old_p) = old_dup {
                         if !old_p.is_empty() && !old_p.eq_ignore_ascii_case(&out_file.to_string_lossy()) {
@@ -961,29 +1004,31 @@ fn import_dir_copy_sync(
         }
     }
 
-    let mut db_removed: Vec<String> = Vec::new();
-    for op in old_to_trash {
-        if Path::new(&op).exists() && trash::delete(&op).is_ok() {
-            replaced += 1;
-            db_removed.push(op);
+    if !staged_files.is_empty() {
+        match commit_staged_imports(db, staged_files, &old_to_trash, thumbs_dir) {
+            Ok(count) => registered += count,
+            Err(e) => return json!({
+                "ok": false, "error": e, "name": dest_name, "dest": dest.to_string_lossy().to_string(),
+                "copied": 0, "registered": 0, "skipped": skipped, "failed": failed + 1,
+                "unsupported": unsupported, "unsupportedNames": unsupported_names,
+                "dirsCreated": made_dirs.len(), "created": !dest_existed && dest.exists(),
+                "replaced": 0, "policy": policy
+            }),
         }
+        replaced = old_to_trash.len();
     }
 
-    if let Ok(conn) = db.lock() {
-        for op in db_removed {
-            // 同上，覆盖写时旧图移回收站，缩略图一并清
-            crate::trash_ops::remove_thumbs_for(thumbs_dir, &op);
-            let _ = conn.execute("DELETE FROM images WHERE LOWER(file_path) = LOWER(?1)", [&op]);
+    if !skip_check_paths.is_empty() {
+        match db.lock() {
+            Ok(conn) => {
+                registered = match index_disk_paths(&conn, &skip_check_paths, true) {
+                    Ok(count) => count,
+                    Err(e) => return json!({ "ok": false, "error": e }),
+                };
+                skipped += skip_check_paths.len().saturating_sub(registered);
+            }
+            Err(e) => return json!({ "ok": false, "error": e.to_string() }),
         }
-        if !copied_paths.is_empty() {
-            let _ = index_disk_paths(&conn, &copied_paths, true);
-        }
-        if !skip_check_paths.is_empty() {
-            registered = index_disk_paths(&conn, &skip_check_paths, true);
-            skipped += skip_check_paths.len().saturating_sub(registered);
-        }
-    } else {
-        skipped += skip_check_paths.len();
     }
 
     let created = !dest_existed && dest.exists();
@@ -1024,85 +1069,109 @@ pub async fn import_dir_copy(
 pub async fn import_urls(
     urls: Vec<String>,
     target_dir: String,
+    state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
+    let db = state.db.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let dst_dir = Path::new(&target_dir);
-        if !dst_dir.is_dir() {
-            return json!({ "ok": false, "error": "目标目录不存在", "downloaded": 0, "failed": 0 });
-        }
-
-        let mut downloaded = 0usize;
-        let mut failed = 0usize;
-        let ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0);
-
-        for (idx, u) in urls.into_iter().take(20).enumerate() {
-            let trimmed = u.trim();
-            let low = trimmed.to_ascii_lowercase();
-            if !(low.starts_with("http://") || low.starts_with("https://")) {
-                failed += 1;
-                continue;
-            }
-
-            let raw_tail = trimmed
-                .split('?')
-                .next()
-                .unwrap_or("")
-                .split('#')
-                .next()
-                .unwrap_or("")
-                .rsplit('/')
-                .next()
-                .unwrap_or("");
-            let mut name = sanitize_filename(raw_tail, "");
-            let has_ext = Path::new(&name).extension().is_some();
-            if name.is_empty() || name.len() > 120 || !has_ext {
-                name = format!("drag-{}-{}.jpg", ts, idx + 1);
-            }
-            let target = unique_dest_path(dst_dir, &name);
-
-            #[cfg(windows)]
-            let ok = {
-                use std::os::windows::process::CommandExt;
-                const CREATE_NO_WINDOW: u32 = 0x08000000;
-                std::process::Command::new("curl.exe")
-                    .args(["-fsSL", "--max-time", "60", "-o"])
-                    .arg(&target)
-                    .arg(trimmed)
-                    .creation_flags(CREATE_NO_WINDOW)
-                    .status()
-                    .map(|s| s.success())
-                    .unwrap_or(false)
-            };
-            #[cfg(not(windows))]
-            let ok = std::process::Command::new("curl")
-                .args(["-fsSL", "--max-time", "60", "-o"])
-                .arg(&target)
-                .arg(trimmed)
-                .status()
-                .map(|s| s.success())
-                .unwrap_or(false);
-
-            if ok && target.exists() && std::fs::metadata(&target).map(|m| m.len() > 0).unwrap_or(false) {
-                downloaded += 1;
-            } else {
-                if target.exists() {
-                    let _ = trash::delete(&target);
-                }
-                failed += 1;
-            }
-        }
-
-        json!({
-            "ok": true,
-            "downloaded": downloaded,
-            "failed": failed
+        import_urls_sync(&db, &urls, &target_dir, |url| {
+            crate::collector::download_media_curl_limited(url, "", 500 * 1024 * 1024, false)
         })
     })
     .await
     .map_err(|e| e.to_string())
+}
+
+fn import_urls_sync(
+    db: &Arc<Mutex<Connection>>,
+    urls: &[String],
+    target_dir: &str,
+    download: impl Fn(&str) -> Result<(Vec<u8>, String), String>,
+) -> serde_json::Value {
+    let dst_dir = Path::new(target_dir);
+    if !dst_dir.is_dir() {
+        return json!({ "ok": false, "error": "目标目录不存在", "downloaded": 0, "failed": 0 });
+    }
+
+    let mut downloaded = 0usize;
+    let mut failed = 0usize;
+    let mut errors = Vec::new();
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+
+    for (idx, u) in urls.iter().take(20).enumerate() {
+        let trimmed = u.trim();
+        let low = trimmed.to_ascii_lowercase();
+        if !(low.starts_with("http://") || low.starts_with("https://")) {
+            failed += 1;
+            errors.push(format!("第 {} 个 URL 不是 HTTP(S) 地址", idx + 1));
+            continue;
+        }
+
+        let raw_tail = trimmed
+            .split('?')
+            .next()
+            .unwrap_or("")
+            .split('#')
+            .next()
+            .unwrap_or("")
+            .rsplit('/')
+            .next()
+            .unwrap_or("");
+        let mut name = sanitize_filename(raw_tail, "");
+        let has_ext = Path::new(&name).extension().is_some();
+        if name.is_empty() || name.len() > 120 || !has_ext {
+            name = format!("drag-{}-{}.jpg", ts, idx + 1);
+        }
+        let (bytes, _) = match download(trimmed) {
+            Ok(data) => data,
+            Err(error) => {
+                failed += 1;
+                errors.push(error);
+                continue;
+            }
+        };
+        let _filesystem_guard = crate::operation_journal::filesystem_operation_guard();
+        let target = unique_dest_path(dst_dir, &name);
+        let staged = match crate::fs_ops::stage_write_new(&target, &bytes) {
+            Ok(file) => file,
+            Err(error) => {
+                failed += 1;
+                errors.push(error);
+                continue;
+            }
+        };
+        let conn = match db.lock() {
+            Ok(c) => c,
+            Err(error) => {
+                let cleanup = crate::fs_ops::rollback_staged(&staged)
+                    .err()
+                    .unwrap_or_default();
+                failed += 1;
+                errors.push(format!("{error}; 回滚: {cleanup}"));
+                continue;
+            }
+        };
+        match crate::operation_journal::commit_new_files(
+            &conn,
+            vec![(staged, json!({}))],
+            |tx, files| index_disk_paths_in_tx(tx, &[files[0].final_path.clone()], true),
+        ) {
+            Ok(_) => downloaded += 1,
+            Err(error) => {
+                failed += 1;
+                errors.push(error);
+            }
+        }
+    }
+
+    json!({
+        "ok": failed == 0,
+        "downloaded": downloaded,
+        "failed": failed,
+        "errors": errors
+    })
 }
 
 /// Copy supported image/video/text files into `target_dir` as fresh copies (`name (n).ext` on collision)
@@ -1118,7 +1187,7 @@ pub fn copy_images_sync(
     }
     let mut copied = 0usize;
     let mut failed = 0usize;
-    let mut copied_paths: Vec<PathBuf> = Vec::new();
+    let mut staged_files: Vec<crate::fs_ops::StagedFile> = Vec::new();
     for raw in paths {
         let trimmed = raw.trim();
         if trimmed.is_empty() {
@@ -1144,30 +1213,64 @@ pub fn copy_images_sync(
             .and_then(|s| s.to_str())
             .unwrap_or("image");
         let dest = unique_dest_path(target_p, fname);
-        match std::fs::copy(src, &dest) {
-            Ok(_) => {
+        match crate::fs_ops::stage_copy_new(src, &dest) {
+            Ok(staged) => {
                 copied += 1;
-                copied_paths.push(dest);
+                staged_files.push(staged);
             }
             Err(_) => {
                 failed += 1;
             }
         }
     }
+    let mut commit_error = None;
     if let Some(c) = conn {
-        if !copied_paths.is_empty() {
-            index_disk_paths(c, &copied_paths, true);
+        if !staged_files.is_empty() {
+            match crate::operation_journal::commit_new_files(
+                c,
+                staged_files.iter().cloned().map(|file| (file, json!({}))).collect(),
+                |tx, files| index_disk_paths_in_tx(tx, &files.iter().map(|f| f.final_path.clone()).collect::<Vec<_>>(), true),
+            ) {
+                Ok(_) => {}
+                Err(e) => {
+                    commit_error = Some(e);
+                    copied = 0;
+                }
+            }
+        }
+    } else {
+        let commit_result: Result<(), String> = (|| {
+            for staged in &staged_files {
+                crate::fs_ops::commit_staged(staged)?;
+            }
+            Ok(())
+        })();
+        if let Err(error) = commit_result {
+            let mut rollback_errors = Vec::new();
+            for staged in &staged_files {
+                if let Err(rollback) = crate::fs_ops::rollback_staged(staged) {
+                    rollback_errors.push(rollback);
+                }
+            }
+            commit_error = Some(if rollback_errors.is_empty() {
+                error
+            } else {
+                format!("{error}; 回滚失败: {}", rollback_errors.join("; "))
+            });
+            copied = 0;
         }
     }
-    let out_paths: Vec<String> = copied_paths
-        .iter()
-        .map(|p| p.to_string_lossy().to_string())
-        .collect();
+    let out_paths: Vec<String> = if commit_error.is_none() {
+        staged_files.iter().map(|p| p.final_path.to_string_lossy().to_string()).collect()
+    } else {
+        Vec::new()
+    };
     json!({
-        "ok": failed == 0,
+        "ok": failed == 0 && commit_error.is_none(),
         "copied": copied,
         "failed": failed,
-        "paths": out_paths
+        "paths": out_paths,
+        "error": commit_error
     })
 }
 
@@ -1356,5 +1459,80 @@ mod tests {
         drop(conn);
 
         let _ = trash::delete(&base);
+    }
+
+    #[test]
+    fn staged_import_sql_failure_leaves_no_final_file_or_journal() {
+        let (base, db, _fid) = setup_test_env("import_fault");
+        let source_dir = base.join("external");
+        let target_dir = base.join("library").join("01_doc");
+        std::fs::create_dir_all(&source_dir).unwrap();
+        let source = source_dir.join("source.png");
+        std::fs::write(&source, b"payload").unwrap();
+        {
+            let conn = db.lock().unwrap();
+            conn.execute_batch("CREATE TRIGGER reject_import BEFORE INSERT ON images BEGIN SELECT RAISE(ABORT, 'injected import failure'); END;").unwrap();
+        }
+        let result = import_files_sync(
+            &db,
+            vec![source.to_string_lossy().to_string()],
+            target_dir.to_string_lossy().to_string(),
+            None,
+            &base.join("thumbs"),
+        );
+        assert_eq!(result["ok"], false);
+        assert!(result["error"].as_str().unwrap_or_default().contains("injected import failure"), "{result}");
+        assert!(!target_dir.join("source.png").exists());
+        assert!(!std::fs::read_dir(&target_dir).unwrap().any(|entry| entry.unwrap().file_name().to_string_lossy().starts_with(".picnest-part-")));
+        let conn = db.lock().unwrap();
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM images", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM picnest_operations", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
+    }
+
+    #[test]
+    fn url_import_downloads_then_indexes_in_the_same_commit() {
+        let (base, db, _fid) = setup_test_env("url_ok");
+        let target_dir = base.join("library").join("01_doc");
+        let url = "https://images.example.invalid/photo.jpg?size=large";
+        let result = import_urls_sync(&db, &[url.to_string()], &target_dir.to_string_lossy(), |requested| {
+            assert_eq!(requested, url);
+            Ok((b"payload".to_vec(), "image/jpeg".to_string()))
+        });
+        assert_eq!(result["ok"], true);
+        assert_eq!(result["downloaded"], 1);
+        assert_eq!(result["failed"], 0);
+        let final_path = target_dir.join("photo.jpg");
+        assert_eq!(std::fs::read(&final_path).unwrap(), b"payload");
+        let conn = db.lock().unwrap();
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM images WHERE file_path = ?1 AND deleted_at IS NULL",
+            [final_path.to_string_lossy().to_string()],
+            |r| r.get(0),
+        ).unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM picnest_operations", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
+    }
+
+    #[test]
+    fn url_import_sql_failure_removes_final_file_and_reports_failure() {
+        let (base, db, _fid) = setup_test_env("url_fault");
+        let target_dir = base.join("library").join("01_doc");
+        {
+            let conn = db.lock().unwrap();
+            conn.execute_batch("CREATE TRIGGER reject_url BEFORE INSERT ON images BEGIN SELECT RAISE(ABORT, 'injected url failure'); END;").unwrap();
+        }
+        let result = import_urls_sync(
+            &db,
+            &["https://images.example.invalid/photo.jpg".to_string()],
+            &target_dir.to_string_lossy(),
+            |_| Ok((b"payload".to_vec(), "image/jpeg".to_string())),
+        );
+        assert_eq!(result["ok"], false);
+        assert_eq!(result["downloaded"], 0);
+        assert_eq!(result["failed"], 1);
+        assert!(result["errors"][0].as_str().unwrap_or_default().contains("injected url failure"), "{result}");
+        assert!(!target_dir.join("photo.jpg").exists());
+        assert!(!std::fs::read_dir(&target_dir).unwrap().any(|entry| entry.unwrap().file_name().to_string_lossy().starts_with(".picnest-part-")));
+        assert_eq!(db.lock().unwrap().query_row("SELECT COUNT(*) FROM picnest_operations", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
     }
 }

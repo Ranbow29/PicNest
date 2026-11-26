@@ -244,7 +244,7 @@ fn download_media_curl(src: &str, referer: &str) -> Result<(Vec<u8>, String), St
     download_media_curl_limited(src, referer, 500 * 1024 * 1024, false)
 }
 
-fn download_media_curl_limited(
+pub(crate) fn download_media_curl_limited(
     src: &str,
     referer: &str,
     max_bytes: usize,
@@ -410,11 +410,9 @@ pub struct RootItem {
     pub path: String,
 }
 
-fn query_roots(conn: &rusqlite::Connection) -> Vec<RootItem> {
-    let mut stmt = match conn.prepare("SELECT id, path, COALESCE(display_name, '') FROM folders ORDER BY id ASC") {
-        Ok(s) => s,
-        Err(_) => return Vec::new(),
-    };
+fn query_roots_result(conn: &rusqlite::Connection) -> Result<Vec<RootItem>, String> {
+    let mut stmt = conn.prepare("SELECT id, path, COALESCE(display_name, '') FROM folders ORDER BY id ASC")
+        .map_err(|e| e.to_string())?;
     let rows = stmt.query_map([], |r| {
         let id: i64 = r.get(0)?;
         let path: String = r.get(1)?;
@@ -426,11 +424,8 @@ fn query_roots(conn: &rusqlite::Connection) -> Vec<RootItem> {
                 .unwrap_or_else(|| format!("资料库 {}", id));
         }
         Ok(RootItem { id, name, path })
-    });
-    match rows {
-        Ok(iter) => iter.filter_map(|r| r.ok()).collect(),
-        Err(_) => Vec::new(),
-    }
+    }).map_err(|e| e.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
 }
 
 fn canonicalize_within_root(root: &Path, candidate: &Path) -> Result<PathBuf, String> {
@@ -589,7 +584,7 @@ pub(crate) fn save_one_item_direct(
     item: &serde_json::Value,
     app_handle: Option<&tauri::AppHandle>,
 ) -> Result<serde_json::Value, String> {
-    let roots = query_roots(conn);
+    let roots = query_roots_result(conn)?;
     if roots.is_empty() {
         return Err("图库中没有可用的资料库根目录".to_string());
     }
@@ -632,7 +627,7 @@ pub(crate) fn save_one_item_direct(
     // 防逃逸安全检查
     canonicalize_within_root(&root_path, &dest_dir)?;
 
-    let _ = fs::create_dir_all(&dest_dir);
+    fs::create_dir_all(&dest_dir).map_err(|e| format!("创建采集目录失败: {}", e))?;
 
     let kind = item
         .get("kind")
@@ -657,8 +652,7 @@ pub(crate) fn save_one_item_direct(
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
-    let mut buf: Vec<u8> = Vec::new();
-    let mut content_type = String::new();
+    let (buf, content_type): (Vec<u8>, String);
 
     if kind == "page" || kind == "screenshot" || (!data_url.is_empty() && src.is_empty()) {
         let (d_buf, d_ct) = parse_data_url(data_url)?;
@@ -727,7 +721,55 @@ pub(crate) fn save_one_item_direct(
         seq += 1;
     }
 
-    fs::write(&dest_file, &buf).map_err(|e| format!("写入磁盘失败: {}", e))?;
+    let mut overwrite_paths: Vec<String> = Vec::new();
+    if overwrite {
+        let mut seen = std::collections::HashSet::new();
+        for m in &matches {
+            if let Some(old_fp) = m.get("file_path").and_then(|v| v.as_str()) {
+                if seen.insert(old_fp.to_lowercase()) {
+                    overwrite_paths.push(old_fp.to_string());
+                }
+            }
+        }
+    }
+    if overwrite_paths.len() > 1 {
+        return Err("覆盖操作存在多个重复文件，拒绝自动回收，请先人工确认".to_string());
+    }
+    let staged = crate::fs_ops::stage_write_new(&dest_file, &buf)?;
+    let replacement_ids = if overwrite_paths.is_empty() {
+        Vec::new()
+    } else {
+        match crate::operation_journal::begin_file_replacements(
+            conn,
+            &overwrite_paths.iter().map(String::as_str).collect::<Vec<_>>(),
+            &staged,
+        ) {
+            Ok(ids) => ids,
+            Err(error) => {
+                let _ = crate::fs_ops::rollback_staged(&staged);
+                return Err(error);
+            }
+        }
+    };
+    for old in &overwrite_paths {
+        if Path::new(old).exists() {
+            if let Err(e) = trash::delete(Path::new(old)) {
+                let mut cleanup_errors = Vec::new();
+                if let Err(error) = crate::fs_ops::rollback_staged(&staged) {
+                    cleanup_errors.push(error);
+                }
+                for id in &replacement_ids {
+                    let _ = crate::operation_journal::mark_manual(
+                        conn,
+                        *id,
+                        &format!("{e}; 新文件回滚: {}", cleanup_errors.join("; ")),
+                    );
+                }
+                return Err(format!("覆盖文件移入回收站失败: {e}; 回滚: {}", cleanup_errors.join("; ")));
+            }
+        }
+    }
+    let inspect_path = staged.temp_path.clone();
 
     let abs_file_str = dest_file.to_string_lossy().to_string();
     let file_name_str = dest_file
@@ -735,14 +777,14 @@ pub(crate) fn save_one_item_direct(
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| base_name.clone());
 
-    let (mut width, mut height) = match image::image_dimensions(&dest_file) {
+    let (mut width, mut height) = match image::image_dimensions(&inspect_path) {
         Ok((w, h)) => (w as i64, h as i64),
         Err(_) => (0i64, 0i64),
     };
     let ext_lower = ext.to_ascii_lowercase();
     let is_video = crate::commands::is_video_ext(&ext_lower);
     if (width == 0 || height == 0) && is_video {
-        if let Some((vw, vh)) = crate::commands::extract_video_dims(&dest_file) {
+        if let Some((vw, vh)) = crate::commands::extract_video_dims(&inspect_path) {
             width = vw as i64;
             height = vh as i64;
         }
@@ -755,7 +797,7 @@ pub(crate) fn save_one_item_direct(
         let hash = format!("{:x}", crate::commands::fnv1a_hash(abs_file_str.as_bytes()));
         let thumb_path = thumbs_dir.join(format!("{}-q80.jpg", hash));
         if is_video {
-            if crate::commands::extract_video_poster(&dest_file, &thumb_path) {
+            if crate::commands::extract_video_poster(&inspect_path, &thumb_path) {
                 thumb_path_str = thumb_path.to_string_lossy().to_string();
             }
         }
@@ -778,53 +820,38 @@ pub(crate) fn save_one_item_direct(
         .unwrap_or_default();
     let dir_rel_value = dir_rel_value.trim_matches('/').to_string();
 
-    let _ = conn.execute(
-        "INSERT INTO images (folder_id, file_path, size, mtime, width, height, annotation, url, is_favorite, thumbnail_path, dir_rel)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
-         ON CONFLICT(file_path) DO UPDATE SET
-            folder_id = ?1, size = ?3, mtime = ?4, width = ?5, height = ?6,
-            annotation = ?7, url = ?8, is_favorite = MAX(is_favorite, ?9),
-            thumbnail_path = COALESCE(NULLIF(?10, ''), thumbnail_path),
-            dir_rel = ?11,
-            deleted_at = NULL, trash_group = NULL",
-        params![
-            root.id,
-            abs_file_str,
-            file_size,
-            now_ts,
-            width,
-            height,
-            annotation,
-            url,
-            if star { 1 } else { 0 },
-            thumb_path_str,
-            dir_rel_value
-        ],
-    );
-
-    // 覆盖模式下软删旧图片
     let mut overwritten = 0;
-    if overwrite && !matches.is_empty() {
-        for m in &matches {
-            if let Some(old_fp) = m.get("file_path").and_then(|v| v.as_str()) {
-                if let Ok(c) = conn.execute(
-                    "UPDATE images SET deleted_at = ?1, trash_group = NULL WHERE file_path = ?2 AND deleted_at IS NULL",
-                    params![now_ts, old_fp],
-                ) {
-                    if c > 0 {
-                        overwritten += c;
-                        if let Some(h) = app_handle {
-                            let _ = h.emit(
-                                "sync-db",
-                                json!({
-                                    "type": "unlink",
-                                    "path": old_fp
-                                }),
-                            );
-                        }
-                    }
-                }
+    crate::operation_journal::commit_new_files(
+        conn,
+        vec![(staged, json!({ "rootId": root.id, "finishOperationIds": replacement_ids }))],
+        |tx, _files| {
+            let changed = tx.execute(
+                "INSERT INTO images (folder_id, file_path, size, mtime, width, height, annotation, url, is_favorite, thumbnail_path, dir_rel)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![
+                    root.id, abs_file_str, file_size, now_ts, width, height,
+                    annotation, url, if star { 1 } else { 0 }, thumb_path_str, dir_rel_value
+                ],
+            ).map_err(|e| e.to_string())?;
+            if changed != 1 {
+                return Err("采集图片入库失败".to_string());
             }
+            for old_fp in &overwrite_paths {
+                let changed = tx.execute(
+                    "DELETE FROM images WHERE file_path = ?1 AND deleted_at IS NULL",
+                    [old_fp],
+                ).map_err(|e| e.to_string())?;
+                overwritten += changed;
+            }
+            Ok(())
+        },
+    )?;
+    for old_fp in &overwrite_paths {
+        if let Some(data_dir) = COLLECTOR_DATA_DIR.get() {
+            crate::trash_ops::remove_thumbs_for(&data_dir.join("cache").join("thumbs"), old_fp);
+        }
+        if let Some(h) = app_handle {
+            let _ = h.emit("sync-db", json!({ "type": "unlink", "path": old_fp }));
         }
     }
 
@@ -1028,7 +1055,13 @@ fn handle_client(mut stream: TcpStream, expected_port: u16) {
 
     // 2. GET /api/v1/context
     if method == "GET" && path == "/api/v1/context" {
-        let roots = query_roots(&conn);
+        let roots = match query_roots_result(&conn) {
+            Ok(roots) => roots,
+            Err(e) => {
+                send_json(&mut stream, 500, origin_str, &json!({ "ok": false, "error": e }));
+                return;
+            }
+        };
         let req_root_id = query_param(query, "rootId").and_then(|v| v.parse::<i64>().ok());
         let active_id = get_active_collect_root();
 
@@ -1054,7 +1087,13 @@ fn handle_client(mut stream: TcpStream, expected_port: u16) {
 
     // 3. GET /api/v1/folders
     if method == "GET" && path == "/api/v1/folders" {
-        let roots = query_roots(&conn);
+        let roots = match query_roots_result(&conn) {
+            Ok(roots) => roots,
+            Err(e) => {
+                send_json(&mut stream, 500, origin_str, &json!({ "ok": false, "error": e }));
+                return;
+            }
+        };
         let req_root_id = query_param(query, "rootId").and_then(|v| v.parse::<i64>().ok());
         let active_id = get_active_collect_root();
 
@@ -1135,7 +1174,13 @@ fn handle_client(mut stream: TcpStream, expected_port: u16) {
 
     // 4. POST /api/v1/folder/create
     if method == "POST" && path == "/api/v1/folder/create" {
-        let roots = query_roots(&conn);
+        let roots = match query_roots_result(&conn) {
+            Ok(roots) => roots,
+            Err(e) => {
+                send_json(&mut stream, 500, origin_str, &json!({ "ok": false, "error": e }));
+                return;
+            }
+        };
         let req_root_id = json_body.get("rootId").and_then(|v| v.as_i64());
         let active_id = get_active_collect_root();
 
@@ -1668,6 +1713,28 @@ mod tests {
         .unwrap_err();
         assert!(error.contains("禁止采集内网、回环或链路本地地址"), "{error}");
         server.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn collector_sql_failure_removes_staged_final_file_and_journal() {
+        let dir = crate::testutil::TempDir::new("picnest_collector_fault");
+        let root = dir.join("library");
+        std::fs::create_dir_all(&root).unwrap();
+        let conn = crate::db::init_db(&dir.join("test.db")).unwrap();
+        conn.execute("INSERT INTO folders (path) VALUES (?1)", [root.to_string_lossy().to_string()]).unwrap();
+        let root_id = conn.last_insert_rowid();
+        conn.execute_batch("CREATE TRIGGER reject_collector BEFORE INSERT ON images BEGIN SELECT RAISE(ABORT, 'injected collector failure'); END;").unwrap();
+        let item = json!({
+            "rootId": root_id,
+            "kind": "screenshot",
+            "title": "fault",
+            "dataUrl": "data:text/plain;base64,cGF5bG9hZA=="
+        });
+        let error = save_one_item_direct(&conn, &item, None).unwrap_err();
+        assert!(error.contains("injected collector failure"), "{error}");
+        assert!(!root.join("fault.txt").exists());
+        assert!(!std::fs::read_dir(&root).unwrap().any(|entry| entry.unwrap().file_name().to_string_lossy().starts_with(".picnest-part-")));
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM picnest_operations", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
     }
 }
 

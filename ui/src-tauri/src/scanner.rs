@@ -47,33 +47,41 @@ pub fn collect_folder_files(root_path: &Path) -> Vec<(String, i64, i64)> {
 }
 
 /// 仅扫描单层目录的直接子文件（不递归子文件夹），用于切换目录时毫秒级对齐磁盘新增/还原文件
-pub fn collect_single_dir_files(dir_path: &Path) -> Vec<(String, i64, i64)> {
+pub fn collect_single_dir_files(dir_path: &Path) -> Result<Vec<(String, i64, i64)>, String> {
     let mut files = Vec::new();
-    let Ok(rd) = std::fs::read_dir(dir_path) else {
-        return files;
-    };
-    for ent in rd.flatten() {
-        let Ok(ft) = ent.file_type() else {
-            continue;
-        };
+    let rd = std::fs::read_dir(dir_path)
+        .map_err(|e| format!("读取目录失败 {}: {e}", dir_path.display()))?;
+    for ent in rd {
+        let ent = ent.map_err(|e| format!("遍历目录失败 {}: {e}", dir_path.display()))?;
+        let ft = ent
+            .file_type()
+            .map_err(|e| format!("读取目录项失败 {}: {e}", ent.path().display()))?;
         if !ft.is_file() {
             continue;
         }
         let path = ent.path();
-        if let Some(fname) = path.file_name().and_then(|s| s.to_str()) {
-            if fname.starts_with('.') {
-                continue;
-            }
+        if let Some(fname) = path.file_name().and_then(|s| s.to_str())
+            && fname.starts_with('.')
+        {
+            continue;
         }
         let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
         if !is_supported_ext(ext) {
             continue;
         }
-        let meta = ent.metadata().ok();
-        let (size, mtime) = file_size_and_mtime(meta.as_ref());
+        let meta = ent
+            .metadata()
+            .map_err(|e| format!("读取文件元数据失败 {}: {e}", path.display()))?;
+        let size = meta.len() as i64;
+        let mtime = meta
+            .modified()
+            .map_err(|e| format!("读取文件修改时间失败 {}: {e}", path.display()))?
+            .duration_since(UNIX_EPOCH)
+            .map_err(|e| format!("文件修改时间无效 {}: {e}", path.display()))?
+            .as_secs() as i64;
         files.push((path.to_string_lossy().to_string(), size, mtime));
     }
-    files
+    Ok(files)
 }
 
 pub fn scan_and_sync_folder(conn: &mut Connection, folder_id: i64, root_path: &Path) -> Result<usize, String> {
@@ -100,4 +108,33 @@ pub fn scan_and_sync_folder(conn: &mut Connection, folder_id: i64, root_path: &P
 
     tx.commit().map_err(|e| e.to_string())?;
     Ok(count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn single_dir_scan_errors_are_not_reported_as_an_empty_directory() {
+        let dir = crate::testutil::TempDir::new("picnest_single_dir_scan");
+        let not_a_dir = dir.join("image.png");
+        std::fs::write(&not_a_dir, b"image").unwrap();
+        let error = collect_single_dir_files(&not_a_dir).unwrap_err();
+        assert!(error.contains("读取目录失败"));
+    }
+
+    #[test]
+    fn single_dir_scan_returns_direct_supported_files_only() {
+        let dir = crate::testutil::TempDir::new("picnest_single_dir_scan_files");
+        std::fs::write(dir.join("image.PNG"), b"image").unwrap();
+        std::fs::write(dir.join("notes.txt"), b"notes").unwrap();
+        std::fs::write(dir.join("ignored.bin"), b"ignored").unwrap();
+        std::fs::write(dir.join(".hidden.png"), b"hidden").unwrap();
+        std::fs::create_dir(dir.join("nested")).unwrap();
+        std::fs::write(dir.join("nested/nested.png"), b"nested").unwrap();
+        let files = collect_single_dir_files(dir.path()).unwrap();
+        assert_eq!(files.len(), 2);
+        assert!(files.iter().all(|(_path, size, _)| *size > 0));
+        assert!(files.iter().any(|(path, _, _)| path.ends_with("image.PNG")));
+    }
 }

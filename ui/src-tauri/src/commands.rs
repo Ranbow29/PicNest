@@ -291,6 +291,7 @@ pub async fn get_all_folders(state: State<'_, AppState>) -> Result<Vec<FolderIte
 pub async fn add_folder_by_path(path: String, state: State<'_, AppState>) -> Result<FolderItem, String> {
     let db = state.db.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let _filesystem_guard = crate::operation_journal::filesystem_operation_guard();
         let id: i64 = {
             let conn = db.lock().map_err(|e| e.to_string())?;
             conn.execute(
@@ -321,7 +322,8 @@ pub async fn add_folder_by_path(path: String, state: State<'_, AppState>) -> Res
                     .map_err(|e| e.to_string())?;
                 for (fp, sz, mt) in &files {
                     let dr = crate::db::dir_rel_of(&path, fp);
-                    let _ = stmt.execute(rusqlite::params![id, fp, sz, mt, dr]);
+                    stmt.execute(rusqlite::params![id, fp, sz, mt, dr])
+                        .map_err(|e| e.to_string())?;
                 }
             }
             tx.commit().map_err(|e| e.to_string())?;
@@ -1125,24 +1127,25 @@ pub async fn view_counts(folder_id: i64, state: State<'_, AppState>) -> Result<V
 }
 
 pub fn find_folder_id_for_path(conn: &rusqlite::Connection, target: &Path) -> Option<i64> {
+    find_folder_id_for_path_result(conn, target).ok().flatten()
+}
+
+fn find_folder_id_for_path_result(conn: &rusqlite::Connection, target: &Path) -> Result<Option<i64>, String> {
     let norm = target
         .to_string_lossy()
         .replace('/', "\\")
         .trim_end_matches('\\')
         .to_lowercase();
     if norm.is_empty() {
-        return None;
+        return Ok(None);
     }
-    let mut stmt = conn.prepare("SELECT id, path FROM folders").ok()?;
-    let rows = stmt
-        .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
-        .ok()?;
+    let mut stmt = conn.prepare("SELECT id, path FROM folders").map_err(|e| e.to_string())?;
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
+        .map_err(|e| e.to_string())?;
     let mut best: Option<(usize, i64)> = None;
-    for (id, rp) in rows.flatten() {
-        let root = rp
-            .replace('/', "\\")
-            .trim_end_matches('\\')
-            .to_lowercase();
+    for row in rows {
+        let (id, rp) = row.map_err(|e| e.to_string())?;
+        let root = rp.replace('/', "\\").trim_end_matches('\\').to_lowercase();
         if root.is_empty() {
             continue;
         }
@@ -1154,34 +1157,52 @@ pub fn find_folder_id_for_path(conn: &rusqlite::Connection, target: &Path) -> Op
             best = Some((root.len(), id));
         }
     }
-    best.map(|(_, id)| id)
+    Ok(best.map(|(_, id)| id))
 }
 
 fn apply_file_snapshot_diff(
     db: &Arc<Mutex<rusqlite::Connection>>,
     folder_id: i64,
     diff: &[(String, i64, i64)],
+    gone: &[String],
 ) -> Result<bool, String> {
-    if diff.is_empty() {
+    if diff.is_empty() && gone.is_empty() {
         return Ok(false);
     }
     let mut wconn = db.lock().map_err(|e| e.to_string())?;
-    // 根路径用于算 dir_rel：新增行必须带上目录指纹，否则它会从所有目录列表里消失
     let root_path: String = wconn
         .query_row("SELECT path FROM folders WHERE id = ?1", [folder_id], |r| r.get(0))
-        .unwrap_or_default();
+        .map_err(|e| e.to_string())?;
     let tx = wconn.transaction().map_err(|e| e.to_string())?;
     {
         let mut stmt = tx
             .prepare_cached(
                 "INSERT INTO images (folder_id, file_path, size, mtime, dir_rel)
                  VALUES (?1, ?2, ?3, ?4, ?5)
-                 ON CONFLICT(file_path) DO UPDATE SET size = ?3, mtime = ?4, dir_rel = ?5, deleted_at = NULL, trash_group = NULL",
+                 ON CONFLICT(file_path) DO UPDATE SET size = ?3, mtime = ?4, dir_rel = ?5
+                 WHERE deleted_at IS NULL AND (size IS NOT ?3 OR mtime IS NOT ?4 OR dir_rel IS NOT ?5)",
             )
             .map_err(|e| e.to_string())?;
         for (fp, sz, mt) in diff {
             let dr = crate::db::dir_rel_of(&root_path, fp);
-            let _ = stmt.execute(rusqlite::params![folder_id, fp, sz, mt, dr]);
+            stmt.execute(rusqlite::params![folder_id, fp, sz, mt, dr])
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    if !gone.is_empty() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let mut stmt = tx
+            .prepare_cached(
+                "UPDATE images SET deleted_at = ?1
+                 WHERE folder_id = ?2 AND LOWER(file_path) = ?3 AND deleted_at IS NULL",
+            )
+            .map_err(|e| e.to_string())?;
+        for low in gone {
+            stmt.execute(rusqlite::params![now, folder_id, low])
+                .map_err(|e| e.to_string())?;
         }
     }
     tx.commit().map_err(|e| e.to_string())?;
@@ -1193,6 +1214,7 @@ pub async fn sync_folder_snapshot(path: String, state: State<'_, AppState>) -> R
     let db_path = state.db_path.clone();
     let db = state.db.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let _filesystem_guard = crate::operation_journal::filesystem_operation_guard();
         let root = PathBuf::from(&path);
         if !root.exists() || !root.is_dir() {
             return Ok(false);
@@ -1203,22 +1225,26 @@ pub async fn sync_folder_snapshot(path: String, state: State<'_, AppState>) -> R
             .map_err(|e| e.to_string())?;
         let mut existing: std::collections::HashMap<String, (i64, i64, bool)> =
             std::collections::HashMap::new();
-        if let Ok(mut stmt) = rconn.prepare(
-            "SELECT file_path, size, mtime, deleted_at IS NOT NULL FROM images WHERE folder_id = ?1",
-        ) {
-            if let Ok(rows) = stmt.query_map([id], |r| {
+        let mut stmt = rconn
+            .prepare(
+                "SELECT file_path, size, mtime, deleted_at IS NOT NULL FROM images WHERE folder_id = ?1",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([id], |r| {
                 Ok((
                     r.get::<_, String>(0)?,
                     r.get::<_, i64>(1).unwrap_or(0),
                     r.get::<_, i64>(2).unwrap_or(0),
                     r.get::<_, bool>(3).unwrap_or(false),
                 ))
-            }) {
-                for (fp, sz, mt, del) in rows.flatten() {
-                    existing.insert(fp.to_lowercase(), (sz, mt, del));
-                }
-            }
+            })
+            .map_err(|e| e.to_string())?;
+        for row in rows {
+            let (fp, sz, mt, del) = row.map_err(|e| e.to_string())?;
+            existing.insert(fp.to_lowercase(), (sz, mt, del));
         }
+        drop(stmt);
         drop(rconn);
 
         let files = crate::scanner::collect_folder_files(&root);
@@ -1233,7 +1259,7 @@ pub async fn sync_folder_snapshot(path: String, state: State<'_, AppState>) -> R
             }
         }
 
-        apply_file_snapshot_diff(&db, id, &diff)
+        apply_file_snapshot_diff(&db, id, &diff, &[])
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1250,17 +1276,15 @@ pub async fn sync_dir_snapshot(
     let db_path = state.db_path.clone();
     let db = state.db.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let _filesystem_guard = crate::operation_journal::filesystem_operation_guard();
         let dir = PathBuf::from(&dir_path);
         if !dir.exists() || !dir.is_dir() {
             return Ok(false);
         }
-        let files = crate::scanner::collect_single_dir_files(&dir);
-        if files.is_empty() {
-            return Ok(false);
-        }
+        let files = crate::scanner::collect_single_dir_files(&dir)?;
         let rconn = open_read_conn(&db_path)?;
         let t0 = std::time::Instant::now();
-        let resolved_id = find_folder_id_for_path(&rconn, &dir).unwrap_or(folder_id);
+        let resolved_id = find_folder_id_for_path_result(&rconn, &dir)?.unwrap_or(folder_id);
 
         // 一次把这层的行拉回来，内存里做 diff。
         // 原实现是「每个文件一条 LOWER(file_path)=LOWER(?)」——该列无索引，每条全表扫，
@@ -1269,74 +1293,70 @@ pub async fn sync_dir_snapshot(
         // 现在优先用 dir_rel 直接命中索引；算不出 rel（根路径异常）才退回前缀区间。
         let dir_str = dir.to_string_lossy().to_string();
         let sep = if dir_str.contains('\\') { '\\' } else { '/' };
-        let _ = sep;
         let norm = |s: &str| s.replace('\\', "/").trim_end_matches('/').to_lowercase();
-        let rel_opt: Option<String> = rconn
+        let root_path: String = rconn
             .query_row(
                 "SELECT path FROM folders WHERE id = ?1",
                 [resolved_id],
                 |r| r.get::<_, String>(0),
             )
-            .ok()
-            .and_then(|root_path| {
-                let root_n = norm(&root_path);
-                let dir_n = norm(&dir_str);
-                if dir_n == root_n {
-                    Some(String::new())
-                } else {
-                    dir_n
-                        .strip_prefix(&root_n)
-                        .map(|s| s.trim_start_matches('/').to_string())
-                }
-            });
+            .map_err(|e| e.to_string())?;
+        let root_n = norm(&root_path);
+        let dir_n = norm(&dir_str);
+        let rel_opt: Option<String> = if dir_n == root_n {
+            Some(String::new())
+        } else if let Some(rel) = dir_n.strip_prefix(&format!("{root_n}/")) {
+            Some(rel.to_string())
+        } else {
+            return Err(format!("目录不在图库根目录内: {}", dir.display()));
+        };
 
         let mut existing: std::collections::HashMap<String, (i64, i64, bool)> =
             std::collections::HashMap::new();
         let mut got_rows = false;
         if let Some(rel) = rel_opt.as_deref() {
-            // 走 idx_images_nav / dir_rel：一次索引查找，不再全表扫
-            if let Ok(mut stmt) = rconn.prepare(
-                "SELECT file_path, size, mtime, deleted_at IS NOT NULL FROM images
-                 WHERE folder_id = ?1 AND dir_rel = ?2",
-            ) {
-                if let Ok(rows) = stmt.query_map(rusqlite::params![resolved_id, rel], |r| {
-                    Ok((
-                        r.get::<_, String>(0)?,
-                        r.get::<_, i64>(1).unwrap_or(0),
-                        r.get::<_, i64>(2).unwrap_or(0),
-                        r.get::<_, bool>(3).unwrap_or(false),
-                    ))
-                }) {
-                    for (fp, sz, mt, del) in rows.flatten() {
-                        existing.insert(fp.to_lowercase(), (sz, mt, del));
-                    }
-                    got_rows = true;
-                }
+            let mut stmt = rconn
+                .prepare(
+                    "SELECT file_path, size, mtime, deleted_at IS NOT NULL FROM images
+                     WHERE folder_id = ?1 AND dir_rel = ?2",
+                )
+                .map_err(|e| e.to_string())?;
+            let rows = stmt.query_map(rusqlite::params![resolved_id, rel], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1).unwrap_or(0),
+                    r.get::<_, i64>(2).unwrap_or(0),
+                    r.get::<_, bool>(3).unwrap_or(false),
+                ))
+            }).map_err(|e| e.to_string())?;
+            for row in rows {
+                let (fp, sz, mt, del) = row.map_err(|e| e.to_string())?;
+                existing.insert(fp.to_lowercase(), (sz, mt, del));
             }
+            got_rows = true;
         }
         if !got_rows {
-            // 退路：根路径取不到时仍用前缀区间（正确但有全表扫代价）
             let base = format!("{}{}", dir_str.trim_end_matches(&['\\', '/'][..]), sep).to_lowercase();
             let base_end = format!("{}{}", base, char::MAX);
-            if let Ok(mut stmt) = rconn.prepare(
-                "SELECT file_path, size, mtime, deleted_at IS NOT NULL FROM images
-                 WHERE folder_id = ?1 AND LOWER(file_path) >= ?2 AND LOWER(file_path) < ?3",
-            ) {
-                if let Ok(rows) = stmt.query_map(rusqlite::params![resolved_id, &base, &base_end], |r| {
-                    Ok((
-                        r.get::<_, String>(0)?,
-                        r.get::<_, i64>(1).unwrap_or(0),
-                        r.get::<_, i64>(2).unwrap_or(0),
-                        r.get::<_, bool>(3).unwrap_or(false),
-                    ))
-                }) {
-                    for (fp, sz, mt, del) in rows.flatten() {
-                        let low = fp.to_lowercase();
-                        // 只取本层直属文件：前缀之后的剩余路径不能再含分隔符
-                        if low.starts_with(&base) && !low[base.len()..].contains(sep) {
-                            existing.insert(low, (sz, mt, del));
-                        }
-                    }
+            let mut stmt = rconn
+                .prepare(
+                    "SELECT file_path, size, mtime, deleted_at IS NOT NULL FROM images
+                     WHERE folder_id = ?1 AND LOWER(file_path) >= ?2 AND LOWER(file_path) < ?3",
+                )
+                .map_err(|e| e.to_string())?;
+            let rows = stmt.query_map(rusqlite::params![resolved_id, &base, &base_end], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1).unwrap_or(0),
+                    r.get::<_, i64>(2).unwrap_or(0),
+                    r.get::<_, bool>(3).unwrap_or(false),
+                ))
+            }).map_err(|e| e.to_string())?;
+            for row in rows {
+                let (fp, sz, mt, del) = row.map_err(|e| e.to_string())?;
+                let low = fp.to_lowercase();
+                if low.starts_with(&base) && !low[base.len()..].contains(sep) {
+                    existing.insert(low, (sz, mt, del));
                 }
             }
         }
@@ -1348,7 +1368,7 @@ pub async fn sync_dir_snapshot(
         for (fp, sz, mt) in &files {
             match existing.get(&fp.to_lowercase()) {
                 None => diff.push((fp.clone(), *sz, *mt)),
-                Some((old_sz, old_mt, del)) if *del || *old_sz != *sz || *old_mt != *mt => {
+                Some((old_sz, old_mt, del)) if !del && (*old_sz != *sz || *old_mt != *mt) => {
                     diff.push((fp.clone(), *sz, *mt))
                 }
                 _ => {}
@@ -1368,27 +1388,7 @@ pub async fn sync_dir_snapshot(
             gone.len(),
             t0.elapsed().as_millis()
         ));
-        let mut changed = apply_file_snapshot_diff(&db, resolved_id, &diff)?;
-        if !gone.is_empty() {
-            if let Ok(mut wconn) = db.lock() {
-                if let Ok(tx) = wconn.transaction() {
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_secs() as i64)
-                        .unwrap_or(0);
-                    for low in &gone {
-                        let _ = tx.execute(
-                            "UPDATE images SET deleted_at = ?1 \
-                             WHERE folder_id = ?2 AND LOWER(file_path) = ?3 AND deleted_at IS NULL",
-                            rusqlite::params![now, resolved_id, low],
-                        );
-                    }
-                    let _ = tx.commit();
-                }
-            }
-            changed = true;
-        }
-        Ok(changed)
+        apply_file_snapshot_diff(&db, resolved_id, &diff, &gone)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -2462,21 +2462,21 @@ pub async fn remove_root(
     let db = state.db.clone();
     let thumbs_dir = state.data_dir.join("cache").join("thumbs");
     tauri::async_runtime::spawn_blocking(move || {
-        let conn = db.lock().map_err(|e| e.to_string())?;
+        let mut conn = db.lock().map_err(|e| e.to_string())?;
         let trash_imgs: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM images WHERE folder_id = ?1 AND deleted_at IS NOT NULL AND trash_group IS NULL",
                 [folder_id],
                 |r| r.get(0),
             )
-            .unwrap_or(0);
+            .map_err(|e| e.to_string())?;
         let trash_dirs: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM picnest_trash_folders WHERE folder_id = ?1",
                 [folder_id],
                 |r| r.get(0),
             )
-            .unwrap_or(0);
+            .map_err(|e| e.to_string())?;
         if trash_imgs > 0 || trash_dirs > 0 {
             return Ok(serde_json::json!({
                 "ok": false,
@@ -2487,30 +2487,29 @@ pub async fn remove_root(
         /* 移出根之前先把标签/颜色/排序写进 <root>/.picnest/meta.json。
            对齐旧版行为（picnest-handlers.js 里 remove-root 的第一件事就是 picnestMetaExport）。
            不写的话，下面两行 DELETE 会直接抹掉这些设置，重新加回这个库时全丢。 */
-        let _ = meta_export_inner(&conn, folder_id);
-
-        /* 删记录前先把整个库的缩略图清掉。
-           移出一个 1 万张的库，如果只删 DB 行，就会一次性留下 1 万个孤儿文件
-           —— 那样又回到磁盘风暴的老路。 */
-        {
-            let paths: Vec<String> = {
-                let mut stmt = match conn.prepare("SELECT file_path FROM images WHERE folder_id = ?1") {
-                    Ok(s) => s,
-                    Err(_) => return Ok(serde_json::json!({ "ok": false, "error": "读取图片列表失败" })),
-                };
-                stmt.query_map([folder_id], |r| r.get::<_, String>(0))
-                    .map(|it| it.flatten().collect())
-                    .unwrap_or_default()
-            };
-            for fp in &paths {
-                crate::trash_ops::remove_thumbs_for(&thumbs_dir, fp);
-            }
+        let paths: Vec<String> = {
+            let mut stmt = conn
+                .prepare("SELECT file_path FROM images WHERE folder_id = ?1")
+                .map_err(|e| e.to_string())?;
+            stmt.query_map([folder_id], |r| r.get::<_, String>(0))
+                .map_err(|e| e.to_string())?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?
+        };
+        meta_export_inner(&conn, folder_id)?;
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM images WHERE folder_id = ?1", [folder_id])
+            .map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM picnest_trash_folders WHERE folder_id = ?1", [folder_id])
+            .map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM picnest_dir_memory WHERE root_id = ?1", [folder_id])
+            .map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM folders WHERE id = ?1", [folder_id])
+            .map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())?;
+        for fp in &paths {
+            crate::trash_ops::remove_thumbs_for(&thumbs_dir, fp);
         }
-
-        let _ = conn.execute("DELETE FROM images WHERE folder_id = ?1", [folder_id]);
-        let _ = conn.execute("DELETE FROM picnest_trash_folders WHERE folder_id = ?1", [folder_id]);
-        let _ = conn.execute("DELETE FROM picnest_dir_memory WHERE root_id = ?1", [folder_id]);
-        let _ = conn.execute("DELETE FROM folders WHERE id = ?1", [folder_id]);
         Ok(serde_json::json!({ "ok": true }))
     })
     .await
@@ -2725,8 +2724,7 @@ fn overwrite_image_atomic_and_reindex(
     }
 
     let thumbs_dir = data_dir.join("cache").join("thumbs");
-    let _ = std::fs::remove_file(thumbs_dir.join(format!("{}.webp", hash)));
-    let _ = std::fs::remove_file(thumbs_dir.join(format!("view-{}.webp", hash)));
+    crate::trash_ops::remove_thumbs_for(&thumbs_dir, file_path);
 
     let w = img.width() as i64;
     let h = img.height() as i64;
@@ -2889,7 +2887,7 @@ pub async fn crop_image(
 pub fn crop_image_as_sync(
     file_path: &str,
     opts: &serde_json::Value,
-    conn: Option<&rusqlite::Connection>,
+    conn: &rusqlite::Connection,
 ) -> serde_json::Value {
     let p = Path::new(file_path);
     if !p.exists() {
@@ -2920,15 +2918,27 @@ pub fn crop_image_as_sync(
         i += 1;
     }
 
-    let hash = format!("{:x}", fnv1a_hash(file_path.as_bytes()));
-    let tmp_path = dir.join(format!(".picnest-crop-tmp-{}.{}", hash, ext));
-    if let Err(err) = save_dynamic_image_atomic(&cropped, &final_path, &tmp_path) {
-        return serde_json::json!({ "ok": false, "error": err });
+    let format = match image::ImageFormat::from_path(&final_path) {
+        Ok(format) => format,
+        Err(error) => return serde_json::json!({ "ok": false, "error": error.to_string() }),
+    };
+    let mut bytes = Vec::new();
+    if let Err(error) = cropped.write_to(&mut std::io::Cursor::new(&mut bytes), format) {
+        return serde_json::json!({ "ok": false, "error": format!("保存失败: {error}") });
     }
-
-    if let Some(c) = conn {
-        let list = [final_path.clone()];
-        crate::importer::index_disk_paths(c, &list, true);
+    let staged = match crate::fs_ops::stage_write_new(&final_path, &bytes) {
+        Ok(staged) => staged,
+        Err(error) => return serde_json::json!({ "ok": false, "error": error }),
+    };
+    if let Err(error) = crate::operation_journal::commit_new_files(
+        conn,
+        vec![(staged, serde_json::json!({}))],
+        |tx, files| {
+            crate::importer::index_disk_paths_in_tx(tx, &[files[0].final_path.clone()], true)?;
+            Ok(())
+        },
+    ) {
+        return serde_json::json!({ "ok": false, "error": error });
     }
 
     let final_str = final_path.to_string_lossy().to_string();
@@ -2958,8 +2968,8 @@ pub async fn crop_image_as(
 ) -> Result<serde_json::Value, String> {
     let db = state.db.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let conn = db.lock().ok();
-        Ok(crop_image_as_sync(&file_path, &opts, conn.as_deref()))
+        let conn = db.lock().map_err(|e| e.to_string())?;
+        Ok(crop_image_as_sync(&file_path, &opts, &conn))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -3316,16 +3326,16 @@ pub async fn export_dir(
 /// 从 file_path 反查所属库根。用于「改 file_path 时同步重算 dir_rel」。
 /// dir_rel 是列表/同步的唯一口径，只要 file_path 变了就必须重算，
 /// 否则图会从目标目录的列表里消失，并且可能被源目录的快照判定成“磁盘已删除”。
-fn root_path_for(conn: &rusqlite::Connection, file_path: &str) -> Option<String> {
-    let fid: i64 = conn
-        .query_row(
-            "SELECT folder_id FROM images WHERE file_path = ?1 COLLATE NOCASE LIMIT 1",
-            [file_path],
-            |r| r.get(0),
-        )
-        .ok()?;
-    conn.query_row("SELECT path FROM folders WHERE id = ?1", [fid], |r| r.get(0))
-        .ok()
+fn root_path_for_result(conn: &rusqlite::Connection, file_path: &str) -> Result<Option<String>, String> {
+    match conn.query_row(
+        "SELECT f.path FROM images i JOIN folders f ON f.id = i.folder_id WHERE i.file_path = ?1 COLLATE NOCASE LIMIT 1",
+        [file_path],
+        |r| r.get::<_, String>(0),
+    ) {
+        Ok(path) => Ok(Some(path)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 #[tauri::command]
@@ -3335,6 +3345,7 @@ pub async fn move_image(
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
     let db = state.db.clone();
+    let thumbs_dir = state.data_dir.join("cache").join("thumbs");
     tauri::async_runtime::spawn_blocking(move || {
         let src = Path::new(&file_path);
         let dst_dir = Path::new(&target_dir);
@@ -3361,36 +3372,25 @@ pub async fn move_image(
             target = dst_dir.join(candidate);
             n += 1;
         }
-        if let Err(e) = std::fs::rename(src, &target) {
-            return Ok(serde_json::json!({ "ok": false, "error": e.to_string() }));
-        }
         let target_str = target.to_string_lossy().to_string();
-        if let Ok(conn) = db.lock() {
-            // dir_rel 必须跟着 file_path 一起算，否则图在目标目录里查不到
-            let dr = root_path_for(&conn, &file_path)
-                .map(|root| crate::db::dir_rel_of(&root, &target_str))
-                .unwrap_or_default();
-            let _ = conn.execute(
-                "UPDATE images SET file_path = ?1, dir_rel = ?2, sort_order = 0 WHERE file_path = ?3",
-                rusqlite::params![target_str, dr, file_path],
-            );
+        match rename_image_compensated(&db, &thumbs_dir, src, &target, true) {
+            Ok(_) => Ok(serde_json::json!({ "ok": true, "file_path": target_str, "moved": true })),
+            Err(e) => Ok(serde_json::json!({ "ok": false, "error": e })),
         }
-        Ok(serde_json::json!({ "ok": true, "file_path": target_str, "moved": true }))
     })
     .await
     .map_err(|e| e.to_string())?
 }
 
-#[tauri::command]
-pub async fn move_dir(
-    dir_path: String,
-    target_dir: String,
-    state: State<'_, AppState>,
+fn move_dir_sync(
+    db: &std::sync::Arc<std::sync::Mutex<rusqlite::Connection>>,
+    thumbs_dir: &Path,
+    dir_path: &str,
+    target_dir: &str,
 ) -> Result<serde_json::Value, String> {
-    let db = state.db.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let src = Path::new(&dir_path);
-        let dst_dir = Path::new(&target_dir);
+        let _filesystem_guard = crate::operation_journal::filesystem_operation_guard();
+        let src = Path::new(dir_path);
+        let dst_dir = Path::new(target_dir);
         if !src.exists() || !src.is_dir() {
             return Ok(serde_json::json!({ "ok": false, "error": "源目录不存在" }));
         }
@@ -3416,61 +3416,111 @@ pub async fn move_dir(
             target = dst_dir.join(format!("{} ({})", base, n));
             n += 1;
         }
-        if let Err(e) = std::fs::rename(src, &target) {
-            return Ok(serde_json::json!({ "ok": false, "error": e.to_string() }));
-        }
-
         let from_prefix = dir_path.trim_end_matches(&['\\', '/'][..]).to_string();
         let to_prefix = target.to_string_lossy().trim_end_matches(&['\\', '/'][..]).to_string();
-        let mut moved_rows = 0i64;
-        if let Ok(mut conn) = db.lock() {
+        let identity = match crate::operation_journal::capture_path_identity(src) {
+            Ok(identity) => identity,
+            Err(e) => return Ok(serde_json::json!({ "ok": false, "error": e })),
+        };
+        let conn = match db.lock() {
+            Ok(c) => c,
+            Err(e) => return Ok(serde_json::json!({ "ok": false, "error": e.to_string() })),
+        };
+        let operation = match crate::operation_journal::begin_path_move(&conn, src, &target, identity) {
+            Ok(op) => op,
+            Err(e) => return Ok(serde_json::json!({ "ok": false, "error": e })),
+        };
+        let mut thumbs = Vec::new();
+        let result = (|| {
             let sep = if from_prefix.contains('\\') { '\\' } else { '/' };
             let raw_prefix = format!("{}{}", from_prefix, sep);
             let like_prefix = format!("{}%", escape_like(&raw_prefix));
             let paths: Vec<String> = {
-                if let Ok(mut stmt) = conn.prepare("SELECT file_path FROM images WHERE file_path LIKE ?1 ESCAPE '\\'") {
-                    stmt.query_map([like_prefix], |r| r.get::<_, String>(0))
-                        .map(|it| it.flatten().collect())
-                        .unwrap_or_default()
-                } else {
-                    Vec::new()
-                }
+                let mut stmt = conn.prepare("SELECT file_path FROM images WHERE file_path LIKE ?1 ESCAPE '\\'")
+                    .map_err(|e| e.to_string())?;
+                stmt.query_map([like_prefix], |r| r.get::<_, String>(0))
+                    .map_err(|e| e.to_string())?
+                    .collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?
             };
-            // 同一目录下的图片共享同一个资料库 root_path，移到循环外查一次即可，消除 N+1 查询
-            let shared_root = paths
-                .first()
-                .and_then(|first_p| root_path_for(&conn, first_p))
-                .or_else(|| {
-                    find_folder_id_for_path(&conn, Path::new(&from_prefix)).and_then(|fid| {
-                        conn.query_row("SELECT path FROM folders WHERE id = ?1", [fid], |r| r.get(0))
-                            .ok()
-                    })
-                });
-            if let Ok(tx) = conn.transaction() {
-                for old_p in paths {
-                    if let Some(np) = rebase_path_prefix(&old_p, &from_prefix, &to_prefix) {
-                        // 整棵子树搬家，每一行的 dir_rel 都得按新路径重算
-                        let dr = shared_root
-                            .as_deref()
-                            .map(|root| crate::db::dir_rel_of(root, &np))
-                            .unwrap_or_default();
-                        let _ = tx.execute(
-                            "UPDATE images SET file_path = ?1, dir_rel = ?2 WHERE file_path = ?3",
-                            rusqlite::params![np, dr, old_p],
-                        );
-                        moved_rows += 1;
+            crate::fs_ops::rename_no_replace(src, &target).map_err(|e| e.to_string())?;
+            crate::operation_journal::mark_path_applied(&conn, &operation)?;
+            let mut moved_thumbs = Vec::new();
+            for old_p in &paths {
+                let Some(np) = rebase_path_prefix(old_p, &from_prefix, &to_prefix) else { continue };
+                let mut migration = ThumbMigration::prepare(&thumbs_dir, old_p, &np)?;
+                let new_thumb = migration.apply()?;
+                thumbs.push(migration);
+                moved_thumbs.push((old_p.clone(), new_thumb));
+            }
+            let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+            let mut moved_rows = 0i64;
+            for (old_p, new_thumb) in &moved_thumbs {
+                let Some(np) = rebase_path_prefix(old_p, &from_prefix, &to_prefix) else { continue };
+                let dr = root_path_for_result(&tx, old_p)?
+                    .map(|root| crate::db::dir_rel_of(&root, &np))
+                    .unwrap_or_default();
+                let changed = tx.execute(
+                    "UPDATE images SET file_path = ?1, dir_rel = ?2, thumbnail_path = COALESCE(?3, thumbnail_path) WHERE file_path = ?4",
+                    rusqlite::params![np, dr, new_thumb, old_p],
+                ).map_err(|e| e.to_string())?;
+                if changed != 1 { return Err(format!("目录图片记录已变化: {old_p}")); }
+                moved_rows += 1;
+            }
+            crate::operation_journal::finish_in_tx(&tx, operation.id)?;
+            tx.commit().map_err(|e| e.to_string())?;
+            Ok(moved_rows)
+        })();
+        match result {
+            Ok(moved_rows) => Ok(serde_json::json!({
+                "ok": true, "dir_path": to_prefix, "moved": true, "images": moved_rows
+            })),
+            Err(error) => {
+                let mut rollback_errors = Vec::new();
+                for migration in thumbs.iter().rev() {
+                    if let Err(e) = migration.rollback() {
+                        rollback_errors.push(format!("缩略图回滚失败: {e}"));
                     }
                 }
-                let _ = tx.commit();
+                drop(conn);
+                let mut files_rolled_back = false;
+                if let Err(e) = crate::operation_journal::rollback_path_files(&operation) {
+                    rollback_errors.push(e);
+                } else {
+                    files_rolled_back = true;
+                }
+                let conn = match db.lock() {
+                    Ok(conn) => conn,
+                    Err(e) => {
+                        rollback_errors.push(format!("回滚后重新锁定数据库失败: {e}"));
+                        return Ok(serde_json::json!({ "ok": false, "error": format!("{error}; 回滚: {}", rollback_errors.join("; ")) }));
+                    }
+                };
+                let mut journal_cleanup_failed = !files_rolled_back;
+                if files_rolled_back {
+                    if let Err(e) = conn.unchecked_transaction().map_err(|e| e.to_string())
+                        .and_then(|tx| crate::operation_journal::finish_in_tx(&tx, operation.id).and_then(|_| tx.commit().map_err(|e| e.to_string()))) {
+                        rollback_errors.push(e);
+                        journal_cleanup_failed = true;
+                    }
+                }
+                if journal_cleanup_failed {
+                    let _ = crate::operation_journal::mark_manual(&conn, operation.id, &rollback_errors.join("; "));
+                }
+                Ok(serde_json::json!({ "ok": false, "error": format!("{error}; 回滚: {}", rollback_errors.join("; ")) }))
             }
         }
+}
 
-        Ok(serde_json::json!({
-            "ok": true,
-            "dir_path": to_prefix,
-            "moved": true,
-            "images": moved_rows
-        }))
+#[tauri::command]
+pub async fn move_dir(
+    dir_path: String,
+    target_dir: String,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let db = state.db.clone();
+    let thumbs_dir = state.data_dir.join("cache").join("thumbs");
+    tauri::async_runtime::spawn_blocking(move || {
+        move_dir_sync(&db, &thumbs_dir, &dir_path, &target_dir)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -3595,8 +3645,8 @@ pub async fn sync_folder_to_disk(
                     .map_err(|e| e.to_string())?;
                 stmt.query_map(rusqlite::params![folder_id, rel], |r| r.get::<_, String>(0))
                     .map_err(|e| e.to_string())?
-                    .flatten()
-                    .collect()
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| e.to_string())?
             };
             // 只处理磁盘上真实存在的（避免把已删的算进去）
             let existing: Vec<String> = list.into_iter().filter(|p| Path::new(p).exists()).collect();
@@ -3641,68 +3691,19 @@ pub async fn sync_folder_to_disk(
             }));
         }
 
-        // 3) 执行：阶段 1 改临时名，阶段 2 落最终名（逐项回滚 + 缓存迁移）
-        let mut staged: Vec<(String, String, PathBuf)> = Vec::new();
-        let mut failed = 0i64;
-        let mut errors: Vec<String> = Vec::new();
-        for (i, item) in plan.iter().enumerate() {
-            let old_p = Path::new(&item.old);
-            let parent = old_p.parent().unwrap_or_else(|| Path::new("."));
-            let tmp = parent.join(format!(".picnest-tmp-s{}-{}", std::process::id(), i));
-            match std::fs::rename(old_p, &tmp) {
-                Ok(_) => staged.push((item.old.clone(), item.new.clone(), tmp)),
-                Err(e) => {
-                    failed += 1;
-                    if errors.len() < 12 {
-                        errors.push(format!("{}: {}", old_p.file_name().and_then(|s| s.to_str()).unwrap_or(""), e));
-                    }
-                }
-            }
+        let plan: Vec<(PathBuf, PathBuf)> = plan.into_iter()
+            .map(|item| (PathBuf::from(item.old), PathBuf::from(item.new)))
+            .collect();
+        match run_batch_rename(&db, &thumbs_dir, &root_path, plan) {
+            Ok(map) => Ok(serde_json::json!({
+                "ok": true, "dryRun": false, "dirs": dirs.len(),
+                "changed": changed, "renamed": map.len(), "failed": 0, "errors": []
+            })),
+            Err(error) => Ok(serde_json::json!({
+                "ok": false, "dryRun": false, "dirs": dirs.len(),
+                "changed": changed, "renamed": 0, "failed": changed, "errors": [error]
+            })),
         }
-        let mut renamed = 0i64;
-        // 先全部 rename，把 (旧路径, 新路径, 新缩略图) 攒起来
-        let mut done: Vec<(String, String, Option<String>)> = Vec::new();
-        for (old, new, tmp) in staged {
-            let new_name = Path::new(&new).file_name().and_then(|s| s.to_str()).unwrap_or("").to_string();
-            let parent = Path::new(&new).parent().unwrap_or_else(|| Path::new("."));
-            let final_p = unique_target_path(parent, &new_name, false);
-            match std::fs::rename(&tmp, &final_p) {
-                Ok(_) => {
-                    let fs_path = final_p.to_string_lossy().to_string();
-                    let nt = migrate_thumb_cache(&thumbs_dir, &old, &fs_path);
-                    done.push((old, fs_path, nt));
-                    renamed += 1;
-                }
-                Err(e) => {
-                    failed += 1;
-                    if errors.len() < 12 {
-                        errors.push(format!("{}: {}", new_name, e));
-                    }
-                    let _ = std::fs::rename(&tmp, Path::new(&old));
-                }
-            }
-        }
-        // 批量写库：一个事务提交，避免几千次 fsync（每次 UPDATE 都单独提交会把元数据写入放大几十倍）
-        if !done.is_empty() {
-            if let Ok(mut conn) = db.lock() {
-                if let Ok(tx) = conn.transaction() {
-                    for (old, new, nt) in &done {
-                        let dr = crate::db::dir_rel_of(&root_path, new);
-                        let _ = tx.execute(
-                            "UPDATE images SET file_path = ?1, dir_rel = ?2, \
-                             thumbnail_path = COALESCE(?3, thumbnail_path) WHERE file_path = ?4",
-                            rusqlite::params![new, dr, nt, old],
-                        );
-                    }
-                    let _ = tx.commit();
-                }
-            }
-        }
-
-        Ok(serde_json::json!({
-            "ok": failed == 0, "dryRun": false, "dirs": dirs.len(),
-            "changed": changed, "renamed": renamed, "failed": failed, "errors": errors
-        }))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -3729,7 +3730,10 @@ pub async fn write_order_to_filenames(
         let root_path: String = {
             let conn = db.lock().map_err(|e| e.to_string())?;
             conn.query_row("SELECT path FROM folders WHERE id = ?1", [folder_id], |r| r.get(0))
-                .unwrap_or_default()
+                .map_err(|e| match e {
+                    rusqlite::Error::QueryReturnedNoRows => "资料库不存在".to_string(),
+                    other => other.to_string(),
+                })?
         };
 
         // 按父目录分组（每个目录独立编号 01..N）
@@ -3774,6 +3778,7 @@ pub async fn write_order_to_filenames(
             }
         }
 
+        let total = plan.len();
         let changed_count = plan.iter().filter(|x| x.changed).count();
         let _ = dir_rel;
 
@@ -3795,117 +3800,27 @@ pub async fn write_order_to_filenames(
             }));
         }
 
-        // 阶段 1：改到同目录临时名（.picnest-tmp-*，与图片扩展名无关，避免被当成图片扫到）
-        let mut staged: Vec<(String, String, PathBuf)> = Vec::new();
-        let mut failed = 0i64;
-        let mut errors: Vec<String> = Vec::new();
-        for (i, item) in plan.iter().enumerate() {
-            if !item.changed {
-                continue;
-            }
-            let old_p = Path::new(&item.old);
-            let parent = old_p.parent().unwrap_or_else(|| Path::new("."));
-            let tmp = parent.join(format!(".picnest-tmp-{}-{}", std::process::id(), i));
-            match std::fs::rename(old_p, &tmp) {
-                Ok(_) => staged.push((item.old.clone(), item.new.clone(), tmp)),
-                Err(e) => {
-                    failed += 1;
-                    if errors.len() < 12 {
-                        errors.push(format!(
-                            "{}: {}",
-                            old_p.file_name().and_then(|s| s.to_str()).unwrap_or(""),
-                            e
-                        ));
-                    }
-                }
-            }
+        let plan: Vec<(PathBuf, PathBuf)> = plan.into_iter()
+            .filter(|item| item.changed)
+            .map(|item| (PathBuf::from(item.old), PathBuf::from(item.new)))
+            .collect();
+        match run_batch_rename(&db, &thumbs_dir, &root_path, plan) {
+            Ok(map) => Ok(serde_json::json!({
+                "ok": true, "dryRun": false,
+                "total": total, "changed": changed_count,
+                "renamed": map.len(), "failed": 0, "errors": [], "map": map
+            })),
+            Err(error) => Ok(serde_json::json!({
+                "ok": false, "dryRun": false,
+                "total": total, "changed": changed_count,
+                "renamed": 0, "failed": changed_count, "errors": [error], "map": []
+            })),
         }
-
-        // 阶段 2：临时名 → 最终名（迁移缩略图缓存 + 更新 DB）
-        let mut renamed = 0i64;
-        let mut map: Vec<serde_json::Value> = Vec::new();
-        for (old, new, tmp) in staged {
-            let new_name = Path::new(&new)
-                .file_name()
-                .and_then(|s| s.to_str())
-                .unwrap_or("")
-                .to_string();
-            let parent = Path::new(&new).parent().unwrap_or_else(|| Path::new("."));
-            let final_p = unique_target_path(parent, &new_name, false);
-            match std::fs::rename(&tmp, &final_p) {
-                Ok(_) => {
-                    let fs_path = final_p.to_string_lossy().to_string();
-                    let mut thumb_for_map: Option<String> = None;
-                    if let Ok(conn) = db.lock() {
-                        let nt = migrate_thumb_cache(&thumbs_dir, &old, &fs_path);
-                        let dr = crate::db::dir_rel_of(&root_path, &fs_path);
-                        let _ = conn.execute(
-                            "UPDATE images SET file_path = ?1, dir_rel = ?2, \
-                             thumbnail_path = COALESCE(?3, thumbnail_path) WHERE file_path = ?4",
-                            rusqlite::params![fs_path, dr, nt, old],
-                        );
-                        thumb_for_map = nt;
-                    }
-                    renamed += 1;
-                    map.push(serde_json::json!({
-                        "old": old,
-                        "new": fs_path,
-                        "thumb": thumb_for_map
-                    }));
-                }
-                Err(e) => {
-                    failed += 1;
-                    if errors.len() < 12 {
-                        errors.push(format!("{}: {}", new_name, e));
-                    }
-                    let _ = std::fs::rename(&tmp, Path::new(&old)); // 单项回滚
-                }
-            }
-        }
-
-        Ok(serde_json::json!({
-            "ok": failed == 0, "dryRun": false,
-            "total": plan.len(), "changed": changed_count,
-            "renamed": renamed, "failed": failed, "errors": errors, "map": map
-        }))
     })
     .await
     .map_err(|e| e.to_string())?
 }
 
-fn unique_target_path(dir: &Path, name: &str, is_dir: bool) -> PathBuf {
-    let mut target = dir.join(name);
-    if !target.exists() {
-        return target;
-    }
-    if is_dir {
-        let mut n = 2;
-        while target.exists() {
-            target = dir.join(format!("{} ({})", name, n));
-            n += 1;
-        }
-        return target;
-    }
-    let p = Path::new(name);
-    let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or(name);
-    let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("");
-    let mut n = 2;
-    while target.exists() {
-        let cand = if ext.is_empty() {
-            format!("{} ({})", stem, n)
-        } else {
-            format!("{} ({}).{}", stem, n, ext)
-        };
-        target = dir.join(cand);
-        n += 1;
-    }
-    target
-}
-
-/// 把缩略图缓存从旧路径哈希搬到新路径哈希（不清空！）。
-/// 返回新的 `{new_hash}-q80.jpg` 路径（存在才算）。
-/// 教训：以前改名走 `thumbnail_path = NULL`，一次全量排序就把整库缩略图字段清空，
-/// 用户看到的就是满屏灰卡、PSD “不支持”。缓存文件一直在磁盘上，只是名字对不上。
 /// 清理缩略图缓存里的孤儿文件（图已不存在，缩略图还在）。
 ///
 /// 为什么需要它：永久删除、改名失败、崩溃残留、手动删文件都会留下孤儿。
@@ -3981,42 +3896,186 @@ pub async fn cleanup_orphan_thumbs(
     .map_err(|e| e.to_string())?
 }
 
-pub(crate) fn migrate_thumb_cache(thumbs_dir: &Path, old_path: &str, new_path: &str) -> Option<String> {
-    let oh = format!("{:x}", fnv1a_hash(old_path.as_bytes()));
-    let nh = format!("{:x}", fnv1a_hash(new_path.as_bytes()));
-    if oh == nh {
-        let webp = thumbs_dir.join(format!("{}-lossless.webp", nh));
-        if webp.exists() {
-            return Some(webp.to_string_lossy().to_string());
+pub(crate) const THUMB_VARIANTS: [(&str, &str); 8] = [
+    ("", "-q80.jpg"),
+    ("", "-lossless.webp"),
+    ("", "-1024-q80.jpg"),
+    ("", "-1024-lossless.webp"),
+    ("", "-2048-q80.jpg"),
+    ("", ".webp"),
+    ("psd-", ".webp"),
+    ("view-", ".webp"),
+];
+
+pub(crate) fn thumbnail_filenames(hash: &str) -> Vec<String> {
+    THUMB_VARIANTS.iter()
+        .map(|(prefix, suffix)| format!("{prefix}{hash}{suffix}"))
+        .collect()
+}
+
+pub(crate) struct ThumbMigration {
+    moves: Vec<(PathBuf, PathBuf)>,
+    applied: Vec<(PathBuf, PathBuf)>,
+}
+
+impl ThumbMigration {
+    fn prepare(thumbs_dir: &Path, old_path: &str, new_path: &str) -> Result<Self, String> {
+        let oh = format!("{:x}", fnv1a_hash(old_path.as_bytes()));
+        let nh = format!("{:x}", fnv1a_hash(new_path.as_bytes()));
+        if oh == nh {
+            return Ok(Self { moves: Vec::new(), applied: Vec::new() });
         }
-        let p = thumbs_dir.join(format!("{}-q80.jpg", nh));
-        return Some(p.to_string_lossy().to_string()).filter(|s| Path::new(s).exists());
+        let moves = thumbnail_filenames(&oh).into_iter().zip(thumbnail_filenames(&nh))
+            .map(|(a, b)| (thumbs_dir.join(a), thumbs_dir.join(b)))
+            .filter(|(a, b)| a.is_file() && !b.exists())
+            .collect();
+        Ok(Self { moves, applied: Vec::new() })
     }
-    let pairs = [
-        (format!("{}-q80.jpg", oh), format!("{}-q80.jpg", nh)),
-        (format!("{}-lossless.webp", oh), format!("{}-lossless.webp", nh)),
-        (format!("{}-1024-q80.jpg", oh), format!("{}-1024-q80.jpg", nh)),
-        (format!("{}-1024-lossless.webp", oh), format!("{}-1024-lossless.webp", nh)),
-        (format!("{}-2048-q80.jpg", oh), format!("{}-2048-q80.jpg", nh)),
-        (format!("{}.webp", oh), format!("{}.webp", nh)),
-        (format!("psd-{}.webp", oh), format!("psd-{}.webp", nh)),
-        (format!("view-{}.webp", oh), format!("view-{}.webp", nh)),
-    ];
-    let mut found: Option<String> = None;
-    for (a, b) in pairs {
-        let pa = thumbs_dir.join(&a);
-        let pb = thumbs_dir.join(&b);
-        if pa.exists() && !pb.exists() {
-            let _ = std::fs::rename(&pa, &pb);
+
+    pub(crate) fn apply(&mut self) -> Result<Option<String>, String> {
+        let mut applied: Vec<(PathBuf, PathBuf)> = Vec::new();
+        for (old, new) in &self.moves {
+            if let Err(e) = crate::fs_ops::rename_no_replace(old, new) {
+                let rollback: String = applied.iter().rev()
+                    .filter_map(|(a, b)| crate::fs_ops::rename_no_replace(b, a).err().map(|e| e.to_string()))
+                    .collect::<Vec<_>>().join("; ");
+                return Err(format!("迁移缩略图失败: {e}; 回滚: {rollback}"));
+            }
+            applied.push((old.clone(), new.clone()));
         }
-        // 保透明的 webp 优先（有它就用它），否则退回 jpg
-        if b.ends_with("-lossless.webp") && pb.exists() {
-            found = Some(pb.to_string_lossy().to_string());
-        } else if b.ends_with("-q80.jpg") && pb.exists() && found.is_none() {
-            found = Some(pb.to_string_lossy().to_string());
+        self.applied = applied;
+        let nh = self.applied.iter().find(|(_, b)| b.ends_with("-lossless.webp")).map(|(_, b)| b.clone())
+            .or_else(|| self.applied.iter().find(|(_, b)| b.ends_with("-q80.jpg")).map(|(_, b)| b.clone()));
+        Ok(nh.map(|p| p.to_string_lossy().to_string()))
+    }
+
+    pub(crate) fn rollback(&self) -> Result<(), String> {
+        let mut errors = Vec::new();
+        for (old, new) in self.applied.iter().rev() {
+            if old.exists() || !new.exists() {
+                continue;
+            }
+            if let Err(e) = crate::fs_ops::rename_no_replace(new, old) {
+                errors.push(e.to_string());
+            }
+        }
+        if errors.is_empty() { Ok(()) } else { Err(errors.join("; ")) }
+    }
+}
+
+fn reserve_batch_target(
+    desired: &Path,
+    old_keys: &std::collections::HashSet<String>,
+    reserved: &mut std::collections::HashSet<String>,
+) -> PathBuf {
+    let parent = desired.parent().unwrap_or_else(|| Path::new("."));
+    let name = desired.file_name().and_then(|n| n.to_str()).unwrap_or("image");
+    let stem = desired.file_stem().and_then(|n| n.to_str()).unwrap_or(name);
+    let ext = desired.extension().and_then(|n| n.to_str());
+    let mut candidate = desired.to_path_buf();
+    let mut suffix = 1u32;
+    loop {
+        let key = candidate.to_string_lossy().to_lowercase();
+        let occupied_by_plan = old_keys.contains(&key);
+        if reserved.contains(&key) || (candidate.exists() && !occupied_by_plan) {
+            suffix += 1;
+            let suffix = format!(" ({suffix})");
+            let file_name = match ext {
+                Some(ext) if !ext.is_empty() => format!("{stem}{suffix}.{ext}"),
+                _ => format!("{stem}{suffix}"),
+            };
+            candidate = parent.join(file_name);
+            continue;
+        }
+        reserved.insert(key);
+        return candidate;
+    }
+}
+
+fn run_batch_rename(
+    db: &std::sync::Arc<std::sync::Mutex<rusqlite::Connection>>,
+    thumbs_dir: &Path,
+    root_path: &str,
+    desired: Vec<(PathBuf, PathBuf)>,
+) -> Result<Vec<serde_json::Value>, String> {
+    if desired.is_empty() {
+        return Ok(Vec::new());
+    }
+    let _filesystem_guard = crate::operation_journal::filesystem_operation_guard();
+    let old_keys = desired.iter().map(|(old, _)| old.to_string_lossy().to_lowercase()).collect();
+    let mut reserved = std::collections::HashSet::new();
+    let plan: Vec<(PathBuf, PathBuf)> = desired.into_iter()
+        .map(|(old, target)| (old, reserve_batch_target(&target, &old_keys, &mut reserved)))
+        .collect();
+    let items = crate::operation_journal::prepare_batch_rename(&plan)?;
+    let conn = db.lock().map_err(|e| e.to_string())?;
+    let batch = crate::operation_journal::begin_batch_rename(&conn, items)?;
+    let mut migrations: Vec<ThumbMigration> = Vec::new();
+    let result: Result<Vec<serde_json::Value>, String> = (|| {
+        for item in &batch.items {
+            crate::fs_ops::rename_no_replace(&item.old, &item.temp).map_err(|e| e.to_string())?;
+        }
+        for item in &batch.items {
+            crate::fs_ops::rename_no_replace(&item.temp, &item.final_path).map_err(|e| e.to_string())?;
+        }
+        crate::operation_journal::set_state(&conn, batch.id, "file_applied", None)?;
+        let mut output = Vec::with_capacity(batch.items.len());
+        for item in &batch.items {
+            let old = item.old.to_string_lossy().to_string();
+            let new = item.final_path.to_string_lossy().to_string();
+            let mut migration = ThumbMigration::prepare(thumbs_dir, &old, &new)?;
+            let new_thumb = migration.apply()?;
+            migrations.push(migration);
+            output.push(serde_json::json!({ "old": old, "new": new, "thumb": new_thumb }));
+        }
+        let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        for (item, mapped) in batch.items.iter().zip(&output) {
+            let new = item.final_path.to_string_lossy().to_string();
+            let dr = crate::db::dir_rel_of(root_path, &new);
+            let thumb = mapped.get("thumb").and_then(serde_json::Value::as_str);
+            let changed = tx.execute(
+                "UPDATE images SET file_path = ?1, dir_rel = ?2, thumbnail_path = COALESCE(?3, thumbnail_path) WHERE file_path = ?4",
+                rusqlite::params![new, dr, thumb, item.old.to_string_lossy().to_string()],
+            ).map_err(|e| e.to_string())?;
+            if changed != 1 {
+                return Err(format!("图片记录不存在或路径已变化: {}", item.old.display()));
+            }
+        }
+        crate::operation_journal::finish_in_tx(&tx, batch.id)?;
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(output)
+    })();
+    if result.is_err() {
+        let mut rollback_errors = Vec::new();
+        for migration in migrations.iter().rev() {
+            if let Err(e) = migration.rollback() {
+                rollback_errors.push(e);
+            }
+        }
+        drop(conn);
+        let mut files_rolled_back = false;
+        if let Err(e) = crate::operation_journal::rollback_batch_files(&batch) {
+            rollback_errors.push(e);
+        } else {
+            files_rolled_back = true;
+        }
+        let conn = db.lock().map_err(|e| format!("回滚后重新锁定数据库失败: {e}"))?;
+        let mut journal_cleanup_failed = !files_rolled_back;
+        if files_rolled_back {
+            if let Err(e) = conn.unchecked_transaction().map_err(|e| e.to_string())
+                .and_then(|tx| crate::operation_journal::finish_in_tx(&tx, batch.id).and_then(|_| tx.commit().map_err(|e| e.to_string()))) {
+                rollback_errors.push(e);
+                journal_cleanup_failed = true;
+            }
+        }
+        if journal_cleanup_failed {
+            let _ = crate::operation_journal::mark_manual(&conn, batch.id, &rollback_errors.join("; "));
+        }
+        if !rollback_errors.is_empty() {
+            return Err(format!("{}; 回滚失败: {}", result.unwrap_err(), rollback_errors.join("; ")));
         }
     }
-    found
+    result
 }
 
 pub(crate) fn db_move_image_path(
@@ -4024,25 +4083,88 @@ pub(crate) fn db_move_image_path(
     old_path: &str,
     new_path: &str,
     new_thumb: Option<&str>,
-) {
+) -> Result<(), String> {
     // 有可用的新缩略图就写进去；确实没有才置空（真需重生时前端会自己补）
     // dir_rel 同样要重算：rename_dir 也复用本函数，目录改名后相对路径变了。
     // （rename_image 是同目录改名，重算出来与原来一致，无副作用）
-    let dr = root_path_for(conn, old_path)
+    let dr = root_path_for_result(conn, old_path)?
         .map(|root| crate::db::dir_rel_of(&root, new_path))
         .unwrap_or_default();
-    match new_thumb {
-        Some(t) => {
-            let _ = conn.execute(
-                "UPDATE images SET file_path = ?1, dir_rel = ?2, thumbnail_path = ?3 WHERE file_path = ?4",
-                rusqlite::params![new_path, dr, t, old_path],
-            );
+    let changed = match new_thumb {
+        Some(t) => conn.execute(
+            "UPDATE images SET file_path = ?1, dir_rel = ?2, thumbnail_path = ?3 WHERE file_path = ?4",
+            rusqlite::params![new_path, dr, t, old_path],
+        ).map_err(|e| e.to_string())?,
+        None => conn.execute(
+            "UPDATE images SET file_path = ?1, dir_rel = ?2, thumbnail_path = NULL WHERE file_path = ?3",
+            rusqlite::params![new_path, dr, old_path],
+        ).map_err(|e| e.to_string())?,
+    };
+    if changed != 1 {
+        return Err("图片记录不存在或路径已变化".to_string());
+    }
+    Ok(())
+}
+
+fn rename_image_compensated(
+    db: &std::sync::Arc<std::sync::Mutex<rusqlite::Connection>>,
+    thumbs_dir: &Path,
+    source: &Path,
+    target: &Path,
+    reset_order: bool,
+) -> Result<Option<String>, String> {
+    let _filesystem_guard = crate::operation_journal::filesystem_operation_guard();
+    let old_path = source.to_string_lossy().to_string();
+    let new_path = target.to_string_lossy().to_string();
+    let identity = crate::operation_journal::capture_path_identity(source)?;
+    let conn = db.lock().map_err(|e| e.to_string())?;
+    let operation = crate::operation_journal::begin_path_move(&conn, source, target, identity)?;
+    let mut thumb = None;
+    let result: Result<Option<String>, String> = (|| {
+        crate::fs_ops::rename_no_replace(source, target).map_err(|e| e.to_string())?;
+        crate::operation_journal::mark_path_applied(&conn, &operation)?;
+        let mut migration = ThumbMigration::prepare(thumbs_dir, &old_path, &new_path)?;
+        let new_thumb = migration.apply()?;
+        thumb = Some(migration);
+        let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        db_move_image_path(&tx, &old_path, &new_path, new_thumb.as_deref())?;
+        if reset_order {
+            tx.execute("UPDATE images SET sort_order = 0 WHERE file_path = ?1", [&new_path])
+                .map_err(|e| e.to_string())?;
         }
-        None => {
-            let _ = conn.execute(
-                "UPDATE images SET file_path = ?1, dir_rel = ?2, thumbnail_path = NULL WHERE file_path = ?3",
-                rusqlite::params![new_path, dr, old_path],
-            );
+        crate::operation_journal::finish_in_tx(&tx, operation.id)?;
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(new_thumb)
+    })();
+    match result {
+        Ok(thumb) => Ok(thumb),
+        Err(error) => {
+            let mut rollback_errors = Vec::new();
+            if let Some(migration) = thumb.as_ref() {
+                if let Err(e) = migration.rollback() {
+                    rollback_errors.push(format!("缩略图回滚失败: {e}"));
+                }
+            }
+            drop(conn);
+            let mut files_rolled_back = false;
+            if let Err(e) = crate::operation_journal::rollback_path_files(&operation) {
+                rollback_errors.push(e);
+            } else {
+                files_rolled_back = true;
+            }
+            let conn = db.lock().map_err(|e| format!("回滚后重新锁定数据库失败: {e}"))?;
+            let mut journal_cleanup_failed = !files_rolled_back;
+            if files_rolled_back {
+                if let Err(e) = conn.unchecked_transaction().map_err(|e| e.to_string())
+                    .and_then(|tx| crate::operation_journal::finish_in_tx(&tx, operation.id).and_then(|_| tx.commit().map_err(|e| e.to_string()))) {
+                    rollback_errors.push(e);
+                    journal_cleanup_failed = true;
+                }
+            }
+            if journal_cleanup_failed {
+                let _ = crate::operation_journal::mark_manual(&conn, operation.id, &rollback_errors.join("; "));
+            }
+            Err(format!("{error}; 回滚: {}", rollback_errors.join("; ")))
         }
     }
 }
@@ -4078,18 +4200,13 @@ pub async fn rename_image(
     if target_str == file_path {
         return Ok(serde_json::json!({ "ok": true, "file_path": file_path }));
     }
-    if target.exists() {
+    if target.exists() && !crate::fs_ops::paths_alias(src, &target) {
         return Ok(serde_json::json!({ "ok": false, "error": "同名文件已存在" }));
     }
-    if let Err(e) = std::fs::rename(src, &target) {
-        return Ok(serde_json::json!({ "ok": false, "error": e.to_string() }));
+    match rename_image_compensated(&db, &thumbs_dir, src, &target, false) {
+        Ok(_) => Ok(serde_json::json!({ "ok": true, "file_path": target_str })),
+        Err(e) => Ok(serde_json::json!({ "ok": false, "error": e })),
     }
-    if let Ok(conn) = db.lock() {
-        // 关键：迁移缩略图缓存，而不是置 NULL（置 NULL 会造成灰卡）
-        let nt = migrate_thumb_cache(&thumbs_dir, &file_path, &target_str);
-        db_move_image_path(&conn, &file_path, &target_str, nt.as_deref());
-    }
-    Ok(serde_json::json!({ "ok": true, "file_path": target_str }))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -4121,16 +4238,15 @@ pub(crate) fn rebase_path_prefix(full: &str, old_root: &str, new_root: &str) -> 
     Some(out.to_string_lossy().to_string())
 }
 
-#[tauri::command]
-pub async fn rename_dir(
-    old_path: String,
-    new_name: String,
-    old_rel: Option<String>,
-    parent_rel: Option<String>,
-    state: State<'_, AppState>,
+fn rename_dir_sync(
+    db: &std::sync::Arc<std::sync::Mutex<rusqlite::Connection>>,
+    thumbs_dir: &Path,
+    old_path: &str,
+    new_name: &str,
+    old_rel: Option<&str>,
+    parent_rel: Option<&str>,
 ) -> Result<serde_json::Value, String> {
-    let db = state.db.clone();
-    tauri::async_runtime::spawn_blocking(move || {
+        let _filesystem_guard = crate::operation_journal::filesystem_operation_guard();
         let clean: String = new_name
             .trim()
             .chars()
@@ -4147,112 +4263,370 @@ pub async fn rename_dir(
         if !old_clean.eq_ignore_ascii_case(&target_str) && target.exists() {
             return Ok(serde_json::json!({ "ok": false, "error": "同名文件夹已存在" }));
         }
-        if old_clean != target_str {
-            if let Err(e) = std::fs::rename(src, &target) {
-                return Ok(serde_json::json!({ "ok": false, "error": e.to_string() }));
-            }
-        }
+        let physically_changed = old_clean != target_str;
         let old_name = src.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string();
-
-        if let Ok(conn) = db.lock() {
-            let folder_id_opt = find_folder_id_for_path(&conn, Path::new(&old_clean))
-                .or_else(|| find_folder_id_for_path(&conn, Path::new(&target_str)));
-            let root_path_opt: Option<String> = folder_id_opt.and_then(|fid| {
-                conn.query_row("SELECT path FROM folders WHERE id = ?1", [fid], |r| r.get(0))
-                    .ok()
-            });
-
-            if let Ok(tx) = conn.unchecked_transaction() {
-                let sep = if old_clean.contains('\\') { '\\' } else { '/' };
-                let raw_prefix = format!("{}{}", old_clean, sep);
-                let like_prefix = format!("{}%", escape_like(&raw_prefix));
-                if let Ok(mut stmt) = tx.prepare("SELECT file_path FROM images WHERE file_path LIKE ?1 ESCAPE '\\'") {
-                    let rows: Vec<String> = stmt
-                        .query_map([like_prefix], |r| r.get::<_, String>(0))
-                        .map(|it| it.flatten().collect())
-                        .unwrap_or_default();
-                    drop(stmt);
-                    for old_fp in rows {
-                        if let Some(np) = rebase_path_prefix(&old_fp, &old_clean, &target_str) {
-                            let dr = root_path_opt
-                                .as_deref()
-                                .map(|root| crate::db::dir_rel_of(root, &np))
-                                .unwrap_or_else(|| {
-                                    root_path_for(&tx, &old_fp)
-                                        .map(|root| crate::db::dir_rel_of(&root, &np))
-                                        .unwrap_or_default()
-                                });
-                            let _ = tx.execute(
-                                "UPDATE images SET file_path = ?1, dir_rel = ?2, thumbnail_path = NULL WHERE file_path = ?3",
-                                rusqlite::params![np, dr, old_fp],
-                            );
-                        }
+        let identity = if physically_changed {
+            match crate::operation_journal::capture_path_identity(src) {
+                Ok(identity) => Some(identity),
+                Err(e) => return Ok(serde_json::json!({ "ok": false, "error": e })),
+            }
+        } else {
+            None
+        };
+        let conn = match db.lock() {
+            Ok(c) => c,
+            Err(e) => return Ok(serde_json::json!({ "ok": false, "error": e.to_string() })),
+        };
+        let operation = if physically_changed {
+            match crate::operation_journal::begin_path_move(&conn, src, &target, identity.unwrap()) {
+                Ok(op) => Some(op),
+                Err(e) => return Ok(serde_json::json!({ "ok": false, "error": e })),
+            }
+        } else {
+            None
+        };
+        let mut thumbs = Vec::new();
+        let result = (|| {
+            let sep = if old_clean.contains('\\') { '\\' } else { '/' };
+            let raw_prefix = format!("{}{}", old_clean, sep);
+            let like_prefix = format!("{}%", escape_like(&raw_prefix));
+            let rows: Vec<String> = {
+                let mut stmt = conn.prepare("SELECT file_path FROM images WHERE file_path LIKE ?1 ESCAPE '\\'")
+                    .map_err(|e| e.to_string())?;
+                stmt.query_map([like_prefix], |r| r.get::<_, String>(0))
+                    .map_err(|e| e.to_string())?
+                    .collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?
+            };
+            let folder_id_opt = find_folder_id_for_path_result(&conn, Path::new(&old_clean))?
+                .or(find_folder_id_for_path_result(&conn, Path::new(&target_str))?);
+            if physically_changed {
+                crate::fs_ops::rename_no_replace(src, &target).map_err(|e| e.to_string())?;
+                crate::operation_journal::mark_path_applied(&conn, operation.as_ref().unwrap())?;
+            }
+            let mut image_updates = Vec::new();
+            for old_fp in rows {
+                let Some(np) = rebase_path_prefix(&old_fp, &old_clean, &target_str) else { continue };
+                let mut migration = ThumbMigration::prepare(&thumbs_dir, &old_fp, &np)?;
+                let nt = migration.apply()?;
+                thumbs.push(migration);
+                image_updates.push((old_fp, np, nt));
+            }
+            let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+            for (old_fp, np, nt) in &image_updates {
+                let dr = root_path_for_result(&tx, old_fp)?
+                    .map(|root| crate::db::dir_rel_of(&root, np))
+                    .unwrap_or_default();
+                let changed = tx.execute(
+                    "UPDATE images SET file_path = ?1, dir_rel = ?2, thumbnail_path = COALESCE(?3, thumbnail_path) WHERE file_path = ?4",
+                    rusqlite::params![np, dr, nt, old_fp],
+                ).map_err(|e| e.to_string())?;
+                if changed != 1 { return Err(format!("目录图片记录已变化: {old_fp}")); }
+            }
+            if let (Some(orel), Some(fid)) = (old_rel.as_ref(), folder_id_opt) {
+                let prel = parent_rel.as_deref().unwrap_or_default();
+                let new_rel = if prel.is_empty() { clean.clone() } else { format!("{}/{}", prel, clean) };
+                let orel_prefix = format!("{}/", orel);
+                let mems: Vec<(String, String)> = {
+                    let mut stmt = tx.prepare("SELECT rel, patch FROM picnest_dir_memory WHERE root_id = ?1")
+                        .map_err(|e| e.to_string())?;
+                    stmt.query_map([fid], |r| Ok((r.get(0)?, r.get(1)?)))
+                        .map_err(|e| e.to_string())?
+                        .collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?
+                };
+                for (mrel, _) in mems {
+                    let target_rel = if mrel == *orel {
+                        Some(new_rel.clone())
+                    } else if let Some(rest) = mrel.strip_prefix(&orel_prefix) {
+                        Some(format!("{}/{}", new_rel, rest))
+                    } else {
+                        None
+                    };
+                    if let Some(nrel) = target_rel {
+                        let changed = tx.execute(
+                            "UPDATE picnest_dir_memory SET rel = ?1 WHERE root_id = ?2 AND rel = ?3",
+                            rusqlite::params![nrel, fid, mrel],
+                        ).map_err(|e| e.to_string())?;
+                        if changed != 1 { return Err("目录记忆记录已变化".to_string()); }
                     }
                 }
-
-                if let (Some(orel), Some(fid)) = (old_rel, folder_id_opt) {
-                    let prel = parent_rel.unwrap_or_default();
-                    let new_rel = if prel.is_empty() { clean.clone() } else { format!("{}/{}", prel, clean) };
-                    let orel_prefix = format!("{}/", orel);
-                    if let Ok(mut mstmt) = tx.prepare("SELECT rel, patch FROM picnest_dir_memory WHERE root_id = ?1") {
-                        let mems: Vec<(String, String)> = mstmt
-                            .query_map([fid], |r| Ok((r.get(0)?, r.get(1)?)))
-                            .map(|it| it.flatten().collect())
-                            .unwrap_or_default();
-                        drop(mstmt);
-                        for (mrel, mpatch) in mems {
-                            let target_rel = if mrel == orel {
-                                Some(new_rel.clone())
-                            } else if let Some(rest) = mrel.strip_prefix(&orel_prefix) {
-                                Some(format!("{}/{}", new_rel, rest))
-                            } else {
-                                None
-                            };
-                            if let Some(nrel) = target_rel {
-                                let _ = tx.execute(
-                                    "UPDATE picnest_dir_memory SET rel = ?1 WHERE root_id = ?2 AND rel = ?3",
-                                    rusqlite::params![nrel, fid, mrel],
-                                );
-                                let _ = mpatch;
-                            }
-                        }
+                let exact_order_key = format!("{}|{}", fid, prel);
+                let key_like = format!("{}|%", escape_like(&fid.to_string()));
+                let items: Vec<(String, String)> = {
+                    let mut stmt = tx.prepare("SELECT key, names FROM picnest_dir_order WHERE key LIKE ?1 ESCAPE '\\'")
+                        .map_err(|e| e.to_string())?;
+                    stmt.query_map([key_like], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+                        .map_err(|e| e.to_string())?
+                        .collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?
+                };
+                for (k, v) in items {
+                    if k != exact_order_key && !(prel.is_empty() && k == format!("{}|__root__", fid)) {
+                        continue;
                     }
-                    // 更新 picnest_dir_order 里对应的名字（严格限定在当前 folder_id 及父级相对路径下，杜绝跨库误伤）
-                    let exact_order_key = format!("{}|{}", fid, prel);
-                    let key_like = format!("{}|%", escape_like(&fid.to_string()));
-                    if let Ok(mut ostmt) = tx.prepare("SELECT key, names FROM picnest_dir_order WHERE key LIKE ?1 ESCAPE '\\'") {
-                        let items: Vec<(String, String)> = ostmt
-                            .query_map([key_like], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
-                            .map(|it| it.flatten().collect())
-                            .unwrap_or_default();
-                        drop(ostmt);
-                        for (k, v) in items {
-                            if k != exact_order_key && !(prel.is_empty() && k == format!("{}|__root__", fid)) {
-                                continue;
-                            }
-                            if let Ok(mut arr) = serde_json::from_str::<Vec<String>>(&v) {
-                                if let Some(pos) = arr.iter().position(|x| x == &old_name) {
-                                    arr[pos] = clean.clone();
-                                    if let Ok(nj) = serde_json::to_string(&arr) {
-                                        let _ = tx.execute(
-                                            "UPDATE picnest_dir_order SET names = ?1 WHERE key = ?2",
-                                            rusqlite::params![nj, k],
-                                        );
-                                    }
-                                }
-                            }
-                        }
+                    let mut arr: Vec<String> = serde_json::from_str(&v).map_err(|e| e.to_string())?;
+                    if let Some(pos) = arr.iter().position(|x| x == &old_name) {
+                        arr[pos] = clean.clone();
+                        let nj = serde_json::to_string(&arr).map_err(|e| e.to_string())?;
+                        tx.execute("UPDATE picnest_dir_order SET names = ?1 WHERE key = ?2", rusqlite::params![nj, k])
+                            .map_err(|e| e.to_string())?;
                     }
                 }
-
-                let _ = tx.commit();
+            }
+            if let Some(op) = operation.as_ref() {
+                crate::operation_journal::finish_in_tx(&tx, op.id)?;
+            }
+            tx.commit().map_err(|e| e.to_string())?;
+            Ok(())
+        })();
+        match result {
+            Ok(()) => Ok(serde_json::json!({ "ok": true, "path": target_str, "name": clean })),
+            Err(error) => {
+                let mut rollback_errors = Vec::new();
+                for migration in thumbs.iter().rev() {
+                    if let Err(e) = migration.rollback() {
+                        rollback_errors.push(format!("缩略图回滚失败: {e}"));
+                    }
+                }
+                let Some(op) = operation.as_ref() else {
+                    return Ok(serde_json::json!({ "ok": false, "error": format!("{error}; 回滚: {}", rollback_errors.join("; ")) }));
+                };
+                drop(conn);
+                let mut files_rolled_back = false;
+                if let Err(e) = crate::operation_journal::rollback_path_files(op) {
+                    rollback_errors.push(e);
+                } else {
+                    files_rolled_back = true;
+                }
+                let conn = match db.lock() {
+                    Ok(conn) => conn,
+                    Err(e) => {
+                        rollback_errors.push(format!("回滚后重新锁定数据库失败: {e}"));
+                        return Ok(serde_json::json!({ "ok": false, "error": format!("{error}; 回滚: {}", rollback_errors.join("; ")) }));
+                    }
+                };
+                let mut journal_cleanup_failed = !files_rolled_back;
+                if files_rolled_back {
+                    if let Err(e) = conn.unchecked_transaction().map_err(|e| e.to_string())
+                        .and_then(|tx| crate::operation_journal::finish_in_tx(&tx, op.id).and_then(|_| tx.commit().map_err(|e| e.to_string()))) {
+                        rollback_errors.push(e);
+                        journal_cleanup_failed = true;
+                    }
+                }
+                if journal_cleanup_failed {
+                    let _ = crate::operation_journal::mark_manual(&conn, op.id, &rollback_errors.join("; "));
+                }
+                Ok(serde_json::json!({ "ok": false, "error": format!("{error}; 回滚: {}", rollback_errors.join("; ")) }))
             }
         }
+}
 
-        Ok(serde_json::json!({ "ok": true, "path": target_str, "name": clean }))
+#[tauri::command]
+pub async fn rename_dir(
+    old_path: String,
+    new_name: String,
+    old_rel: Option<String>,
+    parent_rel: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let db = state.db.clone();
+    let thumbs_dir = state.data_dir.join("cache").join("thumbs");
+    tauri::async_runtime::spawn_blocking(move || {
+        rename_dir_sync(
+            &db, &thumbs_dir, &old_path, &new_name,
+            old_rel.as_deref(), parent_rel.as_deref(),
+        )
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+fn rename_library_sync(
+    db: &std::sync::Arc<std::sync::Mutex<rusqlite::Connection>>,
+    thumbs_dir: &Path,
+    id: i64,
+    clean: &str,
+    rename_disk: bool,
+) -> Result<serde_json::Value, String> {
+    if clean.is_empty() || clean == "." || clean == ".." {
+        return Ok(serde_json::json!({ "ok": false, "error": "名称无效或为空" }));
+    }
+    let _filesystem_guard = crate::operation_journal::filesystem_operation_guard();
+    let identity = if rename_disk {
+        let old_path: String = {
+            let conn = db.lock().map_err(|e| e.to_string())?;
+            conn.query_row("SELECT path FROM folders WHERE id = ?1", [id], |r| r.get(0))
+                .map_err(|_| "根文件不存在".to_string())?
+        };
+        let old_clean = old_path.trim_end_matches(&['\\', '/'][..]);
+        let src = Path::new(old_clean);
+        if src.exists() {
+            Some(crate::operation_journal::capture_path_identity(src)?)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let conn = db.lock().map_err(|e| e.to_string())?;
+    let old_path: String = conn
+        .query_row("SELECT path FROM folders WHERE id = ?1", [id], |r| r.get(0))
+        .map_err(|_| "根文件不存在".to_string())?;
+    if !rename_disk {
+        let changed = conn.execute(
+            "UPDATE folders SET display_name = ?1 WHERE id = ?2",
+            rusqlite::params![clean, id],
+        ).map_err(|e| e.to_string())?;
+        if changed != 1 {
+            return Err("根文件记录已变化".to_string());
+        }
+        return Ok(serde_json::json!({
+            "ok": true, "path": old_path, "name": clean,
+            "display_name": clean, "displayOnly": true
+        }));
+    }
+
+    let old_clean = old_path.trim_end_matches(&['\\', '/'][..]).to_string();
+    let src = Path::new(&old_clean);
+    let parent = src.parent().unwrap_or_else(|| Path::new("."));
+    let target = parent.join(clean);
+    let target_str = target.to_string_lossy().to_string();
+    if old_clean == target_str {
+        let changed = conn.execute(
+            "UPDATE folders SET display_name = ?1 WHERE id = ?2",
+            rusqlite::params![clean, id],
+        ).map_err(|e| e.to_string())?;
+        if changed != 1 {
+            return Err("根文件记录已变化".to_string());
+        }
+        return Ok(serde_json::json!({
+            "ok": true, "path": target_str, "name": clean,
+            "display_name": clean, "unchanged": true
+        }));
+    }
+    if !old_clean.eq_ignore_ascii_case(&target_str) && target.exists() {
+        return Ok(serde_json::json!({ "ok": false, "error": "同名目录已存在" }));
+    }
+
+    let physical_change = if src.exists() {
+        true
+    } else if target.exists() {
+        false
+    } else {
+        return Ok(serde_json::json!({ "ok": false, "error": "原根目录在磁盘上不存在" }));
+    };
+    let operation = if physical_change {
+        Some(crate::operation_journal::begin_path_move(
+            &conn,
+            src,
+            &target,
+            identity.ok_or("根目录移动缺少预计算指纹")?,
+        ).map_err(|e| e.to_string())?)
+    } else {
+        None
+    };
+    let mut migrations = Vec::new();
+    let result: Result<(), String> = (|| {
+        if physical_change {
+            crate::fs_ops::rename_no_replace(src, &target).map_err(|e| e.to_string())?;
+            crate::operation_journal::mark_path_applied(&conn, operation.as_ref().unwrap())?;
+        }
+        let rows: Vec<(i64, String)> = {
+            let mut stmt = conn.prepare("SELECT id, file_path FROM images WHERE folder_id = ?1")
+                .map_err(|e| e.to_string())?;
+            stmt.query_map([id], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
+                .map_err(|e| e.to_string())?
+                .collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?
+        };
+        let mut updates = Vec::with_capacity(rows.len());
+        for (image_id, old_fp) in rows {
+            let Some(new_fp) = rebase_path_prefix(&old_fp, &old_clean, &target_str) else { continue };
+            let mut migration = ThumbMigration::prepare(thumbs_dir, &old_fp, &new_fp)?;
+            let new_thumb = migration.apply()?;
+            migrations.push(migration);
+            updates.push((image_id, old_fp, new_fp, new_thumb));
+        }
+        let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        let changed = tx.execute(
+            "UPDATE folders SET path = ?1, display_name = ?2 WHERE id = ?3",
+            rusqlite::params![&target_str, clean, id],
+        ).map_err(|e| e.to_string())?;
+        if changed != 1 {
+            return Err("根文件记录已变化".to_string());
+        }
+        for (image_id, old_fp, new_fp, new_thumb) in &updates {
+            let changed = tx.execute(
+                "UPDATE images SET file_path = ?1, dir_rel = ?2, thumbnail_path = COALESCE(?3, thumbnail_path) WHERE id = ?4 AND file_path = ?5",
+                rusqlite::params![new_fp, crate::db::dir_rel_of(&target_str, new_fp), new_thumb, image_id, old_fp],
+            ).map_err(|e| e.to_string())?;
+            if changed != 1 {
+                return Err(format!("图片记录已变化: {old_fp}"));
+            }
+        }
+        let mems: Vec<(String, String)> = {
+            let mut stmt = tx.prepare("SELECT rel, patch FROM picnest_dir_memory WHERE root_id = ?1")
+                .map_err(|e| e.to_string())?;
+            stmt.query_map([id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+                .map_err(|e| e.to_string())?
+                .collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?
+        };
+        for (rel, patch) in mems {
+            let mut map: serde_json::Map<String, serde_json::Value> = serde_json::from_str(&patch)
+                .map_err(|e| format!("目录记忆 JSON 无效 {rel}: {e}"))?;
+            if let Some(serde_json::Value::String(cover)) = map.get("coverPath").cloned() {
+                if let Some(new_cover) = rebase_path_prefix(&cover, &old_clean, &target_str) {
+                    map.insert("coverPath".to_string(), serde_json::Value::String(new_cover));
+                    let patch = serde_json::to_string(&map).map_err(|e| e.to_string())?;
+                    let changed = tx.execute(
+                        "UPDATE picnest_dir_memory SET patch = ?1 WHERE root_id = ?2 AND rel = ?3",
+                        rusqlite::params![patch, id, rel],
+                    ).map_err(|e| e.to_string())?;
+                    if changed != 1 {
+                        return Err("目录记忆记录已变化".to_string());
+                    }
+                }
+            }
+        }
+        if let Some(op) = operation.as_ref() {
+            crate::operation_journal::finish_in_tx(&tx, op.id)?;
+        }
+        tx.commit().map_err(|e| e.to_string())
+    })();
+    if let Err(error) = result {
+        let mut rollback_errors = Vec::new();
+        for migration in migrations.iter().rev() {
+            if let Err(e) = migration.rollback() {
+                rollback_errors.push(format!("缩略图回滚失败: {e}"));
+            }
+        }
+        let Some(op) = operation.as_ref() else {
+            return Ok(serde_json::json!({ "ok": false, "error": error }));
+        };
+        drop(conn);
+        let mut files_rolled_back = false;
+        if let Err(e) = crate::operation_journal::rollback_path_files(op) {
+            rollback_errors.push(e);
+        } else {
+            files_rolled_back = true;
+        }
+        let conn = db.lock().map_err(|e| format!("回滚后重新锁定数据库失败: {e}"))?;
+        let mut journal_cleanup_failed = !files_rolled_back;
+        if files_rolled_back {
+            if let Err(e) = conn.unchecked_transaction().map_err(|e| e.to_string())
+                .and_then(|tx| crate::operation_journal::finish_in_tx(&tx, op.id).and_then(|_| tx.commit().map_err(|e| e.to_string()))) {
+                rollback_errors.push(e);
+                journal_cleanup_failed = true;
+            }
+        }
+        if journal_cleanup_failed {
+            let _ = crate::operation_journal::mark_manual(&conn, op.id, &rollback_errors.join("; "));
+        }
+        return Ok(serde_json::json!({
+            "ok": false,
+            "error": if rollback_errors.is_empty() { error } else { format!("{error}; 回滚: {}", rollback_errors.join("; ")) }
+        }));
+    }
+    Ok(serde_json::json!({
+        "ok": true, "path": target_str, "name": clean, "display_name": clean
+    }))
 }
 
 #[tauri::command]
@@ -4263,155 +4637,24 @@ pub async fn rename_library(
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
     let db = state.db.clone();
+    let thumbs_dir = state.data_dir.join("cache").join("thumbs");
     tauri::async_runtime::spawn_blocking(move || {
         let clean: String = name
             .trim()
             .chars()
             .filter(|&c| !"\\/:*?\"<>|".contains(c))
             .collect();
-        if clean.is_empty() || clean == "." || clean == ".." {
-            return Ok(serde_json::json!({ "ok": false, "error": "名称无效或为空" }));
-        }
         let display_only = opts
             .as_ref()
             .and_then(|o| o.get("displayOnly"))
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        let rename_disk = if display_only {
-            false
-        } else {
-            opts.as_ref()
-                .and_then(|o| o.get("renameDisk"))
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true)
-        };
-
-        let conn = db.lock().map_err(|e| e.to_string())?;
-        let old_path: String = conn
-            .query_row("SELECT path FROM folders WHERE id = ?1", [id], |r| r.get(0))
-            .map_err(|_| "根文件不存在".to_string())?;
-
-        if !rename_disk {
-            conn.execute(
-                "UPDATE folders SET display_name = ?1 WHERE id = ?2",
-                rusqlite::params![clean, id],
-            )
-            .map_err(|e| e.to_string())?;
-            return Ok(serde_json::json!({
-                "ok": true,
-                "path": old_path,
-                "name": clean,
-                "display_name": clean,
-                "displayOnly": display_only
-            }));
-        }
-
-        let old_clean = old_path.trim_end_matches(&['\\', '/'][..]).to_string();
-        let src = Path::new(&old_clean);
-        let parent = src.parent().unwrap_or_else(|| Path::new("."));
-        let target = parent.join(&clean);
-        let target_str = target.to_string_lossy().to_string();
-
-        if old_clean == target_str {
-            conn.execute(
-                "UPDATE folders SET display_name = ?1 WHERE id = ?2",
-                rusqlite::params![clean, id],
-            )
-            .map_err(|e| e.to_string())?;
-            return Ok(serde_json::json!({
-                "ok": true,
-                "path": target_str,
-                "name": clean,
-                "display_name": clean,
-                "unchanged": true
-            }));
-        }
-
-        if !old_clean.eq_ignore_ascii_case(&target_str) && target.exists() {
-            return Ok(serde_json::json!({ "ok": false, "error": "同名目录已存在" }));
-        }
-
-        if src.exists() {
-            if let Err(e) = std::fs::rename(src, &target) {
-                return Ok(serde_json::json!({ "ok": false, "error": e.to_string() }));
-            }
-        } else if !target.exists() {
-            return Ok(serde_json::json!({ "ok": false, "error": "原根目录在磁盘上不存在" }));
-        }
-
-        let db_res: Result<(), String> = (|| {
-            let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-            tx.execute(
-                "UPDATE folders SET path = ?1, display_name = ?2 WHERE id = ?3",
-                rusqlite::params![&target_str, &clean, id],
-            )
-            .map_err(|e| e.to_string())?;
-
-            let rows: Vec<(i64, String)> = {
-                let mut stmt = tx
-                    .prepare("SELECT id, file_path FROM images WHERE folder_id = ?1")
-                    .map_err(|e| e.to_string())?;
-                stmt.query_map([id], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
-                    .map_err(|e| e.to_string())?
-                    .flatten()
-                    .collect()
-            };
-
-            {
-                let mut ustmt = tx
-                    .prepare("UPDATE images SET file_path = ?1 WHERE id = ?2")
-                    .map_err(|e| e.to_string())?;
-                for (img_id, old_fp) in rows {
-                    if let Some(np) = rebase_path_prefix(&old_fp, &old_clean, &target_str) {
-                        ustmt.execute(rusqlite::params![np, img_id]).map_err(|e| e.to_string())?;
-                    }
-                }
-            }
-
-            // 更新 picnest_dir_memory 里的 coverPath 前缀
-            let mems: Vec<(String, String)> = {
-                let mut mstmt = tx
-                    .prepare("SELECT rel, patch FROM picnest_dir_memory WHERE root_id = ?1")
-                    .map_err(|e| e.to_string())?;
-                mstmt
-                    .query_map([id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
-                    .map_err(|e| e.to_string())?
-                    .flatten()
-                    .collect()
-            };
-            for (rel, patch_str) in mems {
-                if let Ok(mut map) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&patch_str) {
-                    if let Some(serde_json::Value::String(cp)) = map.get("coverPath").cloned() {
-                        if let Some(ncp) = rebase_path_prefix(&cp, &old_clean, &target_str) {
-                            map.insert("coverPath".to_string(), serde_json::Value::String(ncp));
-                            if let Ok(s) = serde_json::to_string(&map) {
-                                let _ = tx.execute(
-                                    "UPDATE picnest_dir_memory SET patch = ?1 WHERE root_id = ?2 AND rel = ?3",
-                                    rusqlite::params![s, id, rel],
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-
-            tx.commit().map_err(|e| e.to_string())?;
-            Ok(())
-        })();
-
-        if let Err(e) = db_res {
-            if target.exists() && !src.exists() {
-                let _ = std::fs::rename(&target, src);
-            }
-            return Ok(serde_json::json!({ "ok": false, "error": e }));
-        }
-
-        Ok(serde_json::json!({
-            "ok": true,
-            "path": target_str,
-            "name": clean,
-            "display_name": clean
-        }))
+        let rename_disk = !display_only && opts
+            .as_ref()
+            .and_then(|o| o.get("renameDisk"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        rename_library_sync(&db, &thumbs_dir, id, &clean, rename_disk)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -5299,36 +5542,43 @@ fn rel_of_image(root_path: &str, file_path: &str) -> String {
     String::new()
 }
 
-fn meta_export_inner(conn: &rusqlite::Connection, root_id: i64) -> serde_json::Value {
-    let root_path: String = match conn.query_row("SELECT path FROM folders WHERE id = ?1", [root_id], |r| r.get(0)) {
-        Ok(p) => p,
-        Err(_) => return serde_json::json!({ "ok": false, "error": "根文件不存在" }),
-    };
+fn meta_export_inner(conn: &rusqlite::Connection, root_id: i64) -> Result<serde_json::Value, String> {
+    let root_path: String = conn
+        .query_row("SELECT path FROM folders WHERE id = ?1", [root_id], |r| r.get(0))
+        .map_err(|_| "根文件不存在".to_string())?;
     let rp = Path::new(&root_path);
     if !rp.is_dir() {
-        return serde_json::json!({ "ok": false, "error": "根目录不存在" });
+        return Err("根目录不存在".to_string());
     }
 
-    let mut tag_names: Vec<String> = Vec::new();
-    if let Ok(mut stmt) = conn.prepare(
-        "SELECT DISTINCT t.name FROM tags t
-         JOIN image_tags it ON it.tag_id = t.id
-         JOIN images i ON i.id = it.image_id
-         WHERE i.folder_id = ?1 AND i.deleted_at IS NULL
-         ORDER BY t.name COLLATE NOCASE",
-    ) {
-        if let Ok(rows) = stmt.query_map([root_id], |r| r.get::<_, String>(0)) {
-            tag_names = rows.flatten().collect();
-        }
+    let mut stmt = conn
+        .prepare(
+            "SELECT DISTINCT t.name FROM tags t
+             JOIN image_tags it ON it.tag_id = t.id
+             JOIN images i ON i.id = it.image_id
+             WHERE i.folder_id = ?1 AND i.deleted_at IS NULL
+             ORDER BY t.name COLLATE NOCASE",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([root_id], |r| r.get::<_, String>(0))
+        .map_err(|e| e.to_string())?;
+    let mut tag_names = Vec::new();
+    for row in rows {
+        tag_names.push(row.map_err(|e| e.to_string())?);
     }
+    drop(stmt);
 
     let mut images_map: std::collections::BTreeMap<String, serde_json::Map<String, serde_json::Value>> =
         std::collections::BTreeMap::new();
-    if let Ok(mut stmt) = conn.prepare(
-        "SELECT file_path, COALESCE(rating, 0), COALESCE(annotation, ''), COALESCE(url, ''), COALESCE(is_favorite, 0)
-         FROM images WHERE folder_id = ?1 AND deleted_at IS NULL",
-    ) {
-        if let Ok(rows) = stmt.query_map([root_id], |r| {
+    let mut stmt = conn
+        .prepare(
+            "SELECT file_path, COALESCE(rating, 0), COALESCE(annotation, ''), COALESCE(url, ''), COALESCE(is_favorite, 0)
+             FROM images WHERE folder_id = ?1 AND deleted_at IS NULL",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([root_id], |r| {
             Ok((
                 r.get::<_, String>(0)?,
                 r.get::<_, i64>(1)?,
@@ -5336,109 +5586,128 @@ fn meta_export_inner(conn: &rusqlite::Connection, root_id: i64) -> serde_json::V
                 r.get::<_, String>(3)?,
                 r.get::<_, i64>(4)?,
             ))
-        }) {
-            for (fp, rating, ann, url, fav) in rows.flatten() {
-                let rel = rel_of_image(&root_path, &fp);
-                if rel.is_empty() {
-                    continue;
-                }
-                let mut rec = serde_json::Map::new();
-                if rating > 0 {
-                    rec.insert("rating".to_string(), serde_json::json!(rating));
-                }
-                if !ann.is_empty() {
-                    rec.insert("annotation".to_string(), serde_json::json!(ann));
-                }
-                if !url.is_empty() {
-                    rec.insert("url".to_string(), serde_json::json!(url));
-                }
-                if fav != 0 {
-                    rec.insert("favorite".to_string(), serde_json::json!(1));
-                }
-                if !rec.is_empty() {
-                    images_map.insert(rel, rec);
-                }
-            }
+        })
+        .map_err(|e| e.to_string())?;
+    for row in rows {
+        let (fp, rating, ann, url, fav) = row.map_err(|e| e.to_string())?;
+        let rel = rel_of_image(&root_path, &fp);
+        if rel.is_empty() {
+            continue;
+        }
+        let mut rec = serde_json::Map::new();
+        if rating > 0 {
+            rec.insert("rating".to_string(), serde_json::json!(rating));
+        }
+        if !ann.is_empty() {
+            rec.insert("annotation".to_string(), serde_json::json!(ann));
+        }
+        if !url.is_empty() {
+            rec.insert("url".to_string(), serde_json::json!(url));
+        }
+        if fav != 0 {
+            rec.insert("favorite".to_string(), serde_json::json!(1));
+        }
+        if !rec.is_empty() {
+            images_map.insert(rel, rec);
         }
     }
+    drop(stmt);
 
-    if let Ok(mut stmt) = conn.prepare(
-        "SELECT i.file_path, t.name FROM image_tags it
-         JOIN tags t ON t.id = it.tag_id
-         JOIN images i ON i.id = it.image_id
-         WHERE i.folder_id = ?1 AND i.deleted_at IS NULL",
-    ) {
-        if let Ok(rows) = stmt.query_map([root_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))) {
-            for (fp, tname) in rows.flatten() {
-                let rel = rel_of_image(&root_path, &fp);
-                if rel.is_empty() {
-                    continue;
-                }
-                let rec = images_map.entry(rel).or_default();
-                let arr = rec
-                    .entry("tags".to_string())
-                    .or_insert_with(|| serde_json::Value::Array(Vec::new()));
-                if let Some(vec) = arr.as_array_mut() {
-                    if !vec.iter().any(|x| x.as_str() == Some(&tname)) {
-                        vec.push(serde_json::Value::String(tname));
-                    }
-                }
+    let mut stmt = conn
+        .prepare(
+            "SELECT i.file_path, t.name FROM image_tags it
+             JOIN tags t ON t.id = it.tag_id
+             JOIN images i ON i.id = it.image_id
+             WHERE i.folder_id = ?1 AND i.deleted_at IS NULL",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([root_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+        .map_err(|e| e.to_string())?;
+    for row in rows {
+        let (fp, tname) = row.map_err(|e| e.to_string())?;
+        let rel = rel_of_image(&root_path, &fp);
+        if rel.is_empty() {
+            continue;
+        }
+        let rec = images_map.entry(rel).or_default();
+        let arr = rec
+            .entry("tags".to_string())
+            .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+        if let Some(vec) = arr.as_array_mut() {
+            if !vec.iter().any(|x| x.as_str() == Some(&tname)) {
+                vec.push(serde_json::Value::String(tname));
             }
         }
     }
+    drop(stmt);
 
     let mut dirs_map = serde_json::Map::new();
-    if let Ok(mut stmt) = conn.prepare("SELECT rel, patch FROM picnest_dir_memory WHERE root_id = ?1") {
-        if let Ok(rows) = stmt.query_map([root_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))) {
-            for (rel, patch_str) in rows.flatten() {
-                if let Ok(serde_json::Value::Object(mut obj)) = serde_json::from_str::<serde_json::Value>(&patch_str) {
-                    if let Some(cov) = obj.get("cover").and_then(|v| v.as_str()).map(|s| s.to_string()) {
-                        let cov_rel = rel_of_image(&root_path, &cov);
-                        if !cov_rel.is_empty() {
-                            obj.insert("cover".to_string(), serde_json::Value::String(cov_rel));
-                        } else {
-                            obj.remove("cover");
-                        }
-                    }
-                    obj.remove("coverThumb");
-                    if !obj.is_empty() {
-                        dirs_map.insert(rel, serde_json::Value::Object(obj));
-                    }
-                }
+    let mut stmt = conn
+        .prepare("SELECT rel, patch FROM picnest_dir_memory WHERE root_id = ?1")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([root_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+        .map_err(|e| e.to_string())?;
+    for row in rows {
+        let (rel, patch_str) = row.map_err(|e| e.to_string())?;
+        let serde_json::Value::Object(mut obj) =
+            serde_json::from_str::<serde_json::Value>(&patch_str).map_err(|e| e.to_string())?
+        else {
+            return Err(format!("目录元数据不是对象: {rel}"));
+        };
+        if let Some(cov) = obj.get("cover").and_then(|v| v.as_str()).map(|s| s.to_string()) {
+            let cov_rel = rel_of_image(&root_path, &cov);
+            if !cov_rel.is_empty() {
+                obj.insert("cover".to_string(), serde_json::Value::String(cov_rel));
+            } else {
+                obj.remove("cover");
             }
         }
+        obj.remove("coverThumb");
+        if !obj.is_empty() {
+            dirs_map.insert(rel, serde_json::Value::Object(obj));
+        }
     }
+    drop(stmt);
 
     let mut dirs_order = serde_json::Map::new();
     let prefix = format!("{}|", root_id);
-    if let Ok(mut stmt) = conn.prepare("SELECT key, names FROM picnest_dir_order WHERE key LIKE ?1") {
-        if let Ok(rows) = stmt.query_map([format!("{}%", prefix)], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))) {
-            for (k, names_str) in rows.flatten() {
-                if let Some(rel) = k.strip_prefix(&prefix) {
-                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&names_str) {
-                        let key_out = if rel == "__root__" { "" } else { rel };
-                        dirs_order.insert(key_out.to_string(), val);
-                    }
-                }
-            }
+    let mut stmt = conn
+        .prepare("SELECT key, names FROM picnest_dir_order WHERE key LIKE ?1")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([format!("{}%", prefix)], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+        .map_err(|e| e.to_string())?;
+    for row in rows {
+        let (k, names_str) = row.map_err(|e| e.to_string())?;
+        if let Some(rel) = k.strip_prefix(&prefix) {
+            let val = serde_json::from_str::<serde_json::Value>(&names_str).map_err(|e| e.to_string())?;
+            let key_out = if rel == "__root__" { "" } else { rel };
+            dirs_order.insert(key_out.to_string(), val);
         }
     }
+    drop(stmt);
 
     let mut images_order = serde_json::Map::new();
     let mut img_groups: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
-    if let Ok(mut stmt) = conn.prepare(
-        "SELECT file_path FROM images WHERE folder_id = ?1 AND deleted_at IS NULL AND sort_order > 0 ORDER BY sort_order ASC, id DESC",
-    ) {
-        if let Ok(rows) = stmt.query_map([root_id], |r| r.get::<_, String>(0)) {
-            for fp in rows.flatten() {
-                let parent = Path::new(&fp).parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
-                let drel = rel_of_image(&root_path, &parent);
-                if let Some(fname) = Path::new(&fp).file_name().map(|s| s.to_string_lossy().to_string()) {
-                    img_groups.entry(drel).or_default().push(fname);
-                }
-            }
+    let mut stmt = conn
+        .prepare(
+            "SELECT file_path FROM images WHERE folder_id = ?1 AND deleted_at IS NULL AND sort_order > 0 ORDER BY sort_order ASC, id DESC",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([root_id], |r| r.get::<_, String>(0))
+        .map_err(|e| e.to_string())?;
+    for row in rows {
+        let fp = row.map_err(|e| e.to_string())?;
+        let parent = Path::new(&fp).parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
+        let drel = rel_of_image(&root_path, &parent);
+        if let Some(fname) = Path::new(&fp).file_name().map(|s| s.to_string_lossy().to_string()) {
+            img_groups.entry(drel).or_default().push(fname);
         }
     }
+    drop(stmt);
     for (rel, names) in img_groups {
         if names.len() > 1 {
             images_order.insert(rel, serde_json::json!(names));
@@ -5463,7 +5732,7 @@ fn meta_export_inner(conn: &rusqlite::Connection, root_id: i64) -> serde_json::V
     });
 
     let meta_dir = rp.join(".picnest");
-    let _ = std::fs::create_dir_all(&meta_dir);
+    std::fs::create_dir_all(&meta_dir).map_err(|e| e.to_string())?;
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
@@ -5474,16 +5743,21 @@ fn meta_export_inner(conn: &rusqlite::Connection, root_id: i64) -> serde_json::V
             .output();
     }
     let meta_file = meta_dir.join("meta.json");
-    let tmp_file = meta_dir.join("meta.json.tmp");
-    if let Ok(pretty) = serde_json::to_string_pretty(&meta) {
-        if std::fs::write(&tmp_file, pretty).is_ok() {
-            let _ = std::fs::rename(&tmp_file, &meta_file);
-        }
+    let pretty = serde_json::to_string_pretty(&meta).map_err(|e| e.to_string())?;
+    let staged = crate::fs_ops::stage_write_new(&meta_file, pretty.as_bytes())?;
+    if let Err(error) = std::fs::rename(&staged.temp_path, &meta_file) {
+        let rollback = crate::fs_ops::rollback_staged(&staged);
+        return Err(format!(
+            "提交元数据失败 {}: {error}; 回滚: {}",
+            meta_file.display(),
+            rollback.err().unwrap_or_default()
+        ));
     }
-    serde_json::json!({
-        "ok": meta_file.exists(),
+    crate::fs_ops::verify_staged_file(&staged)?;
+    Ok(serde_json::json!({
+        "ok": true,
         "path": meta_file.to_string_lossy().to_string()
-    })
+    }))
 }
 
 fn meta_import_inner(conn: &mut rusqlite::Connection, root_id: i64) -> serde_json::Value {
@@ -5704,7 +5978,7 @@ pub async fn root_meta_save(root_id: i64, state: State<'_, AppState>) -> Result<
     let db = state.db.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let conn = db.lock().map_err(|e| e.to_string())?;
-        Ok(meta_export_inner(&conn, root_id))
+        meta_export_inner(&conn, root_id)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -5717,7 +5991,7 @@ pub async fn root_meta_load(root_id: i64, state: State<'_, AppState>) -> Result<
         let mut conn = db.lock().map_err(|e| e.to_string())?;
         let res = meta_import_inner(&mut conn, root_id);
         if res.get("created").and_then(|v| v.as_bool()) == Some(false) {
-            return Ok(meta_export_inner(&conn, root_id));
+            return meta_export_inner(&conn, root_id);
         }
         Ok(res)
     })
@@ -5753,7 +6027,7 @@ pub async fn root_meta_ensure(root_id: i64, state: State<'_, AppState>) -> Resul
             }
             return Ok(serde_json::json!({ "ok": true, "existed": true, "imported": false }));
         }
-        Ok(meta_export_inner(&conn, root_id))
+        meta_export_inner(&conn, root_id)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -6249,11 +6523,341 @@ mod tests {
     use super::*;
 
     #[test]
+    fn meta_export_query_failure_is_not_masked_by_an_existing_file() {
+        let tmp = crate::testutil::TempDir::new("picnest_meta_export_fault");
+        let root = tmp.join("lib");
+        let meta_dir = root.join(".picnest");
+        std::fs::create_dir_all(&meta_dir).unwrap();
+        let meta_file = meta_dir.join("meta.json");
+        std::fs::write(&meta_file, b"previous metadata").unwrap();
+        let conn = crate::db::init_db(&tmp.join("test.db")).unwrap();
+        conn.execute("INSERT INTO folders (path) VALUES (?1)", [root.to_string_lossy().to_string()]).unwrap();
+        conn.execute_batch("ALTER TABLE images RENAME TO images_hidden").unwrap();
+        let error = meta_export_inner(&conn, conn.last_insert_rowid()).unwrap_err();
+        assert!(error.contains("images"), "{error}");
+        assert_eq!(std::fs::read(&meta_file).unwrap(), b"previous metadata");
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM folders", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
+    }
+
+    #[test]
+    fn meta_export_replaces_previous_metadata_without_leaving_staging_files() {
+        let tmp = crate::testutil::TempDir::new("picnest_meta_export_success");
+        let root = tmp.join("lib");
+        let meta_dir = root.join(".picnest");
+        std::fs::create_dir_all(&meta_dir).unwrap();
+        let meta_file = meta_dir.join("meta.json");
+        std::fs::write(&meta_file, b"previous metadata").unwrap();
+        let conn = crate::db::init_db(&tmp.join("test.db")).unwrap();
+        conn.execute("INSERT INTO folders (path) VALUES (?1)", [root.to_string_lossy().to_string()]).unwrap();
+        let result = meta_export_inner(&conn, conn.last_insert_rowid()).unwrap();
+        assert!(result["ok"].as_bool() == Some(true));
+        let updated = std::fs::read_to_string(&meta_file).unwrap();
+        assert!(updated.contains("\"app\": \"PicNest\""));
+        assert!(!std::fs::read_dir(&meta_dir).unwrap().any(|entry| {
+            entry.unwrap().file_name().to_string_lossy().starts_with(".picnest-part-")
+        }));
+    }
+
+    #[test]
     fn query_window_clamps_invalid_limits_without_truncating_large_folders() {
         assert_eq!(normalize_query_window(-10, -1), (0, 1));
         assert_eq!(normalize_query_window(20, 0), (20, 1));
         assert_eq!(normalize_query_window(0, 500_001), (0, 500_000));
         assert_eq!(normalize_query_window(0, 250_000), (0, 250_000));
+    }
+
+    #[test]
+    fn snapshot_diff_never_resurrects_soft_deleted_images() {
+        let tmp = crate::testutil::TempDir::new("picnest_snapshot_trash");
+        let root = tmp.join("library");
+        std::fs::create_dir_all(&root).unwrap();
+        let image = root.join("trashed.png");
+        std::fs::write(&image, b"replacement").unwrap();
+        let conn = crate::db::init_db(&tmp.join("test.db")).unwrap();
+        conn.execute("INSERT INTO folders (path) VALUES (?1)", [root.to_string_lossy().to_string()]).unwrap();
+        let folder_id = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO images (folder_id, file_path, size, mtime, deleted_at, trash_group) VALUES (?1, ?2, 3, 1, 99, 7)",
+            rusqlite::params![folder_id, image.to_string_lossy().to_string()],
+        ).unwrap();
+        let db = std::sync::Arc::new(std::sync::Mutex::new(conn));
+        apply_file_snapshot_diff(
+            &db,
+            folder_id,
+            &[(image.to_string_lossy().to_string(), 11, 2)],
+            &[],
+        ).unwrap();
+        let conn = db.lock().unwrap();
+        let row: (i64, i64, Option<i64>, Option<i64>) = conn.query_row(
+            "SELECT size, mtime, deleted_at, trash_group FROM images", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        ).unwrap();
+        assert_eq!(row, (3, 1, Some(99), Some(7)));
+    }
+
+    #[test]
+    fn snapshot_diff_rolls_back_inserts_when_gone_update_fails() {
+        let tmp = crate::testutil::TempDir::new("picnest_snapshot_atomic");
+        let root = tmp.join("library");
+        std::fs::create_dir_all(&root).unwrap();
+        let gone = root.join("gone.png");
+        let added = root.join("added.png");
+        let conn = crate::db::init_db(&tmp.join("test.db")).unwrap();
+        conn.execute("INSERT INTO folders (path) VALUES (?1)", [root.to_string_lossy().to_string()]).unwrap();
+        let folder_id = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO images (folder_id, file_path, size, mtime) VALUES (?1, ?2, 1, 1)",
+            rusqlite::params![folder_id, gone.to_string_lossy().to_string()],
+        ).unwrap();
+        conn.execute_batch("CREATE TRIGGER reject_snapshot BEFORE UPDATE OF deleted_at ON images BEGIN SELECT RAISE(ABORT, 'injected snapshot failure'); END;").unwrap();
+        let db = std::sync::Arc::new(std::sync::Mutex::new(conn));
+        let error = apply_file_snapshot_diff(
+            &db,
+            folder_id,
+            &[(added.to_string_lossy().to_string(), 2, 2)],
+            &[gone.to_string_lossy().to_lowercase()],
+        ).unwrap_err();
+        assert!(error.contains("injected snapshot failure"), "{error}");
+        let conn = db.lock().unwrap();
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM images", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
+        let deleted: Option<i64> = conn.query_row("SELECT deleted_at FROM images", [], |r| r.get(0)).unwrap();
+        assert_eq!(deleted, None);
+    }
+
+    #[test]
+    fn rename_image_sql_failure_reverses_file_cache_and_path() {
+        let tmp = crate::testutil::TempDir::new("picnest_rename_fault");
+        let root = tmp.join("lib");
+        let thumbs = tmp.join("thumbs");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&thumbs).unwrap();
+        let source = root.join("old.png");
+        let target = root.join("new.png");
+        std::fs::write(&source, b"original").unwrap();
+        let conn = crate::db::init_db(&tmp.join("test.db")).unwrap();
+        conn.execute("INSERT INTO folders (path) VALUES (?1)", [root.to_string_lossy().to_string()]).unwrap();
+        let old_thumb = thumbs.join(format!("{:x}-q80.jpg", fnv1a_hash(source.to_string_lossy().as_bytes())));
+        let new_thumb = thumbs.join(format!("{:x}-q80.jpg", fnv1a_hash(target.to_string_lossy().as_bytes())));
+        std::fs::write(&old_thumb, b"thumb").unwrap();
+        conn.execute(
+            "INSERT INTO images (folder_id, file_path, thumbnail_path, size, mtime) VALUES (?1, ?2, ?3, 8, 1)",
+            rusqlite::params![conn.last_insert_rowid(), source.to_string_lossy().to_string(), old_thumb.to_string_lossy().to_string()],
+        ).unwrap();
+        conn.execute_batch("CREATE TRIGGER fail_rename BEFORE UPDATE OF file_path ON images BEGIN SELECT RAISE(ABORT, 'injected rename failure'); END;").unwrap();
+        let db = std::sync::Arc::new(std::sync::Mutex::new(conn));
+        let error = rename_image_compensated(&db, &thumbs, &source, &target, false).unwrap_err();
+        assert!(error.contains("injected rename failure"), "{error}");
+        assert_eq!(std::fs::read(&source).unwrap(), b"original");
+        assert!(!target.exists());
+        assert!(old_thumb.exists());
+        assert!(!new_thumb.exists());
+        let db = db.lock().unwrap();
+        let path: String = db.query_row("SELECT file_path FROM images", [], |r| r.get(0)).unwrap();
+        assert_eq!(path, source.to_string_lossy());
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM picnest_operations", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
+    }
+
+    #[test]
+    fn batch_rename_sql_failure_restores_files_cache_and_database() {
+        let tmp = crate::testutil::TempDir::new("picnest_batch_fault");
+        let root = tmp.join("lib");
+        let thumbs = tmp.join("thumbs");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&thumbs).unwrap();
+        let source = root.join("image.png");
+        let target = root.join("01_image.png");
+        std::fs::write(&source, b"original").unwrap();
+        let conn = crate::db::init_db(&tmp.join("test.db")).unwrap();
+        conn.execute("INSERT INTO folders (path) VALUES (?1)", [root.to_string_lossy().to_string()]).unwrap();
+        let folder_id = conn.last_insert_rowid();
+        let old_thumb = thumbs.join(format!("{:x}-q80.jpg", fnv1a_hash(source.to_string_lossy().as_bytes())));
+        let new_thumb = thumbs.join(format!("{:x}-q80.jpg", fnv1a_hash(target.to_string_lossy().as_bytes())));
+        std::fs::write(&old_thumb, b"thumb").unwrap();
+        conn.execute(
+            "INSERT INTO images (folder_id, file_path, thumbnail_path, size, mtime) VALUES (?1, ?2, ?3, 8, 1)",
+            rusqlite::params![folder_id, source.to_string_lossy().to_string(), old_thumb.to_string_lossy().to_string()],
+        ).unwrap();
+        conn.execute_batch("CREATE TRIGGER fail_batch BEFORE UPDATE OF file_path ON images BEGIN SELECT RAISE(ABORT, 'injected batch failure'); END;").unwrap();
+        let db = std::sync::Arc::new(std::sync::Mutex::new(conn));
+        let error = run_batch_rename(&db, &thumbs, &root.to_string_lossy(), vec![(source.clone(), target.clone())]).unwrap_err();
+        assert!(error.contains("injected batch failure"), "{error}");
+        assert_eq!(std::fs::read(&source).unwrap(), b"original");
+        assert!(!target.exists());
+        assert!(old_thumb.exists());
+        assert!(!new_thumb.exists());
+        let db = db.lock().unwrap();
+        let path: String = db.query_row("SELECT file_path FROM images", [], |r| r.get(0)).unwrap();
+        assert_eq!(path, source.to_string_lossy());
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM picnest_operations", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
+    }
+
+    #[test]
+    fn move_dir_sql_failure_reverses_directory_cache_and_database() {
+        let tmp = crate::testutil::TempDir::new("picnest_move_dir_fault");
+        let root = tmp.join("lib");
+        let source = root.join("alpha");
+        let destination = tmp.join("destination");
+        let target = destination.join("alpha");
+        let thumbs = tmp.join("thumbs");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::create_dir_all(&destination).unwrap();
+        std::fs::create_dir_all(&thumbs).unwrap();
+        let image = source.join("one.png");
+        std::fs::write(&image, b"original").unwrap();
+        let conn = crate::db::init_db(&tmp.join("test.db")).unwrap();
+        conn.execute("INSERT INTO folders (path) VALUES (?1)", [root.to_string_lossy().to_string()]).unwrap();
+        let folder_id = conn.last_insert_rowid();
+        let old_thumb = thumbs.join(format!("{:x}-q80.jpg", fnv1a_hash(image.to_string_lossy().as_bytes())));
+        let new_thumb = thumbs.join(format!("{:x}-q80.jpg", fnv1a_hash(target.join("one.png").to_string_lossy().as_bytes())));
+        std::fs::write(&old_thumb, b"thumb").unwrap();
+        conn.execute(
+            "INSERT INTO images (folder_id, file_path, thumbnail_path, size, mtime) VALUES (?1, ?2, ?3, 8, 1)",
+            rusqlite::params![folder_id, image.to_string_lossy().to_string(), old_thumb.to_string_lossy().to_string()],
+        ).unwrap();
+        conn.execute_batch("CREATE TRIGGER fail_move_dir BEFORE UPDATE OF file_path ON images BEGIN SELECT RAISE(ABORT, 'injected move dir failure'); END;").unwrap();
+        let db = std::sync::Arc::new(std::sync::Mutex::new(conn));
+        let result = move_dir_sync(&db, &thumbs, &source.to_string_lossy(), &destination.to_string_lossy()).unwrap();
+        assert_eq!(result["ok"], false, "{result}");
+        assert!(result["error"].as_str().unwrap().contains("injected move dir failure"));
+        assert_eq!(std::fs::read(&image).unwrap(), b"original");
+        assert!(!target.exists());
+        assert!(old_thumb.exists());
+        assert!(!new_thumb.exists());
+        let conn = db.lock().unwrap();
+        let path: String = conn.query_row("SELECT file_path FROM images", [], |r| r.get(0)).unwrap();
+        assert_eq!(path, image.to_string_lossy());
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM picnest_operations", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
+    }
+
+    #[test]
+    fn rename_dir_sql_failure_reverses_directory_cache_and_database() {
+        let tmp = crate::testutil::TempDir::new("picnest_rename_dir_fault");
+        let root = tmp.join("lib");
+        let source = root.join("alpha");
+        let target = root.join("beta");
+        let thumbs = tmp.join("thumbs");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::create_dir_all(&thumbs).unwrap();
+        let image = source.join("one.png");
+        std::fs::write(&image, b"original").unwrap();
+        let conn = crate::db::init_db(&tmp.join("test.db")).unwrap();
+        conn.execute("INSERT INTO folders (path) VALUES (?1)", [root.to_string_lossy().to_string()]).unwrap();
+        let folder_id = conn.last_insert_rowid();
+        let old_thumb = thumbs.join(format!("{:x}-q80.jpg", fnv1a_hash(image.to_string_lossy().as_bytes())));
+        let new_thumb = thumbs.join(format!("{:x}-q80.jpg", fnv1a_hash(target.join("one.png").to_string_lossy().as_bytes())));
+        std::fs::write(&old_thumb, b"thumb").unwrap();
+        conn.execute(
+            "INSERT INTO images (folder_id, file_path, thumbnail_path, size, mtime) VALUES (?1, ?2, ?3, 8, 1)",
+            rusqlite::params![folder_id, image.to_string_lossy().to_string(), old_thumb.to_string_lossy().to_string()],
+        ).unwrap();
+        conn.execute_batch("CREATE TRIGGER fail_rename_dir BEFORE UPDATE OF file_path ON images BEGIN SELECT RAISE(ABORT, 'injected rename dir failure'); END;").unwrap();
+        let db = std::sync::Arc::new(std::sync::Mutex::new(conn));
+        let result = rename_dir_sync(&db, &thumbs, &source.to_string_lossy(), "beta", None, None).unwrap();
+        assert_eq!(result["ok"], false, "{result}");
+        assert!(result["error"].as_str().unwrap().contains("injected rename dir failure"));
+        assert_eq!(std::fs::read(&image).unwrap(), b"original");
+        assert!(!target.exists());
+        assert!(old_thumb.exists());
+        assert!(!new_thumb.exists());
+        let conn = db.lock().unwrap();
+        let path: String = conn.query_row("SELECT file_path FROM images", [], |r| r.get(0)).unwrap();
+        assert_eq!(path, image.to_string_lossy());
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM picnest_operations", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
+    }
+
+    #[test]
+    fn rename_library_sql_failure_reverses_root_file_cache_and_database() {
+        let tmp = crate::testutil::TempDir::new("picnest_library_rename_fault");
+        let root = tmp.join("old-library");
+        let target = tmp.join("new-library");
+        let thumbs = tmp.join("thumbs");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&thumbs).unwrap();
+        let source = root.join("image.png");
+        std::fs::write(&source, b"original").unwrap();
+        let conn = crate::db::init_db(&tmp.join("test.db")).unwrap();
+        conn.execute("INSERT INTO folders (path) VALUES (?1)", [root.to_string_lossy().to_string()]).unwrap();
+        let folder_id = conn.last_insert_rowid();
+        let old_thumb = thumbs.join(format!("{:x}-q80.jpg", fnv1a_hash(source.to_string_lossy().as_bytes())));
+        let new_thumb = thumbs.join(format!("{:x}-q80.jpg", fnv1a_hash(target.join("image.png").to_string_lossy().as_bytes())));
+        std::fs::write(&old_thumb, b"thumb").unwrap();
+        conn.execute(
+            "INSERT INTO images (folder_id, file_path, thumbnail_path, size, mtime) VALUES (?1, ?2, ?3, 8, 1)",
+            rusqlite::params![folder_id, source.to_string_lossy().to_string(), old_thumb.to_string_lossy().to_string()],
+        ).unwrap();
+        conn.execute(
+            "UPDATE picnest_dir_memory SET patch = ?1 WHERE root_id = ?2 AND rel = ''",
+            rusqlite::params![serde_json::json!({"coverPath": source.to_string_lossy()}).to_string(), folder_id],
+        ).unwrap();
+        conn.execute_batch("CREATE TRIGGER fail_library BEFORE UPDATE OF file_path ON images BEGIN SELECT RAISE(ABORT, 'injected library failure'); END;").unwrap();
+        let db = std::sync::Arc::new(std::sync::Mutex::new(conn));
+        let result = rename_library_sync(&db, &thumbs, folder_id, "new-library", true).unwrap();
+        assert_eq!(result["ok"], false, "{result}");
+        assert!(result["error"].as_str().unwrap().contains("injected library failure"));
+        assert_eq!(std::fs::read(&source).unwrap(), b"original");
+        assert!(!target.exists());
+        assert!(old_thumb.exists());
+        assert!(!new_thumb.exists());
+        let conn = db.lock().unwrap();
+        let path: String = conn.query_row("SELECT path FROM folders WHERE id = ?1", [folder_id], |r| r.get(0)).unwrap();
+        assert_eq!(path, root.to_string_lossy());
+        let image_path: String = conn.query_row("SELECT file_path FROM images", [], |r| r.get(0)).unwrap();
+        assert_eq!(image_path, source.to_string_lossy());
+        let cover: String = conn.query_row("SELECT patch FROM picnest_dir_memory WHERE root_id = ?1", [folder_id], |r| r.get(0)).unwrap();
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&cover).unwrap()["coverPath"].as_str(), Some(source.to_string_lossy().as_ref()));
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM picnest_operations", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
+    }
+
+    #[test]
+    fn rename_library_restart_recovery_reverses_verified_directory_move() {
+        let tmp = crate::testutil::TempDir::new("picnest_library_restart");
+        let root = tmp.join("old-library");
+        let target = tmp.join("new-library");
+        let thumbs = tmp.join("thumbs");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&thumbs).unwrap();
+        std::fs::write(root.join("image.png"), b"original").unwrap();
+        let db_path = tmp.join("test.db");
+        {
+            let conn = crate::db::init_db(&db_path).unwrap();
+            conn.execute("INSERT INTO folders (path) VALUES (?1)", [root.to_string_lossy().to_string()]).unwrap();
+            let identity = crate::operation_journal::capture_path_identity(&root).unwrap();
+            let op = crate::operation_journal::begin_path_move(&conn, &root, &target, identity).unwrap();
+            std::fs::rename(&root, &target).unwrap();
+            crate::operation_journal::mark_path_applied(&conn, &op).unwrap();
+            assert!(target.exists());
+        }
+        let conn = crate::db::init_db(&db_path).unwrap();
+        assert_eq!(std::fs::read(root.join("image.png")).unwrap(), b"original");
+        assert!(!target.exists());
+        let path: String = conn.query_row("SELECT path FROM folders", [], |r| r.get(0)).unwrap();
+        assert_eq!(path, root.to_string_lossy());
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM picnest_operations", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
+    }
+
+    #[test]
+    fn rename_image_commit_is_atomic_and_immediately_indexes() {
+        let tmp = crate::testutil::TempDir::new("picnest_rename_ok");
+        let root = tmp.join("lib");
+        let thumbs = tmp.join("thumbs");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&thumbs).unwrap();
+        let source = root.join("old.png");
+        let target = root.join("01_new.png");
+        std::fs::write(&source, b"original").unwrap();
+        let conn = crate::db::init_db(&tmp.join("test.db")).unwrap();
+        conn.execute("INSERT INTO folders (path) VALUES (?1)", [root.to_string_lossy().to_string()]).unwrap();
+        conn.execute(
+            "INSERT INTO images (folder_id, file_path, size, mtime) VALUES (?1, ?2, 8, 1)",
+            rusqlite::params![conn.last_insert_rowid(), source.to_string_lossy().to_string()],
+        ).unwrap();
+        let db = std::sync::Arc::new(std::sync::Mutex::new(conn));
+        rename_image_compensated(&db, &thumbs, &source, &target, false).unwrap();
+        assert!(!source.exists());
+        assert_eq!(std::fs::read(&target).unwrap(), b"original");
+        let db = db.lock().unwrap();
+        let path: String = db.query_row("SELECT file_path FROM images", [], |r| r.get(0)).unwrap();
+        assert_eq!(path, target.to_string_lossy());
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM picnest_operations", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
     }
 
     /// 透明图必须走无损 WebP（否则 JPEG 会暴露 alpha=0 里藏的 RGB，变成彩色毛刺）
@@ -6374,6 +6978,40 @@ mod tests {
     }
 
     #[test]
+    fn crop_as_sql_failure_removes_the_new_file_and_journal() {
+        let tmp = crate::testutil::TempDir::new("picnest_crop_as_fault");
+        let root = tmp.join("lib");
+        std::fs::create_dir_all(&root).unwrap();
+        let source = root.join("source.png");
+        let image = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            8,
+            8,
+            image::Rgba([10, 20, 30, 255]),
+        ));
+        image.save(&source).unwrap();
+        let conn = crate::db::init_db(&tmp.join("test.db")).unwrap();
+        conn.execute("INSERT INTO folders (path) VALUES (?1)", [root.to_string_lossy().to_string()]).unwrap();
+        conn.execute(
+            "INSERT INTO images (folder_id, file_path, size, mtime) VALUES (?1, ?2, 1, 1)",
+            rusqlite::params![conn.last_insert_rowid(), source.to_string_lossy().to_string()],
+        ).unwrap();
+        conn.execute_batch("CREATE TRIGGER reject_crop_as BEFORE INSERT ON images BEGIN SELECT RAISE(ABORT, 'injected crop failure'); END;").unwrap();
+        let result = crop_image_as_sync(
+            source.to_str().unwrap(),
+            &serde_json::json!({ "left": 0, "top": 0, "width": 4, "height": 4 }),
+            &conn,
+        );
+        assert_eq!(result["ok"], false);
+        assert!(result["error"].as_str().unwrap().contains("injected crop failure"));
+        assert!(source.exists());
+        assert!(!root.join("source-cropped.png").exists());
+        assert!(!std::fs::read_dir(&root).unwrap().any(|entry| {
+            entry.unwrap().file_name().to_string_lossy().starts_with(".picnest-part-")
+        }));
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM picnest_operations", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
+    }
+
+    #[test]
     fn group_a_crop_memory_rename_sort_and_export_work() {
         let tmp = crate::testutil::TempDir::new("picnest_group_a");
         let root = tmp.join("lib");
@@ -6411,8 +7049,8 @@ mod tests {
 
         // 1a. crop_image_as_sync saves new file + indexes it without altering original
         let crop_opts = serde_json::json!({ "left": 2, "top": 1, "width": 10, "height": 6 });
-        let res_as = crop_image_as_sync(&img_str, &crop_opts, Some(&conn));
-        assert_eq!(res_as["ok"], true);
+        let res_as = crop_image_as_sync(&img_str, &crop_opts, &conn);
+        assert!(res_as["ok"].as_bool() == Some(true));
         assert_eq!(res_as["width"], 10);
         assert_eq!(res_as["height"], 6);
         let cropped_path = PathBuf::from(res_as["path"].as_str().unwrap());
