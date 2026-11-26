@@ -7,6 +7,7 @@ mod fs_ops;
 mod importer;
 mod media_server;
 mod operation_journal;
+mod runtime_ops;
 mod scanner;
 mod security;
 mod trash_ops;
@@ -17,6 +18,7 @@ mod watcher;
 mod testutil;
 
 use commands::*;
+use runtime_ops::{dir_memory_get, eagle_inspect, thumbs_missing, video_preview};
 use tauri::Manager;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -68,7 +70,12 @@ pub fn run() {
             window_maximize,
             window_close,
             window_toggle_always_on_top,
+            set_always_on_top,
             app_version,
+            video_preview,
+            dir_memory_get,
+            thumbs_missing,
+            eagle_inspect,
             open_external,
             get_paths,
             get_all_folders,

@@ -60,8 +60,9 @@ const chrome = spawn(chromePath, [
 let chromeErr = ''
 chrome.stderr.on('data', (d) => { chromeErr += d.toString() })
 
-async function fetchJson(p) {
-  const res = await fetch(`http://127.0.0.1:${debugPort}${p}`)
+async function fetchJson(p, timeout = 3000) {
+  const res = await fetch(`http://127.0.0.1:${debugPort}${p}`, { signal: AbortSignal.timeout(timeout) })
+  if (!res.ok) throw new Error(`CDP HTTP ${res.status}: ${p}`)
   return await res.json()
 }
 async function waitBrowser() {
@@ -75,37 +76,72 @@ function connect(wsUrl) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(wsUrl)
     let seq = 0
+    let settled = false
+    let eventHandler = null
     const pending = new Map()
+    const events = []
+    const failAll = (error) => {
+      for (const p of pending.values()) p.reject(error)
+      pending.clear()
+    }
     ws.onmessage = (ev) => {
       const msg = JSON.parse(ev.data)
-      if (!msg.id) return
+      if (msg.method) {
+        if (eventHandler) eventHandler(msg)
+        else events.push(msg)
+        return
+      }
       const p = pending.get(msg.id)
       if (!p) return
       pending.delete(msg.id)
       if (msg.error) p.reject(new Error(msg.error.message))
       else p.resolve(msg.result)
     }
-    ws.onerror = () => reject(new Error('CDP WebSocket 失败'))
-    ws.onopen = () => resolve({
-      send(method, params = {}) {
-        return new Promise((res, rej) => {
-          const id = ++seq
-          pending.set(id, { resolve: res, reject: rej })
-          ws.send(JSON.stringify({ id, method, params }))
-        })
-      },
-      close() { try { ws.close() } catch { /* 静默 */ } },
-    })
+    ws.onerror = () => {
+      const error = new Error('CDP WebSocket 失败')
+      failAll(error)
+      if (!settled) { settled = true; reject(error) }
+    }
+    ws.onclose = () => {
+      const error = new Error('CDP WebSocket 已关闭')
+      failAll(error)
+      if (!settled) { settled = true; reject(error) }
+    }
+    ws.onopen = () => {
+      settled = true
+      resolve({
+        send(method, params = {}, timeout = 15000) {
+          return new Promise((res, rej) => {
+            const id = ++seq
+            const timer = setTimeout(() => {
+              pending.delete(id)
+              rej(new Error(`CDP 超时: ${method}`))
+            }, timeout)
+            pending.set(id, {
+              resolve: (value) => { clearTimeout(timer); res(value) },
+              reject: (error) => { clearTimeout(timer); rej(error) },
+            })
+            ws.send(JSON.stringify({ id, method, params }))
+          })
+        },
+        onEvent(handler) {
+          eventHandler = handler
+          for (const event of events.splice(0)) handler(event)
+        },
+        close() { try { ws.close() } catch { /* 静默 */ } },
+      })
+    }
   })
 }
 
 let sw = null
+let browser = null
 const results = []
 function ok(name) { results.push(name); console.log('ok', name) }
 
 try {
   const version = await waitBrowser()
-  const browser = await connect(version.webSocketDebuggerUrl)
+  browser = await connect(version.webSocketDebuggerUrl)
   const loaded = await browser.send('Extensions.loadUnpacked', { path: extDir })
   const extId = loaded.id
   assert.ok(extId, '扩展加载成功')
@@ -114,19 +150,40 @@ try {
   /* 打开 popup 唤醒 service worker（安装后 SW 可能尚未启动） */
   const popup = await browser.send('Target.createTarget', { url: `chrome-extension://${extId}/popup.html` })
   let swTarget = null
-  for (let i = 0; i < 50; i++) {
+  const swDeadline = Date.now() + 12000
+  while (Date.now() < swDeadline) {
     const list = await fetchJson('/json/list')
     swTarget = list.find((t) => t.type === 'service_worker' && t.url.includes(extId))
     if (swTarget) break
     await sleep(200)
   }
-  if (!swTarget) throw new Error('service worker 未启动')
+  if (!swTarget) throw new Error('service worker 未在 12 秒内启动')
   sw = await connect(swTarget.webSocketDebuggerUrl)
+  const contexts = new Set()
+  const extensionOrigin = `chrome-extension://${extId}`
+  sw.onEvent((msg) => {
+    if (msg.method !== 'Runtime.executionContextCreated') return
+    const context = msg.params?.context || {}
+    const origin = context.origin || ''
+    const url = context.url || ''
+    if (origin === extensionOrigin || origin.startsWith(`${extensionOrigin}/`) || url.startsWith(`${extensionOrigin}/`)) {
+      contexts.add(context.id)
+    }
+  })
   await sw.send('Runtime.enable')
+  const contextDeadline = Date.now() + 12000
+  while (!contexts.size && Date.now() < contextDeadline) await sleep(100)
+  if (!contexts.size) throw new Error('service worker execution context 未在 12 秒内就绪')
+  const swContextId = contexts.values().next().value
   await browser.send('Target.closeTarget', { targetId: popup.targetId })
 
   async function evalSW(expression) {
-    const r = await sw.send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true })
+    const r = await sw.send('Runtime.evaluate', {
+      expression,
+      awaitPromise: true,
+      returnByValue: true,
+      contextId: swContextId,
+    })
     if (r.exceptionDetails) {
       throw new Error('SW 求值失败：' + (r.exceptionDetails.exception?.description || r.exceptionDetails.text))
     }
@@ -290,6 +347,7 @@ try {
   console.log('\n真实 Chrome 冒烟测试全部通过：', results.length, '项')
 } finally {
   try { sw?.close() } catch { /* 静默 */ }
+  try { browser?.close() } catch { /* 静默 */ }
   try { chrome.kill() } catch { /* 静默 */ }
   try { server.close() } catch { /* 静默 */ }
   await sleep(300)

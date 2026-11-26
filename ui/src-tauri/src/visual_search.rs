@@ -102,12 +102,19 @@ pub struct VisualSearchOpts {
     pub page_size: Option<usize>,
 }
 
+fn normalize_bbox(bbox: &[f64]) -> [f64; 4] {
+    let finite = |value: Option<f64>, default: f64| {
+        value.filter(|value| value.is_finite()).unwrap_or(default)
+    };
+    let bx = finite(bbox.get(0).copied(), 0.0).clamp(0.0, 0.99);
+    let by = finite(bbox.get(1).copied(), 0.0).clamp(0.0, 0.99);
+    let bw = finite(bbox.get(2).copied(), 1.0).clamp(0.01, 1.0 - bx);
+    let bh = finite(bbox.get(3).copied(), 1.0).clamp(0.01, 1.0 - by);
+    [bx, by, bw, bh]
+}
+
 fn prepare_search_jpeg(opts: &VisualSearchOpts, data_dir: &Path) -> Result<Vec<u8>, String> {
-    let bbox = opts.bbox.as_deref().unwrap_or(&[]);
-    let bx = bbox.get(0).copied().unwrap_or(0.0).clamp(0.0, 1.0);
-    let by = bbox.get(1).copied().unwrap_or(0.0).clamp(0.0, 1.0);
-    let bw = bbox.get(2).copied().unwrap_or(1.0).clamp(0.01, 1.0 - bx);
-    let bh = bbox.get(3).copied().unwrap_or(1.0).clamp(0.01, 1.0 - by);
+    let [bx, by, bw, bh] = normalize_bbox(opts.bbox.as_deref().unwrap_or(&[]));
     let is_sub_crop = bx > 0.02 || by > 0.02 || bw < 0.98 || bh < 0.98;
 
     // 1. 本地 JPEG 且无子裁切：直接透传原始文件 Buffer，保留 100% 高频线稿与笔触特征
@@ -683,6 +690,26 @@ mod tests {
         assert!(!bytes.is_empty());
         assert_eq!(bytes[0], 0xFF);
         assert_eq!(bytes[1], 0xD8);
+    }
+
+    #[test]
+    fn test_bbox_is_clamped_without_invalid_crop_ranges() {
+        assert_eq!(normalize_bbox(&[-0.2, 0.5, 0.8, 1.2]), [0.0, 0.5, 0.8, 0.5]);
+        assert_eq!(normalize_bbox(&[1.0, 1.0, 0.0, 0.0]), [0.99, 0.99, 0.01, 0.01]);
+        assert_eq!(normalize_bbox(&[f64::NAN, f64::INFINITY, 0.0, -1.0]), [0.0, 0.0, 0.01, 0.01]);
+    }
+
+    #[test]
+    fn test_pinterest_originals_url_only_replaces_size_segment() {
+        let large = "https://i.pinimg.com/736x/5b/d5/21/5bd52149a48e52b39ea7ca8eddc94c0a.jpg";
+        assert_eq!(
+            to_originals_url(large),
+            "https://i.pinimg.com/originals/5b/d5/21/5bd52149a48e52b39ea7ca8eddc94c0a.jpg"
+        );
+        let already_original = "https://i.pinimg.com/originals/5b/d5/21/photo.jpg";
+        assert_eq!(to_originals_url(already_original), already_original);
+        let no_size = "https://i.pinimg.com/avatars/photo.jpg";
+        assert_eq!(to_originals_url(no_size), no_size);
     }
 }
 

@@ -2,6 +2,12 @@
 // 事件总线不依赖 store（避免循环引用），store 关键动作 emit，插件面板订阅。
 const listeners = new Set()
 
+export const PLUGIN_UNSUPPORTED_ERROR = '当前 Tauri 运行时暂不支持插件宿主'
+
+export function pluginUnsupported(error = PLUGIN_UNSUPPORTED_ERROR) {
+  return { ok: false, unsupported: true, error, plugins: [] }
+}
+
 export function emitPluginEvent(name, payload = {}) {
   for (const fn of [...listeners]) {
     try { fn(name, payload) } catch { /* 单个订阅失败不影响主流程 */ }
@@ -18,7 +24,7 @@ export async function refreshPluginThemes() {
   for (const el of [...document.querySelectorAll('style[data-picnest-plugin]')]) el.remove()
   try {
     const r = await window.picrand?.picnestPluginsList?.()
-    if (!r?.ok) return
+    if (r?.ok !== true) return pluginUnsupported(r?.error || PLUGIN_UNSUPPORTED_ERROR)
     for (const p of r.plugins || []) {
       if (!p.enabled || p.type !== 'theme' || p.error) continue
       const t = await window.picrand.picnestPluginThemeCss(p.id)

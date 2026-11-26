@@ -212,8 +212,14 @@ pub fn window_toggle_always_on_top(window: tauri::Window) -> Result<bool, String
 }
 
 #[tauri::command]
-pub fn app_version() -> String {
-    env!("CARGO_PKG_VERSION").to_string()
+pub fn set_always_on_top(window: tauri::Window, flag: bool) -> Result<bool, String> {
+    window.set_always_on_top(flag).map_err(|e| e.to_string())?;
+    Ok(flag)
+}
+
+#[tauri::command]
+pub fn app_version() -> serde_json::Value {
+    serde_json::json!({ "version": env!("CARGO_PKG_VERSION") })
 }
 
 #[tauri::command]

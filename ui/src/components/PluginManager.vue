@@ -2,7 +2,7 @@
 // 插件库：已安装管理 / 本地文件夹安装 / registry 仓库浏览安装 / renderer 插件沙箱面板
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useLibrary } from '../stores/library'
-import { onPluginEvent, refreshPluginThemes } from '../lib/plugins'
+import { PLUGIN_UNSUPPORTED_ERROR, onPluginEvent, refreshPluginThemes } from '../lib/plugins'
 
 const lib = useLibrary()
 const tab = ref('installed')
@@ -59,10 +59,10 @@ async function toggle(p) {
 }
 
 async function installFolder() {
-  const pick = await window.picrand.picnestPluginPickFolder()
-  if (!pick?.ok || !pick.path) return
   busyId.value = 'install'
   try {
+    const pick = await window.picrand.picnestPluginPickFolder()
+    if (!pick?.ok || !pick.path) throw new Error(pick?.error || PLUGIN_UNSUPPORTED_ERROR)
     const r = await window.picrand.picnestPluginInstallFolder(pick.path)
     if (!r?.ok) throw new Error(r?.error || '安装失败')
     await load()

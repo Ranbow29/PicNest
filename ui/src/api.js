@@ -2,6 +2,11 @@ import { invoke as tauriInvoke } from '@tauri-apps/api/core'
 import { listen as tauriListen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { ref } from 'vue'
+import { pluginUnsupported } from './lib/plugins'
+
+const EAGLE_UNSUPPORTED_ERROR = '当前版本暂不支持导入 Eagle 库 (.library)，请选择普通图片文件夹'
+const THUMB_REPAIR_UNSUPPORTED_ERROR = '当前 Tauri 运行时暂不支持批量修复缩略图，请使用单文件预览重新生成缓存'
+const unsupported = (error) => ({ ok: false, unsupported: true, error })
 
 const isTauri = () => typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)
 const _mediaPort = ref(0)
@@ -84,7 +89,19 @@ if (typeof window !== 'undefined' && isTauri()) {
     }
   }
 
+  const subscribe = (event, cb) => {
+    if (typeof cb !== 'function') return () => {}
+    let unlisten = null
+    let cancelled = false
+    tauriListen(event, (ev) => cb(ev?.payload || {})).then((fn) => {
+      if (cancelled) fn()
+      else unlisten = fn
+    }).catch(() => {})
+    return () => { cancelled = true; if (unlisten) unlisten() }
+  }
+
   window.picrand = new Proxy({
+    diagEvent: async (msg) => await safeInvoke('diag_event', { msg: String(msg) }),
     selectFolders: async () => await safeInvoke('select_folders'),
     picnestViewCounts: async (folderId) => (await safeInvoke('view_counts', { folderId })) || { all: 0, recent: 0, trash: 0, uncategorized: 0 },
     syncFolderSnapshot: async (path) => await safeInvoke('sync_folder_snapshot', { path }),
@@ -93,8 +110,17 @@ if (typeof window !== 'undefined' && isTauri()) {
     picnestRootMetaLoad: async (rootId) => await safeInvoke('root_meta_load', { rootId }),
     picnestRootMetaSave: async (rootId) => await safeInvoke('root_meta_save', { rootId }),
     picnestRootMetaEnsure: async (rootId) => await safeInvoke('root_meta_ensure', { rootId }),
+    picnestDirMemoryGet: async (key) => await safeInvoke('dir_memory_get', { key: key ?? null }),
     picnestDirMemoryRootGet: async (rootId) => (await safeInvoke('dir_memory_root_get', { rootId })) || {},
     picnestDirMemorySet: async (rootId, rel, patch) => await safeInvoke('dir_memory_set', { rootId, rel, patch }),
+    picnestThumbsMissing: async (folderId) => {
+      const result = await safeInvoke('thumbs_missing', { folderId })
+      if (result?.ok && Number.isFinite(Number(result.count))) return { ok: true, count: Math.max(0, Math.trunc(Number(result.count))) }
+      // 调用方把 count=0 当作“无需修复”；检测失败必须走明确的修复失败分支。
+      return { ok: false, count: 1, error: result?.error || '无法检查缺失缩略图' }
+    },
+    picnestRepairThumbs: async () => unsupported(THUMB_REPAIR_UNSUPPORTED_ERROR),
+    picnestRepairThumbsCancel: async () => unsupported(THUMB_REPAIR_UNSUPPORTED_ERROR),
     generateThumbnailsBatch: async (paths) => thumbGate(async () => (await safeInvoke('generate_thumbnails_batch', { paths })) || { results: [] }),
     picnestDisplayThumbs: async (paths) => (await safeInvoke('generate_display_thumbs_batch', { paths })) || { results: [] },
     picnestTrashFolders: async (folderId) => (await safeInvoke('trash_folders', { folderId })) || [],
@@ -216,6 +242,33 @@ if (typeof window !== 'undefined' && isTauri()) {
     picnestBuildPalettesStep: async (folderId, limit) => paletteGate(async () => (await safeInvoke('build_palettes_step', { folderId, limit })) || { ok: true, processed: 0 }),
     picnestGetPalettes: async (paths) => (await safeInvoke('get_palettes', { paths })) || {},
     picnestVideoCompat: async (filePath) => await safeInvoke('video_compat', { filePath }),
+    picnestVideoPreview: async (filePath) => {
+      const result = await safeInvoke('video_preview', { filePath })
+      return result || { ok: false, error: '视频预览调用失败' }
+    },
+    picnestSetAlwaysOnTop: async (flag) => !!(await safeInvoke('set_always_on_top', { flag: !!flag })),
+    picnestEagleInspect: async (path) => {
+      const result = await safeInvoke('eagle_inspect', { path })
+      // SideBar 在 null/异常时会继续扫描；检测故障必须 fail-closed。
+      if (typeof result?.eagle === 'boolean' && typeof result?.ok === 'boolean') return result
+      return { eagle: true, ok: false, error: 'Eagle 库检测失败，已停止按普通文件夹扫描' }
+    },
+    picnestEagleCopy: async () => unsupported(EAGLE_UNSUPPORTED_ERROR),
+    picnestEagleFinish: async () => unsupported(EAGLE_UNSUPPORTED_ERROR),
+    picnestEagleCancel: async () => unsupported(EAGLE_UNSUPPORTED_ERROR),
+    picnestPluginsList: async () => pluginUnsupported(),
+    picnestPluginThemeCss: async () => pluginUnsupported(),
+    picnestPluginSetEnabled: async () => pluginUnsupported(),
+    picnestPluginPickFolder: async () => pluginUnsupported(),
+    picnestPluginInstallFolder: async () => pluginUnsupported(),
+    picnestPluginUninstall: async () => pluginUnsupported(),
+    picnestPluginRegistryFetch: async () => pluginUnsupported(),
+    picnestPluginInstallRegistry: async () => pluginUnsupported(),
+    picnestPluginEntryHtml: async () => pluginUnsupported(),
+    picnestPluginQueryImages: async () => pluginUnsupported(),
+    picnestPluginStorageGet: async () => pluginUnsupported(),
+    picnestPluginStorageSet: async () => pluginUnsupported(),
+    picnestPluginFetch: async () => pluginUnsupported(),
     picnestRemoveRoot: (folderId) => tauriInvoke('remove_root', { folderId }),
     picnestApplyTransform: (filePath, opts) => tauriInvoke('apply_transform', { filePath, opts }),
     picnestCrop: (filePath, opts) => tauriInvoke('crop_image', { filePath, opts }),
@@ -282,13 +335,26 @@ if (typeof window !== 'undefined' && isTauri()) {
       }).catch(() => {})
       return () => { cancelled = true; if (unlisten) unlisten() }
     },
+    onDbSync: (cb) => subscribe('sync-db', cb),
+    onPicnestDupProgress: (cb) => subscribe('picnest-dup-progress', cb),
+    onPicnestSeed: () => () => {},
+    onPicnestEagleProgress: () => () => {},
+    onPicnestThumbRepairProgress: () => () => {},
+    onPicnestStripPrefixProgress: () => () => {},
+    onConfirmClose: () => () => {},
+    onConfirmOversize: () => () => {},
+    respondCloseConfirm: async () => true,
+    respondOversizeConfirm: async () => true,
+    picnestRmSeed: async () => unsupported('当前 Tauri 运行时没有种子导入通道'),
+    picnestThemeGet: async () => unsupported('主题由当前 WebView 的本地存储维护'),
+    picnestThemeSet: async () => unsupported('主题由当前 WebView 的本地存储维护'),
     windowIsAlwaysOnTop: async () => !!(await safeInvoke('window_is_always_on_top')),
     picnestCollectGetToken: async () => await safeInvoke('collect_get_token'),
     picnestCollectResetToken: async () => await safeInvoke('collect_reset_token'),
     picnestCollectSetRoot: async (rootId) => await safeInvoke('collect_set_root', { rootId }),
     openWithDefault: async (p) => await safeInvoke('open_external', { url: p }),
     getFilePath: (f) => (typeof f?.path === 'string' && f.path ? f.path : null),
-    picnestAppVersion: async () => '1.0.1',
+    picnestAppVersion: async () => await safeInvoke('app_version'),
   }, {
     get(target, prop) {
       if (prop in target) return target[prop]
@@ -313,6 +379,8 @@ const invoke = async (name, ...args) => {
         return await tauriInvoke('add_folder_by_path', { path: args[0] })
       case 'syncFolderSnapshot':
         return await tauriInvoke('sync_folder_snapshot', { path: args[0] })
+      case 'startWatcher':
+        return { ok: true, automatic: true }
       case 'windowMinimize':
         return await tauriInvoke('window_minimize')
       case 'windowMaximize':
@@ -367,6 +435,14 @@ const invoke = async (name, ...args) => {
         return await tauriInvoke('mkdir', { parentPath: args[0], name: args[1] })
       case 'picnestAppVersion':
         return await tauriInvoke('app_version')
+      case 'picnestDirMemoryGet':
+        return await tauriInvoke('dir_memory_get', { key: args[0] ?? null })
+      case 'picnestThumbsMissing':
+        return await tauriInvoke('thumbs_missing', { folderId: args[0] })
+      case 'picnestEagleInspect':
+        return await tauriInvoke('eagle_inspect', { path: args[0] })
+      case 'picnestSetAlwaysOnTop':
+        return await tauriInvoke('set_always_on_top', { flag: !!args[0] })
       case 'picnestOpenExternal':
         return await tauriInvoke('open_external', { url: args[0] })
       /* 自动更新：Rust 侧 updater.rs，对齐旧版 argon 的 GitHub Releases 流程 */
@@ -410,6 +486,8 @@ const invoke = async (name, ...args) => {
         return await tauriInvoke('images_reorder', { folderId: args[0], dirRel: args[1] ?? '', orderedPaths: args[2] })
       case 'picnestPsdPreview':
         return await tauriInvoke('psd_preview', { filePath: args[0] })
+      case 'picnestVideoPreview':
+        return await tauriInvoke('video_preview', { filePath: args[0] })
       case 'picnestViewPreview':
         return await tauriInvoke('view_preview', { filePath: args[0] })
       case 'picnestDirOrderGet':
@@ -604,6 +682,7 @@ export const api = {
   trashPurgeAll: (folderId) => invoke('picnestTrashPurgeAll', folderId),
   renameLibrary: (id, name, opts) => invoke('picnestRenameLibrary', id, name, opts),
   renameDir: (oldPath, newName, oldRel, parentRel) => invoke('picnestRenameDir', oldPath, newName, oldRel, parentRel),
+  dirOrderSet: (folderId, parentKey, names) => invoke('picnestDirOrderSet', folderId, parentKey, names),
   dirSort: (parentRel, parentAbsPath, mode) => invoke('picnestDirSort', parentRel, parentAbsPath, mode),
   dirSortRecursive: (rootAbsPath, rootRel, mode) => invoke('picnestDirSortRecursive', rootAbsPath, rootRel, mode),
   exportDir: (dirPath, stripPrefix) => invoke('picnestExportDir', dirPath, !!stripPrefix),

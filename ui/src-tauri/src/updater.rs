@@ -25,6 +25,7 @@ const FALLBACK_HTML: &str = "https://github.com/Ranbow29/PicNest/releases";
 static UPDATE_CANCEL: AtomicBool = AtomicBool::new(false);
 /// 当前 curl 子进程 PID，取消时直接杀掉，避免等它自己超时
 static UPDATE_PID: AtomicU32 = AtomicU32::new(0);
+static UPDATE_PROBE_SEQ: AtomicU32 = AtomicU32::new(0);
 
 pub fn current_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
@@ -87,7 +88,7 @@ fn extract_sha256(release: &Value, asset: Option<&Value>) -> Option<String> {
         if let Some(d) = a.get("digest").and_then(|v| v.as_str()) {
             let low = d.to_lowercase();
             if low.starts_with("sha256:") {
-                let hex = d[7..].trim();
+                let hex = d.get(7..).unwrap_or("").trim();
                 if hex.len() == 64 && hex.chars().all(|c| c.is_ascii_hexdigit()) {
                     return Some(hex.to_uppercase());
                 }
@@ -106,8 +107,9 @@ fn extract_sha256(release: &Value, asset: Option<&Value>) -> Option<String> {
 /// 用 curl 拉一段 JSON（GitHub API 在国内基本必须走代理）。
 /// 代理节点偶尔会握手失败（schannel 35），所以带一次重试。
 fn curl_json(url: &str, timeout_secs: u64) -> Result<Value, String> {
+    let seq = UPDATE_PROBE_SEQ.fetch_add(1, Ordering::SeqCst);
     let tmp = std::env::temp_dir().join(format!(
-        "picnest_update_probe_{}.json",
+        "picnest_update_probe_{}_{seq}.json",
         std::process::id()
     ));
     let mut last_err = String::from("网络请求失败");
@@ -123,21 +125,22 @@ fn curl_json(url: &str, timeout_secs: u64) -> Result<Value, String> {
             const CREATE_NO_WINDOW: u32 = 0x08000000;
             cmd.creation_flags(CREATE_NO_WINDOW);
         }
-        cmd.arg("-s")
-            .arg("-S")
-            .arg("-L")
-            .arg("--max-time")
+        cmd.args(["--fail", "-s", "-S", "-L", "--max-time"])
             .arg(timeout_secs.to_string())
             .arg("--connect-timeout")
-            .arg("15")
-            .arg("-H")
-            .arg("Accept: application/vnd.github.v3+json")
-            .arg("-A")
-            .arg(format!("PicNest-Desktop-App/{}", current_version()));
-        if let Some(p) = detect_proxy() {
+            .arg("15");
+        if is_loopback_url(url) {
+            cmd.args(["--noproxy", "127.0.0.1,localhost"]);
+        } else if let Some(p) = detect_proxy() {
             cmd.arg("--proxy").arg(p);
         }
-        cmd.arg("-o").arg(&tmp).arg(url);
+        cmd.arg("-H")
+            .arg("Accept: application/vnd.github.v3+json")
+            .arg("-A")
+            .arg(format!("PicNest-Desktop-App/{}", current_version()))
+            .arg("-o")
+            .arg(&tmp)
+            .arg(url);
 
         let out = cmd
             .output()
@@ -152,7 +155,7 @@ fn curl_json(url: &str, timeout_secs: u64) -> Result<Value, String> {
             let _ = fs::remove_file(&tmp);
             continue;
         }
-        let bytes = fs::read(&tmp).unwrap_or_default();
+        let bytes = fs::read(&tmp).map_err(|e| format!("读取更新信息失败: {}", e))?;
         let _ = fs::remove_file(&tmp);
         if bytes.is_empty() {
             last_err = "服务器返回空响应".to_string();
@@ -436,6 +439,57 @@ impl Sha256 {
     }
 }
 
+fn is_loopback_url(url: &str) -> bool {
+    let rest = url
+        .strip_prefix("http://")
+        .or_else(|| url.strip_prefix("https://"));
+    let Some(rest) = rest else {
+        return false;
+    };
+    let authority = rest.split('/').next().unwrap_or("");
+    let host = authority.rsplit('@').next().unwrap_or(authority);
+    let host = host.split(':').next().unwrap_or(host);
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .map(|ip| ip.is_loopback())
+            .unwrap_or(false)
+}
+
+fn safe_download_name(file_name: Option<&str>) -> String {
+    let raw = file_name.unwrap_or("PicNest-update.zip").trim();
+    let sanitized = raw
+        .chars()
+        .map(|c| match c {
+            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' | '\0' => '_',
+            c if c.is_control() => '_',
+            _ => c,
+        })
+        .collect::<String>()
+        .trim_matches(['.', ' '])
+        .to_string();
+    if sanitized.is_empty() {
+        "PicNest-update.zip".to_string()
+    } else {
+        sanitized
+    }
+}
+
+fn unique_target_path(dir: &Path, file_name: &str) -> PathBuf {
+    let target = dir.join(file_name);
+    if !target.exists() {
+        return target;
+    }
+    let source = Path::new(file_name);
+    let stem = source.file_stem().and_then(|s| s.to_str()).unwrap_or("PicNest-update");
+    let ext = source.extension().and_then(|s| s.to_str()).unwrap_or("zip");
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    dir.join(format!("{stem}-{stamp}.{ext}"))
+}
+
 /// 下载更新包（同步实现）。返回 { ok, filePath, sha256, verified }。
 /// 边下边算 SHA256，每约 200ms 发一次 `picnest-update-progress` 事件。
 pub fn do_download_update(
@@ -446,26 +500,39 @@ pub fn do_download_update(
 ) -> Value {
     use tauri::Emitter;
 
+    let dir = std::env::temp_dir().join("picnest-update");
+    do_download_update_in_dir(&dir, url, file_name, expected_sha, |event, payload| {
+        let _ = app.emit(event, payload);
+    })
+}
+
+fn do_download_update_in_dir(
+    dir: &Path,
+    url: &str,
+    file_name: Option<&str>,
+    expected_sha: Option<&str>,
+    mut emit: impl FnMut(&str, Value),
+) -> Value {
     if url.trim().is_empty() {
         return json!({ "ok": false, "error": "下载地址为空" });
     }
+    let expected_sha = match expected_sha.map(str::trim) {
+        Some(sha) if sha.len() == 64 && sha.chars().all(|c| c.is_ascii_hexdigit()) => sha,
+        Some(_) => return json!({ "ok": false, "error": "SHA256 必须是 64 位十六进制字符串" }),
+        None => "",
+    };
     UPDATE_CANCEL.store(false, Ordering::SeqCst);
 
-    let dir = std::env::temp_dir().join("picnest-update");
-    if let Err(e) = fs::create_dir_all(&dir) {
+    if let Err(e) = fs::create_dir_all(dir) {
         return json!({ "ok": false, "error": format!("创建下载目录失败: {}", e) });
     }
-    let safe_name = file_name
-        .unwrap_or("PicNest-update.zip")
-        .chars()
-        .map(|c| match c {
-            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '_',
-            _ => c,
-        })
-        .collect::<String>();
-    let target: PathBuf = dir.join(&safe_name);
-    let part: PathBuf = dir.join(format!("{}.part", safe_name));
-    let _ = fs::remove_file(&part);
+    let safe_name = safe_download_name(file_name);
+    let target = unique_target_path(dir, &safe_name);
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let part = dir.join(format!(".picnest-part-{}-{stamp}.tmp", std::process::id()));
 
     let mut cmd = Command::new("curl.exe");
     #[cfg(windows)]
@@ -474,19 +541,15 @@ pub fn do_download_update(
         const CREATE_NO_WINDOW: u32 = 0x08000000;
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
-    cmd.arg("-s")
-        .arg("-S")
-        .arg("-L")
-        .arg("--max-time")
-        .arg("1800")
-        .arg("--connect-timeout")
-        .arg("20")
-        .arg("-A")
-        .arg(format!("PicNest-Desktop-App/{}", current_version()));
-    if let Some(p) = detect_proxy() {
+    cmd.args(["--fail", "-s", "-S", "-L", "--max-time", "1800", "--connect-timeout", "20"]);
+    if is_loopback_url(url) {
+        cmd.args(["--noproxy", "127.0.0.1,localhost"]);
+    } else if let Some(p) = detect_proxy() {
         cmd.arg("--proxy").arg(p);
     }
-    cmd.arg("-o")
+    cmd.arg("-A")
+        .arg(format!("PicNest-Desktop-App/{}", current_version()))
+        .arg("-o")
         .arg(&part)
         .arg(url)
         .stdout(Stdio::null())
@@ -498,44 +561,68 @@ pub fn do_download_update(
     };
     UPDATE_PID.store(child.id(), Ordering::SeqCst);
 
-    // 轮询文件增长发进度（curl 本身不吐进度到 stderr 的时候也能用）
     let started = std::time::Instant::now();
     let mut last_len: u64 = 0;
     let mut last_tick = std::time::Instant::now();
-    let mut cancelled = false;
+    let mut stopped = None::<String>;
     loop {
         if UPDATE_CANCEL.load(Ordering::SeqCst) {
             let _ = child.kill();
-            cancelled = true;
+            stopped = Some("cancelled".to_string());
             break;
         }
         match child.try_wait() {
             Ok(Some(_)) => break,
             Ok(None) => {}
-            Err(_) => break,
+            Err(error) => {
+                let _ = child.kill();
+                stopped = Some(format!("查询下载进程失败: {error}"));
+                break;
+            }
         }
         std::thread::sleep(std::time::Duration::from_millis(120));
         if last_tick.elapsed() >= std::time::Duration::from_millis(200) {
             let len = fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
             let elapsed = last_tick.elapsed().as_secs_f64().max(0.001);
             let speed = ((len.saturating_sub(last_len)) as f64 / elapsed) as u64;
-            let _ = app.emit(
-                "picnest-update-progress",
-                json!({ "received": len, "speed": speed }),
-            );
+            emit("picnest-update-progress", json!({ "received": len, "speed": speed }));
             last_len = len;
             last_tick = std::time::Instant::now();
         }
         if started.elapsed().as_secs() > 1800 {
             let _ = child.kill();
+            stopped = Some("下载超时".to_string());
             break;
         }
     }
     UPDATE_PID.store(0, Ordering::SeqCst);
 
-    if cancelled {
+    let status = child.wait();
+    let stderr = child.stderr.take().map(|mut output| {
+        let mut text = String::new();
+        let _ = output.read_to_string(&mut text);
+        text
+    }).unwrap_or_default();
+    if stopped.as_deref() == Some("cancelled") {
         let _ = fs::remove_file(&part);
         return json!({ "ok": false, "cancelled": true, "error": "已取消下载" });
+    }
+    if let Some(error) = stopped {
+        let _ = fs::remove_file(&part);
+        return json!({ "ok": false, "error": error });
+    }
+    if !status.as_ref().map(|status| status.success()).unwrap_or(false) {
+        let _ = fs::remove_file(&part);
+        let detail = stderr.trim();
+        let code = status.as_ref().ok().and_then(|status| status.code());
+        return json!({
+            "ok": false,
+            "error": if detail.is_empty() {
+                format!("下载失败（curl 退出码 {code:?}）")
+            } else {
+                format!("下载失败：{detail}")
+            }
+        });
     }
 
     let total = fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
@@ -543,56 +630,42 @@ pub fn do_download_update(
         let _ = fs::remove_file(&part);
         return json!({ "ok": false, "error": "下载失败：没有得到任何数据（网络或代理问题）" });
     }
-    let _ = app.emit(
-        "picnest-update-progress",
-        json!({ "received": total, "speed": 0 }),
-    );
+    emit("picnest-update-progress", json!({ "received": total, "speed": 0 }));
 
-    // 校验 SHA256
     let mut verified = None::<bool>;
-    if let Some(expect) = expected_sha.filter(|s| s.len() == 64) {
+    if !expected_sha.is_empty() {
         let mut hasher = Sha256::new();
-        let mut ok_read = true;
-        match fs::File::open(&part) {
-            Ok(mut f) => {
-                let mut buf = vec![0u8; 64 * 1024];
-                loop {
-                    match f.read(&mut buf) {
-                        Ok(0) => break,
-                        Ok(n) => hasher.update(&buf[..n]),
-                        Err(_) => {
-                            ok_read = false;
-                            break;
-                        }
-                    }
-                }
+        let read_result = (|| -> Result<(), String> {
+            let mut file = fs::File::open(&part).map_err(|e| format!("读取下载文件失败: {e}"))?;
+            let mut buf = vec![0u8; 64 * 1024];
+            loop {
+                let n = file.read(&mut buf).map_err(|e| format!("读取下载文件失败: {e}"))?;
+                if n == 0 { break; }
+                hasher.update(&buf[..n]);
             }
-            Err(_) => ok_read = false,
+            Ok(())
+        })();
+        if let Err(error) = read_result {
+            let _ = fs::remove_file(&part);
+            return json!({ "ok": false, "error": error });
         }
-        if ok_read {
-            let got = hasher.finish();
-            let same = got.eq_ignore_ascii_case(expect);
-            verified = Some(same);
-            if !same {
-                let _ = fs::remove_file(&part);
-                return json!({
-                    "ok": false,
-                    "error": format!("校验失败：下载文件 SHA256 不匹配（期望 {}，实际 {}）", expect, got)
-                });
-            }
+        let got = hasher.finish();
+        if !got.eq_ignore_ascii_case(expected_sha) {
+            let _ = fs::remove_file(&part);
+            return json!({
+                "ok": false,
+                "error": format!("校验失败：下载文件 SHA256 不匹配（期望 {}，实际 {}）", expected_sha, got)
+            });
         }
+        verified = Some(true);
     }
 
     if let Err(e) = fs::rename(&part, &target) {
-        // 目标已存在时先删再换
-        let _ = fs::remove_file(&target);
-        if let Err(e2) = fs::rename(&part, &target) {
-            let _ = fs::remove_file(&part);
-            return json!({ "ok": false, "error": format!("保存文件失败: {} / {}", e, e2) });
-        }
+        let _ = fs::remove_file(&part);
+        return json!({ "ok": false, "error": format!("保存文件失败: {}", e) });
     }
 
-    let _ = app.emit(
+    emit(
         "picnest-update-status",
         json!({ "stage": "done", "path": target.to_string_lossy() }),
     );
@@ -1194,6 +1267,220 @@ mod tests {
             json!("8A9968F598BF033D0F03204779D14FF25D607FF3D2CC5E03559D421286FAA939")
         );
         let _ = fs::remove_dir_all(&base);
+    }
+
+    static DOWNLOAD_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    struct MockServer {
+        base_url: String,
+        stop: std::sync::Arc<AtomicBool>,
+        thread: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl MockServer {
+        fn new(status: u16, body: &[u8]) -> Self {
+            use std::io::{Read, Write};
+            use std::net::TcpListener;
+            use std::sync::Arc;
+            use std::time::Duration;
+
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let stop = Arc::new(AtomicBool::new(false));
+            let server_stop = stop.clone();
+            let reason = match status {
+                200 => "OK",
+                404 => "Not Found",
+                _ => "Error",
+            };
+            let body = body.to_vec();
+            let thread = std::thread::spawn(move || {
+                while !server_stop.load(Ordering::SeqCst) {
+                    match listener.accept() {
+                        Ok((mut stream, _)) => {
+                            stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+                            stream.set_write_timeout(Some(Duration::from_secs(2))).unwrap();
+                            let mut request = Vec::new();
+                            let mut buf = [0u8; 1024];
+                            while request.len() < 16_384 {
+                                match stream.read(&mut buf) {
+                                    Ok(0) => break,
+                                    Ok(n) => {
+                                        request.extend_from_slice(&buf[..n]);
+                                        if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                                            break;
+                                        }
+                                    }
+                                    Err(_) => break,
+                                }
+                            }
+                            let headers = format!(
+                                "HTTP/1.1 {status} {reason}\r\nContent-Length: {}\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n",
+                                body.len()
+                            );
+                            let _ = stream.write_all(headers.as_bytes());
+                            let _ = stream.write_all(&body);
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                        Err(_) => break,
+                    }
+                }
+            });
+            Self {
+                base_url: format!("http://127.0.0.1:{port}"),
+                stop,
+                thread: Some(thread),
+            }
+        }
+    }
+
+    impl Drop for MockServer {
+        fn drop(&mut self) {
+            self.stop.store(true, Ordering::SeqCst);
+            if let Some(thread) = self.thread.take() {
+                let _ = thread.join();
+            }
+        }
+    }
+
+    #[test]
+    fn download_update_local_http_verifies_sha_and_emits_done() {
+        let _guard = DOWNLOAD_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = crate::testutil::TempDir::new("picnest_updater_download_ok");
+        let body = b"synthetic update zip with enough bytes for hashing";
+        let server = MockServer::new(200, body);
+        let mut events = Vec::new();
+        let result = do_download_update_in_dir(
+            tmp.path(),
+            &format!("{}/update.zip", server.base_url),
+            Some("update.zip"),
+            Some(&sha_hex(body)),
+            |event, payload| events.push((event.to_string(), payload)),
+        );
+        assert_eq!(result["ok"], json!(true), "{result}");
+        assert_eq!(result["verified"], json!(true));
+        assert_eq!(result["size"], json!(body.len()));
+        let downloaded = PathBuf::from(result["filePath"].as_str().unwrap());
+        assert_eq!(fs::read(&downloaded).unwrap(), body);
+        assert!(events.iter().any(|(event, payload)| {
+            event == "picnest-update-status" && payload["stage"] == "done"
+        }));
+        assert!(!fs::read_dir(tmp.path())
+            .unwrap()
+            .flatten()
+            .any(|entry| entry.file_name().to_string_lossy().starts_with(".picnest-part-")));
+    }
+
+    #[test]
+    fn download_update_rejects_bad_sha_without_publishing_file() {
+        let _guard = DOWNLOAD_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = crate::testutil::TempDir::new("picnest_updater_download_bad_sha");
+        let server = MockServer::new(200, b"downloaded bytes");
+        let result = do_download_update_in_dir(
+            tmp.path(),
+            &format!("{}/update.zip", server.base_url),
+            Some("update.zip"),
+            Some(&"0".repeat(64)),
+            |_, _| {},
+        );
+        assert_eq!(result["ok"], json!(false));
+        assert!(result["error"].as_str().unwrap().contains("SHA256 不匹配"));
+        assert_eq!(fs::read_dir(tmp.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn download_update_rejects_http_error_and_empty_body() {
+        let _guard = DOWNLOAD_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let missing_dir = crate::testutil::TempDir::new("picnest_updater_download_404");
+        let missing = MockServer::new(404, b"missing");
+        let result = do_download_update_in_dir(
+            missing_dir.path(),
+            &format!("{}/missing.zip", missing.base_url),
+            Some("missing.zip"),
+            None,
+            |_, _| {},
+        );
+        assert_eq!(result["ok"], json!(false));
+        assert!(result["error"].as_str().unwrap().contains("404"), "{result}");
+        assert_eq!(fs::read_dir(missing_dir.path()).unwrap().count(), 0);
+
+        let empty_dir = crate::testutil::TempDir::new("picnest_updater_download_empty");
+        let empty = MockServer::new(200, b"");
+        let result = do_download_update_in_dir(
+            empty_dir.path(),
+            &format!("{}/empty.zip", empty.base_url),
+            Some("empty.zip"),
+            None,
+            |_, _| {},
+        );
+        assert_eq!(result["ok"], json!(false));
+        assert!(result["error"].as_str().unwrap().contains("没有得到任何数据"), "{result}");
+        assert_eq!(fs::read_dir(empty_dir.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn download_update_rejects_invalid_sha_before_network_access() {
+        let _guard = DOWNLOAD_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = crate::testutil::TempDir::new("picnest_updater_download_invalid_sha");
+        let result = do_download_update_in_dir(
+            tmp.path(),
+            "http://127.0.0.1:1/update.zip",
+            Some("update.zip"),
+            Some("not-a-sha"),
+            |_, _| {},
+        );
+        assert_eq!(result["ok"], json!(false));
+        assert!(result["error"].as_str().unwrap().contains("64 位十六进制"));
+        assert_eq!(fs::read_dir(tmp.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn download_name_is_sanitized_and_existing_target_is_preserved() {
+        assert_eq!(safe_download_name(Some("../bad\\name:*.zip")), "_bad_name__.zip");
+        assert_eq!(safe_download_name(Some(" .. ")), "PicNest-update.zip");
+        assert_eq!(safe_download_name(None), "PicNest-update.zip");
+
+        let _guard = DOWNLOAD_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = crate::testutil::TempDir::new("picnest_updater_download_existing");
+        let existing = tmp.join("update.zip");
+        fs::write(&existing, b"previous download").unwrap();
+        let server = MockServer::new(200, b"new download");
+        let result = do_download_update_in_dir(
+            tmp.path(),
+            &format!("{}/update.zip", server.base_url),
+            Some("update.zip"),
+            None,
+            |_, _| {},
+        );
+        assert_eq!(result["ok"], json!(true), "{result}");
+        assert_eq!(fs::read(&existing).unwrap(), b"previous download");
+        assert_ne!(PathBuf::from(result["filePath"].as_str().unwrap()), existing);
+    }
+
+    #[test]
+    fn check_update_uses_local_http_payload_without_proxy() {
+        let tmp = crate::testutil::TempDir::new("picnest_updater_check_http");
+        let payload = json!({
+            "tag_name": "9.9.9",
+            "name": "PicNest v9.9.9",
+            "html_url": "https://example.com/release",
+            "published_at": "2026-01-01T00:00:00Z",
+            "body": "",
+            "assets": [{
+                "name": "PicNest-v9.9.9-windows-x64.zip",
+                "size": 1024,
+                "browser_download_url": "https://example.com/update.zip"
+            }]
+        });
+        let server = MockServer::new(200, serde_json::to_vec(&payload).unwrap().as_slice());
+        let result = do_check_update(Some(&format!("{}/release.json", server.base_url)));
+        assert_eq!(result["ok"], json!(true), "{result}");
+        assert_eq!(result["latestVersion"], json!("9.9.9"));
+        assert_eq!(result["assetName"], json!("PicNest-v9.9.9-windows-x64.zip"));
+        assert!(tmp.path().is_dir());
     }
 
     /// 真实联网检查（默认跳过）：`cargo test -- --ignored live_check_update`
