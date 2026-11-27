@@ -13,7 +13,8 @@ import ConfirmDialog from './components/ConfirmDialog.vue'
 import TrashMenu from './components/TrashMenu.vue'
 import ImportResultCard from './components/ImportResultCard.vue'
 import TaskProgress from './components/TaskProgress.vue'
-import { api } from './api.js'
+import { api, onCaptureEvents } from './api.js'
+import { playRestoreSound } from './lib/soundFx'
 import { refreshPluginThemes } from './lib/plugins'
 import ResizeHandle from './components/ResizeHandle.vue'
 import InspResize from './components/InspResize.vue'
@@ -71,6 +72,7 @@ const inspEffH = computed(() => {
   return Math.min(h, max)
 })
 let browseRO = null
+let unlistenCapture = null
 /* 复制/粘贴快捷键（输入框内保留原生行为；有文本选择时让浏览器复制文本） */
 function isTypingTarget(el) {
   if (!el) return false
@@ -183,6 +185,34 @@ onMounted(() => {
   /* 主进程把拖拽升级为原生文件拖出后，标记开始；结束后延迟清标记 */
   window.picrand?.onPicnestDragOutStart?.(() => markNativeDragOut())
   window.picrand?.onPicnestDragOutEnd?.(() => setTimeout(endNativeDragOut, 500))
+  /* 截图完成 / 入库事件回流 */
+  onCaptureEvents(
+    (payload) => {
+      if (lib.soundFx) playRestoreSound()
+      if (payload?.action === 'copy') lib.showNote('截图已复制到剪贴板 ✓')
+      else if (payload?.action === 'save_as') lib.showNote('截图已另存为图片 ✓')
+      else if (payload?.action === 'pin') lib.showNote('已钉在桌面参考 ✓（滚轮缩放 · Alt+滚轮透明 · T 穿透描图）')
+      else if (payload?.action === 'pin_through' && payload?.count > 0) {
+        lib.showNote(payload.enabled ? '贴图已开启鼠标穿透（按 Alt+Shift+P 或托盘解除）' : '已解除贴图鼠标穿透 ✓')
+      }
+    },
+    async (payload) => {
+      if (lib.soundFx) playRestoreSound()
+      await lib.refreshTree()
+      await lib.loadImages()
+      if (payload?.path) {
+        const hit = lib.images.find((i) => i.file_path === payload.path)
+        if (hit) {
+          lib.selectedPath = hit.file_path
+          lib.selectedPaths = [hit.file_path]
+        }
+      }
+      lib.showNote('截图已入库 PicNest ✓')
+    },
+    (payload) => {
+      lib.showNote(`截图启动失败：${payload?.error || '未知错误'}`, [], 'error')
+    },
+  ).then((fn) => { unlistenCapture = fn }).catch(() => {})
   /* 窗口尺寸变化 → 详情固定高度的显示上限跟着走（grip 与浮岛共用 --insp-h） */
   try {
     browseRO = new ResizeObserver((entries) => {
@@ -205,6 +235,7 @@ onBeforeUnmount(() => {
   if (silentUpdateTimer) clearTimeout(silentUpdateTimer)
   window.removeEventListener('picnest-check-update-trigger', checkForUpdatesManual)
   browseRO?.disconnect()
+  if (typeof unlistenCapture === 'function') unlistenCapture()
 })
 
 function isExternal(e) {

@@ -493,6 +493,70 @@ fn serve_request(
         }
         return stream.write_all(body.as_bytes()).is_ok() && keep_alive;
     }
+    if let Some(rest) = path_part.strip_prefix("/capture/") {
+        let segs: Vec<&str> = rest.split('/').collect();
+        if segs.len() != 3 || nonce.is_empty() || !crate::security::constant_time_eq(segs[0], nonce) {
+            let _ = stream.write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            return false;
+        }
+        let session_id = segs[1].parse::<u64>().ok();
+        let mon_idx = segs[2].strip_suffix(".bmp").and_then(|s| s.parse::<usize>().ok());
+        let bmp = match (session_id, mon_idx) {
+            (Some(sid), Some(midx)) => crate::capture::get_monitor_bmp(sid, midx),
+            _ => None,
+        };
+        let Some(bytes) = bmp else {
+            let hdr = format!(
+                "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nAccess-Control-Allow-Origin: {}\r\nVary: Origin\r\n{}\r\n",
+                cors_origin, conn_hdr
+            );
+            let _ = stream.write_all(hdr.as_bytes());
+            return keep_alive;
+        };
+        let hdr = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: image/bmp\r\nContent-Length: {}\r\nCache-Control: no-store\r\nAccess-Control-Allow-Origin: {}\r\nVary: Origin\r\n{}\r\n",
+            bytes.len(),
+            cors_origin,
+            conn_hdr
+        );
+        if stream.write_all(hdr.as_bytes()).is_err() {
+            return false;
+        }
+        if method == "HEAD" {
+            return keep_alive;
+        }
+        return stream.write_all(&bytes).is_ok() && keep_alive;
+    }
+    if let Some(rest) = path_part.strip_prefix("/pin/") {
+        let segs: Vec<&str> = rest.split('/').collect();
+        if segs.len() != 2 || nonce.is_empty() || !crate::security::constant_time_eq(segs[0], nonce) {
+            let _ = stream.write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            return false;
+        }
+        let pin_id = segs[1].strip_suffix(".png").and_then(|s| s.parse::<u64>().ok());
+        let png = pin_id.and_then(crate::capture::get_pin_png);
+        let Some(bytes) = png else {
+            let hdr = format!(
+                "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nAccess-Control-Allow-Origin: {}\r\nVary: Origin\r\n{}\r\n",
+                cors_origin, conn_hdr
+            );
+            let _ = stream.write_all(hdr.as_bytes());
+            return keep_alive;
+        };
+        let hdr = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\nCache-Control: no-store\r\nAccess-Control-Allow-Origin: {}\r\nVary: Origin\r\n{}\r\n",
+            bytes.len(),
+            cors_origin,
+            conn_hdr
+        );
+        if stream.write_all(hdr.as_bytes()).is_err() {
+            return false;
+        }
+        if method == "HEAD" {
+            return keep_alive;
+        }
+        return stream.write_all(&bytes).is_ok() && keep_alive;
+    }
     let file_path_str = path_part
         .strip_prefix("/m/")
         .and_then(|rest| rest.split_once('/'))

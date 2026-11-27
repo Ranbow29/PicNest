@@ -78,10 +78,77 @@ const panelOpen = ref(false)
 const settingsOpen = ref(false)
 const collectToken = ref('')
 const copyTokenText = ref('复制密钥')
+const captureHotkey = ref('Alt+Q')
+const throughHotkey = ref('Alt+Shift+P')
+const recordingTarget = ref('')
+const hotkeyFeedback = ref('')
+const hotkeyError = ref(false)
+const throughFeedback = ref('')
+const throughError = ref(false)
+let hotkeyFeedbackTimer = 0
+let throughFeedbackTimer = 0
 const collectTokenDesc = computed(() => {
   if (!collectToken.value) return '用于授权浏览器采集插件安全配对'
   return collectToken.value.slice(0, 6) + '••••••••' + collectToken.value.slice(-6)
 })
+async function loadHotkeys() {
+  try {
+    const res = await api.captureGetHotkey?.()
+    if (res?.ok && res.hotkey) captureHotkey.value = res.hotkey
+  } catch {}
+  try {
+    const res = await api.pinGetThroughHotkey?.()
+    if (res?.ok && res.hotkey) throughHotkey.value = res.hotkey
+  } catch {}
+}
+function setNoticeFor(target, msg, isErr = false) {
+  if (target === 'through') {
+    throughFeedback.value = msg
+    throughError.value = isErr
+    if (throughFeedbackTimer) clearTimeout(throughFeedbackTimer)
+    throughFeedbackTimer = setTimeout(() => {
+      throughFeedback.value = ''
+      throughError.value = false
+    }, isErr ? 3200 : 2000)
+    return
+  }
+  hotkeyFeedback.value = msg
+  hotkeyError.value = isErr
+  if (hotkeyFeedbackTimer) clearTimeout(hotkeyFeedbackTimer)
+  hotkeyFeedbackTimer = setTimeout(() => {
+    hotkeyFeedback.value = ''
+    hotkeyError.value = false
+  }, isErr ? 3200 : 2000)
+}
+function toggleRecordHotkey(target = 'capture') {
+  recordingTarget.value = recordingTarget.value === target ? '' : target
+  if (recordingTarget.value === 'capture') {
+    hotkeyFeedback.value = ''
+    hotkeyError.value = false
+  } else if (recordingTarget.value === 'through') {
+    throughFeedback.value = ''
+    throughError.value = false
+  }
+}
+function hotkeyFromKeyEvent(e) {
+  if (['Control', 'Alt', 'Shift', 'Meta', 'CapsLock', 'NumLock', 'ScrollLock'].includes(e.key)) {
+    return null
+  }
+  let key = ''
+  if (/^Key([A-Z])$/.test(e.code)) key = e.code.slice(3)
+  else if (/^Digit(\d)$/.test(e.code)) key = e.code.slice(5)
+  else if (/^F([1-9]|1[0-2])$/.test(e.key)) key = e.key
+  else if (e.code === 'Space' || e.key === ' ') key = 'Space'
+  else if (e.code === 'PrintScreen' || e.key === 'PrintScreen') key = 'PrintScreen'
+  else if (['Insert', 'Delete', 'Home', 'End', 'PageUp', 'PageDown'].includes(e.key)) key = e.key
+  if (!key) return ''
+  const parts = []
+  if (e.ctrlKey) parts.push('Ctrl')
+  if (e.altKey) parts.push('Alt')
+  if (e.shiftKey) parts.push('Shift')
+  parts.push(key)
+  return parts.join('+')
+}
 async function loadCollectToken() {
   try {
     const res = await window.picrand?.picnestCollectGetToken?.()
@@ -109,15 +176,24 @@ async function copyCollectToken() {
   }
 }
 loadCollectToken()
+loadHotkeys()
 
 const topPinned = ref(false)
 async function refreshTopPinned() { try { topPinned.value = !!(await window.picrand.windowIsAlwaysOnTop()) } catch { /* 静默 */ } }
 async function toggleTop() { api.windowToggleAlwaysOnTop(); await refreshTopPinned(); collectiveShake() }
 onMounted(refreshTopPinned)
-function togglePanel() { panelOpen.value = !panelOpen.value; lib.filterBarOpen = false; themeOpen.value = false; settingsOpen.value = false; collectiveShake() }
-function toggleFilterBar() { lib.filterBarOpen = !lib.filterBarOpen; panelOpen.value = false; themeOpen.value = false; settingsOpen.value = false; collectiveShake() }
-function toggleThemePanel() { themeOpen.value = !themeOpen.value; panelOpen.value = false; lib.filterBarOpen = false; settingsOpen.value = false; collectiveShake() }
-function toggleSettings() { settingsOpen.value = !settingsOpen.value; panelOpen.value = false; lib.filterBarOpen = false; themeOpen.value = false; collectiveShake() }
+function togglePanel() { panelOpen.value = !panelOpen.value; lib.filterBarOpen = false; themeOpen.value = false; settingsOpen.value = false; recordingTarget.value = ''; collectiveShake() }
+function toggleFilterBar() { lib.filterBarOpen = !lib.filterBarOpen; panelOpen.value = false; themeOpen.value = false; settingsOpen.value = false; recordingTarget.value = ''; collectiveShake() }
+function toggleThemePanel() { themeOpen.value = !themeOpen.value; panelOpen.value = false; lib.filterBarOpen = false; settingsOpen.value = false; recordingTarget.value = ''; collectiveShake() }
+function toggleSettings() {
+  settingsOpen.value = !settingsOpen.value
+  panelOpen.value = false
+  lib.filterBarOpen = false
+  themeOpen.value = false
+  recordingTarget.value = ''
+  if (settingsOpen.value) loadHotkeys()
+  collectiveShake()
+}
 function pickTheme(key) { theme.setMode(key); themeOpen.value = false; collectiveShake() }
 function closePanel(e) {
   if (!e.target.closest('.vo-wrap') && !e.target.closest('.funnel-pop')) {
@@ -126,6 +202,7 @@ function closePanel(e) {
     lib.filterBarOpen = false
     themeOpen.value = false
     settingsOpen.value = false
+    recordingTarget.value = ''
   }
 }
 let themeMountT = 0
@@ -138,6 +215,8 @@ onBeforeUnmount(() => {
   document.removeEventListener('click', closePanel)
   window.removeEventListener('keydown', onKey)
   clearTimeout(themeMountT)
+  if (hotkeyFeedbackTimer) clearTimeout(hotkeyFeedbackTimer)
+  if (throughFeedbackTimer) clearTimeout(throughFeedbackTimer)
   cancelAnimationFrame(themeRaf)
 })
 
@@ -165,7 +244,38 @@ watch(searchText, (v) => {
   searchTimer = setTimeout(() => lib.doSearch(v.trim()), 350)
 })
 
-function onKey(e) {
+async function onKey(e) {
+  if (recordingTarget.value) {
+    const target = recordingTarget.value
+    e.preventDefault()
+    e.stopPropagation()
+    if (e.key === 'Escape') {
+      recordingTarget.value = ''
+      return
+    }
+    const combo = hotkeyFromKeyEvent(e)
+    if (combo === null) return
+    if (!combo) {
+      setNoticeFor(target, '请按字母/数字/F1-F12 或 PrintScreen 组合键', true)
+      return
+    }
+    recordingTarget.value = ''
+    try {
+      const res = target === 'through'
+        ? await api.pinSetThroughHotkey?.(combo)
+        : await api.captureSetHotkey?.(combo)
+      if (res?.ok && res.hotkey) {
+        if (target === 'through') throughHotkey.value = res.hotkey
+        else captureHotkey.value = res.hotkey
+        setNoticeFor(target, `热键已切换为 ${res.hotkey} ✓`, false)
+      } else {
+        setNoticeFor(target, res?.error || '热键设置失败', true)
+      }
+    } catch {
+      setNoticeFor(target, '热键更新失败', true)
+    }
+    return
+  }
   if (e.key === 'Escape') {
     if (lib.lightbox.open || lib.brief.open) return // 大图/简报模式自己处理 Esc
     if (panelOpen.value || lib.filterBarOpen || themeOpen.value || settingsOpen.value) {
@@ -329,6 +439,49 @@ function onKey(e) {
               <div class="set-desc">侧栏底部的可爱像素小紫猫与小克</div>
             </div>
             <button class="set-switch" :class="{ on: lib.showMascots }" type="button"><i /></button>
+          </div>
+          <div class="set-row" @click="lib.toggleSoundFx()">
+            <div class="set-meta">
+              <div class="set-title">交互音效</div>
+              <div class="set-desc">移入回收站、彻底删除与还原提示音</div>
+            </div>
+            <button class="set-switch" :class="{ on: lib.soundFx }" type="button"><i /></button>
+          </div>
+          <div class="set-row" @click="settingsOpen = false; recordingTarget = ''; api.captureStart()">
+            <div class="set-meta">
+              <div class="set-title">屏幕截图（{{ captureHotkey }}）</div>
+              <div class="set-desc" :class="{ 'set-ok': hotkeyFeedback && !hotkeyError, 'set-err': hotkeyError }">
+                {{ hotkeyFeedback || '冻结全屏 · 标注重排 · 置顶贴图与一键入库' }}
+              </div>
+            </div>
+            <div style="display:flex;gap:5px;flex-shrink:0">
+              <button
+                class="set-copy-btn"
+                :class="{ recording: recordingTarget === 'capture' }"
+                type="button"
+                title="点击后直接按下新的组合键（Esc 取消）"
+                @click.stop="toggleRecordHotkey('capture')"
+              >{{ recordingTarget === 'capture' ? '请按键…' : '改热键' }}</button>
+              <button class="set-copy-btn" type="button" @click.stop="settingsOpen = false; recordingTarget = ''; api.captureStart()">截图</button>
+            </div>
+          </div>
+          <div class="set-row" @click="settingsOpen = false; recordingTarget = ''; api.pinReleaseAllThrough()">
+            <div class="set-meta">
+              <div class="set-title">贴图穿透开关（{{ throughHotkey }}）</div>
+              <div class="set-desc" :class="{ 'set-ok': throughFeedback && !throughError, 'set-err': throughError }">
+                {{ throughFeedback || '全局一键开关贴图穿透 · 建议绑到数位屏或左手快捷键' }}
+              </div>
+            </div>
+            <div style="display:flex;gap:5px;flex-shrink:0">
+              <button
+                class="set-copy-btn"
+                :class="{ recording: recordingTarget === 'through' }"
+                type="button"
+                title="点击后直接按下新的组合键（Esc 取消）"
+                @click.stop="toggleRecordHotkey('through')"
+              >{{ recordingTarget === 'through' ? '请按键…' : '改热键' }}</button>
+              <button class="set-copy-btn" type="button" @click.stop="settingsOpen = false; recordingTarget = ''; api.pinReleaseAllThrough()">解除</button>
+            </div>
           </div>
           <div class="set-row">
             <div class="set-meta" style="cursor: pointer;" @click.stop="copyCollectToken" title="点击一键复制完整 32 位配对密钥">
@@ -599,6 +752,9 @@ button.tool.funnel .badge {
   transition: all 0.18s ease; flex-shrink: 0;
 }
 .set-copy-btn:hover { background: var(--hover); border-color: var(--accent); color: var(--accent); }
+.set-copy-btn.recording { background: var(--accent-weak); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.set-desc.set-ok { color: #3fb950; font-weight: 500; }
+.set-desc.set-err { color: #e5484d; font-weight: 500; }
 
 .set-switch {
   flex: none; width: 34px; height: 19px; padding: 2px;

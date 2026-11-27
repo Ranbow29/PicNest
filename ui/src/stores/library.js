@@ -4,6 +4,7 @@ import { deltaE76, deltaE2000, isGrayPalettes } from '../lib/eagleColor'
 import { collectiveShake } from '../lib/iconMotion'
 import { emitPluginEvent } from '../lib/plugins'
 import { isTextPath } from '../lib/fileKinds'
+import { playTrashSound, playRestoreSound, playPurgeSound } from '../lib/soundFx'
 import { api, fileUrl, onFsDirChanged } from '../api'
 
 /* 诊断上报：走已缓存的 invoke。以前每次调用都 dynamic import('@tauri-apps/api/core')，
@@ -184,6 +185,7 @@ export const useLibrary = defineStore('library', {
     brief: { open: false, path: null, scale: 1, tx: 0, ty: 0 }, // 简报模式（全屏演示）
     grayscaleMode: localStorage.getItem('picnest.grayscale') === '1', // 黑白预览（全局显示开关）
     cardTilt3D: localStorage.getItem('picnest.cardTilt3D') === '1', // 网格卡片 3D 视差微倾 + 柔光掠影（默认关闭，个性化开启）
+    soundFx: localStorage.getItem('picnest.soundFx') !== '0', // 交互音效（移入回收站与还原提示音，默认开启）
     showMascots: (() => {
       try {
         const s = localStorage.getItem('picnest.mascots')
@@ -643,6 +645,7 @@ export const useLibrary = defineStore('library', {
       localStorage.setItem('picnest.activeRootId', String(id))
       await this.refreshTree()
       await this.loadImages()
+      this.syncCaptureTargetDir()
       this.refreshTags().catch(() => {})
       if (opts.record !== false) this.recordNav(this.currentLocation())
       setTimeout(() => {
@@ -707,6 +710,7 @@ export const useLibrary = defineStore('library', {
       if (this.selectionView && this.selectedDirs.length < 2) this.selectionView = false
       await this.refreshTree()
       await this.loadImages()
+      if (deleted > 0 && this.soundFx) playTrashSound()
       this.showNote(`已删除 ${deleted} 个文件夹${failed ? ` · 失败 ${failed}` : ''}（图巢回收站可还原）`, [], failed ? 'error' : 'ok')
       return { ok: failed === 0, deleted, failed, files }
     },
@@ -1304,6 +1308,7 @@ export const useLibrary = defineStore('library', {
       if (typeof requestAnimationFrame === 'function') requestAnimationFrame(shakeAndRemember)
       else setTimeout(shakeAndRemember, 0)
       if (rel) this.revealDir(rel)
+      this.syncCaptureTargetDir()
       await this.loadImages()
       if (opts.record !== false) this.recordNav(this.currentLocation())
       clearTimeout(this._syncDirTimer)
@@ -1379,6 +1384,7 @@ export const useLibrary = defineStore('library', {
         this.selectedPath = null
         this.selectedPaths = []
         this.selectionAnchor = null
+        this.syncCaptureTargetDir()
         await this.loadImages()
         if (opts.record !== false) this.recordNav(this.currentLocation())
       }
@@ -1665,6 +1671,7 @@ export const useLibrary = defineStore('library', {
     async restoreTrashFolder(id) {
       const r = await api.trashRestoreFolder(id)
       if (r?.ok) {
+        if (this.soundFx) playRestoreSound()
         await this.refreshTree()
         await this.loadImages()
         this.showNote(`已还原文件夹「${r.name || ''}」`)
@@ -1682,6 +1689,7 @@ export const useLibrary = defineStore('library', {
       if (!ok) return { ok: false, canceled: true }
       const r = await api.trashPurgeFolder(id)
       if (r?.ok) {
+        if (this.soundFx) playPurgeSound()
         await this.refreshTree()
         await this.loadImages()
         this.showNote('已彻底删除文件夹')
@@ -1702,6 +1710,7 @@ export const useLibrary = defineStore('library', {
       if (!ok) return
       const r = await api.trashRestoreAll(this.activeRootId)
       if (r?.ok) {
+        if (this.soundFx) playRestoreSound()
         await this.refreshTree()
         await this.loadImages()
         this.showNote(`已还原 ${r.restoredFolders} 个文件夹 · ${r.restoredImages} 张图片`)
@@ -1723,6 +1732,7 @@ export const useLibrary = defineStore('library', {
       if (!ok) return
       const r = await api.trashPurgeAll(this.activeRootId)
       if (r?.ok) {
+        if (this.soundFx) playPurgeSound()
         await this.refreshTree()
         await this.loadImages()
         this.showNote(`已清空：文件夹 ${r.purgedFolders} 个 · 图片 ${r.purgedImages} 张`)
@@ -1733,14 +1743,24 @@ export const useLibrary = defineStore('library', {
     closeTrashMenu() { this.trashMenu = { open: false, x: 0, y: 0 } },
 
     async restoreFromTrash(path) {
-      try { await window.picrand.picnestTrashRestore(path) } catch { /* 静默 */ }
+      let restoredOk = false
+      try {
+        const r = await window.picrand.picnestTrashRestore(path)
+        restoredOk = r !== false && r?.ok !== false
+      } catch { /* 静默 */ }
+      if (restoredOk && this.soundFx) playRestoreSound()
       this.images = this.images.filter((i) => i.file_path !== path)
       this.pruneImageSelection(path)
       await this.refreshTree()
     },
 
     async purgeFromTrash(path) {
-      try { await window.picrand.picnestTrashPurge(path) } catch { /* 静默 */ }
+      let purgedOk = false
+      try {
+        const r = await window.picrand.picnestTrashPurge(path)
+        purgedOk = r !== false && r?.ok !== false
+      } catch { /* 静默 */ }
+      if (purgedOk && this.soundFx) playPurgeSound()
       this.images = this.images.filter((i) => i.file_path !== path)
       this.pruneImageSelection(path)
       await this.refreshTree()
@@ -1760,6 +1780,7 @@ export const useLibrary = defineStore('library', {
         } catch (e) { failed++ }
       }
       if (ok) {
+        if (this.soundFx) playRestoreSound()
         const set = new Set(list)
         this.images = this.images.filter((i) => !set.has(i.file_path))
         this.selectedPaths = this.selectedPaths.filter((p) => !set.has(p))
@@ -1796,6 +1817,7 @@ export const useLibrary = defineStore('library', {
         } catch (e) { failed++ }
       }
       if (done) {
+        if (this.soundFx) playPurgeSound()
         const set = new Set(list)
         this.images = this.images.filter((i) => !set.has(i.file_path))
         this.selectedPaths = this.selectedPaths.filter((p) => !set.has(p))
@@ -2496,6 +2518,7 @@ export const useLibrary = defineStore('library', {
         } catch (e) { failed++ }
       }
       if (ok) {
+        if (this.soundFx) playTrashSound()
         this.suppressWaveUntil = Date.now() + 800
         this.images = this.images.filter((i) => !set.has(i.file_path))
         /* 整批收缩选中（逐项 prune 在大批量下是 O(n·m)，Ctrl+A 之后会卡） */
@@ -3398,6 +3421,21 @@ export const useLibrary = defineStore('library', {
       this.showMascots = !this.showMascots
       try { localStorage.setItem('picnest.mascots', this.showMascots ? '1' : '0') } catch {}
     },
+    toggleSoundFx() {
+      this.soundFx = !this.soundFx
+      try { localStorage.setItem('picnest.soundFx', this.soundFx ? '1' : '0') } catch {}
+      if (this.soundFx) playRestoreSound({ force: true })
+    },
+    syncCaptureTargetDir() {
+      try {
+        const root = this.roots.find((x) => x.id === this.activeRootId)
+        let dir = root?.path || null
+        if (this.view === 'all' && this.currentDirRel) {
+          dir = this.absPathOf(this.currentDirRel) || dir
+        }
+        api.captureSetTargetDir?.(dir)?.catch?.(() => {})
+      } catch {}
+    },
     autoEnableMascotsIfUnset() {
       try {
         if (localStorage.getItem('picnest.mascots') === null) this.showMascots = true
@@ -3644,7 +3682,12 @@ export const useLibrary = defineStore('library', {
     async del(path) {
       /* 丢到回收站 = 应用内软删（deleted_at），文件原地保留 → 进回收站视图可还原。
          曾误接 PicRand delete-image（文件进系统回收站 + DB 行硬删）→ 回收站视图恒空 */
-      try { await window.picrand.picnestRemove(path) } catch (e) { this.error = String(e?.message || e) }
+      let removedOk = false
+      try {
+        const r = await window.picrand.picnestRemove(path)
+        removedOk = r !== false && r?.ok !== false
+      } catch (e) { this.error = String(e?.message || e) }
+      if (removedOk && this.soundFx) playTrashSound()
       this.closeContextMenu()
       if (this.lightbox.open && this.lightbox.path === path) this.closeLightbox()
       if (this.brief.open && this.brief.path === path) this.closeBrief()

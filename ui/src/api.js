@@ -278,6 +278,8 @@ if (typeof window !== 'undefined' && isTauri()) {
     picnestImagesReorder: (folderId, dirRel, orderedPaths) => tauriInvoke('images_reorder', { folderId, dirRel: dirRel ?? '', orderedPaths }),
     picnestPsdPreview: (filePath) => tauriInvoke('psd_preview', { filePath }),
     picnestViewPreview: (filePath) => tauriInvoke('view_preview', { filePath }),
+    picnestCaptureStart: () => tauriInvoke('capture_start'),
+    picnestCaptureSetTargetDir: (dir) => safeInvoke('capture_set_target_dir', { dir: dir ?? null }),
     fillImageDims: (paths) => tauriInvoke('fill_image_dims', { paths }),
     picnestThumbLookup: async () => ({}),
     picnestReadText: async (filePath) => (await safeInvoke('read_text', { filePath })) || { ok: false, error: '读取失败' },
@@ -358,6 +360,12 @@ if (typeof window !== 'undefined' && isTauri()) {
     },
     getFilePath: (f) => (typeof f?.path === 'string' && f.path ? f.path : null),
     picnestAppVersion: async () => await safeInvoke('app_version'),
+    picnestCaptureGetHotkey: async () => await safeInvoke('capture_get_hotkey'),
+    picnestCaptureSetHotkey: async (hotkey) => await safeInvoke('capture_set_hotkey', { hotkey }),
+    picnestPinGetThroughHotkey: async () => await safeInvoke('pin_get_through_hotkey'),
+    picnestPinSetThroughHotkey: async (hotkey) => await safeInvoke('pin_set_through_hotkey', { hotkey }),
+    picnestPinReleaseAllThrough: async () => await safeInvoke('pin_release_all_through'),
+    picnestPinCloseAll: async () => await safeInvoke('pin_close_all'),
   }, {
     get(target, prop) {
       if (prop in target) return target[prop]
@@ -493,6 +501,22 @@ const invoke = async (name, ...args) => {
         return await tauriInvoke('video_preview', { filePath: args[0] })
       case 'picnestViewPreview':
         return await tauriInvoke('view_preview', { filePath: args[0] })
+      case 'picnestCaptureStart':
+        return await tauriInvoke('capture_start')
+      case 'picnestCaptureSetTargetDir':
+        return await tauriInvoke('capture_set_target_dir', { dir: args[0] ?? null })
+      case 'picnestCaptureGetHotkey':
+        return await tauriInvoke('capture_get_hotkey')
+      case 'picnestCaptureSetHotkey':
+        return await tauriInvoke('capture_set_hotkey', { hotkey: String(args[0] || '') })
+      case 'picnestPinGetThroughHotkey':
+        return await tauriInvoke('pin_get_through_hotkey')
+      case 'picnestPinSetThroughHotkey':
+        return await tauriInvoke('pin_set_through_hotkey', { hotkey: String(args[0] || '') })
+      case 'picnestPinReleaseAllThrough':
+        return await tauriInvoke('pin_release_all_through')
+      case 'picnestPinCloseAll':
+        return await tauriInvoke('pin_close_all')
       case 'picnestDirOrderGet':
         return await tauriInvoke('dir_order_get')
       case 'picnestDirOrderSet':
@@ -700,6 +724,14 @@ export const api = {
   videoPreview: (filePath) => invoke('picnestVideoPreview', filePath),
   videoCompat: (filePath) => window.picrand?.picnestVideoCompat?.(filePath),
   viewPreview: (filePath) => invoke('picnestViewPreview', filePath),
+  captureStart: () => invoke('picnestCaptureStart'),
+  captureSetTargetDir: (dir) => invoke('picnestCaptureSetTargetDir', dir),
+  captureGetHotkey: () => invoke('picnestCaptureGetHotkey'),
+  captureSetHotkey: (hotkey) => invoke('picnestCaptureSetHotkey', hotkey),
+  pinGetThroughHotkey: () => invoke('picnestPinGetThroughHotkey'),
+  pinSetThroughHotkey: (hotkey) => invoke('picnestPinSetThroughHotkey', hotkey),
+  pinReleaseAllThrough: () => invoke('picnestPinReleaseAllThrough'),
+  pinCloseAll: () => invoke('picnestPinCloseAll'),
   // 视觉搜索（以图找图）
   visualSearchQuery: (opts) => invoke('picnestVisualSearchQuery', opts),
   visualSearchSave: (opts) => invoke('picnestVisualSearchSave', opts),
@@ -726,6 +758,31 @@ export async function onFsDirChanged(cb) {
     })
   } catch {
     return () => {}
+  }
+}
+
+export async function onCaptureEvents(onDone, onSaved, onError) {
+  if (!isTauri()) return () => {}
+  const unsubs = []
+  try {
+    if (typeof onDone === 'function') {
+      unsubs.push(await tauriListen('picnest:capture-done', (ev) => {
+        try { onDone(ev?.payload || {}) } catch {}
+      }))
+    }
+    if (typeof onSaved === 'function') {
+      unsubs.push(await tauriListen('picnest:capture-saved', (ev) => {
+        try { onSaved(ev?.payload || {}) } catch {}
+      }))
+    }
+    if (typeof onError === 'function') {
+      unsubs.push(await tauriListen('picnest:capture-error', (ev) => {
+        try { onError(ev?.payload || {}) } catch {}
+      }))
+    }
+  } catch {}
+  return () => {
+    for (const u of unsubs) { try { u() } catch {} }
   }
 }
 

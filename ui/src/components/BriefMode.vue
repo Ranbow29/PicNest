@@ -5,6 +5,17 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import { useLibrary } from '../stores/library'
 import { fileUrl, api } from '../api'
 import { isTextPath, isVideoPath, extOf } from '../lib/fileKinds'
+import { renderAmbientBlur } from '../lib/ambientBlur'
+import {
+  isPreviewableImage,
+  getCachedPreviewPath,
+  rememberPreviewPath,
+  decodeIntoPool,
+  scheduleNeighborPrefetch,
+  cancelNeighborPrefetch,
+  clearDecodedPool,
+  getPreloadStats,
+} from '../lib/previewPreload'
 import CanvasStage from './CanvasStage.vue'
 
 const lib = useLibrary()
@@ -34,7 +45,7 @@ const meta = computed(() => lib.images.find((i) => i.file_path === lib.brief.pat
 const isPsd = computed(() => extOf(lib.brief.path) === '.psd')
 const orderList = computed(() => (lib.gridOrder?.length ? lib.gridOrder : lib.filteredImages.map((i) => i.file_path)))
 const idx = computed(() => Math.max(0, orderList.value.indexOf(lib.brief.path)))
-const dragging = ref(false)
+const briefEl = ref(null)
 const mediaEl = ref(null)
 const videoEl = ref(null)
 const canvasStage = ref(null)
@@ -169,6 +180,17 @@ const thumbSrc = computed(() => {
   return m?.thumbnail_path && m.thumbnail_path !== 'SKIP'
     ? fileUrl(m.thumbnail_path) + '?v=' + (m.modify_time || 0) : ''
 })
+const briefAmbientUrl = ref('')
+let briefAmbNonce = 0
+watch(thumbSrc, async (u) => {
+  const nonce = ++briefAmbNonce
+  if (!u) {
+    briefAmbientUrl.value = ''
+    return
+  }
+  const baked = await renderAmbientBlur(u, { size: 96, blur: 14 })
+  if (nonce === briefAmbNonce) briefAmbientUrl.value = baked || u
+}, { immediate: true })
 const canvasFullSrc = computed(() => {
   const m = meta.value
   if (!m) return ''
@@ -216,49 +238,118 @@ watch(() => lib.brief.path, async (p) => {
     if (lib.brief.path === p) psdLoading.value = false
   }
 }, { immediate: true })
+let briefPreviewNonce = 0
 watch(() => lib.brief.path, async (p) => {
-  previewPath.value = ''
+  const nonce = ++briefPreviewNonce
   previewError.value = false
-  const ext = extOf(p)
-  if (!p || isVideoPath(p) || isTextPath(p) || ext === '.gif' || ext === '.svg') return
+  if (!isPreviewableImage(p)) {
+    previewPath.value = ''
+    cancelNeighborPrefetch()
+    return
+  }
+  const mtime = meta.value?.modify_time || 0
+  const cached = getCachedPreviewPath(p, mtime)
+  if (cached) {
+    previewPath.value = cached
+    decodeIntoPool(fileUrl(cached) + '?v=' + mtime, p)
+    scheduleNeighborPrefetch(orderList.value, p, (fp) => lib.imageMap.get(fp))
+    return
+  }
+  previewPath.value = ''
   try {
     const res = await api.viewPreview(p)
-    if (lib.brief.path !== p || !res?.ok || !res.path) return
-    const u = fileUrl(res.path) + '?v=' + (meta.value?.modify_time || 0)
-    await new Promise((resolve, reject) => {
-      const im = new Image()
-      im.decoding = 'async'
-      im.onload = () => { if (im.decode) im.decode().then(resolve).catch(resolve); else resolve() }
-      im.onerror = () => reject(new Error('preview load failed'))
-      im.src = u
-    })
-    if (lib.brief.path === p) previewPath.value = res.path
+    if (nonce !== briefPreviewNonce || lib.brief.path !== p || !res?.ok || !res.path) return
+    const curMtime = meta.value?.modify_time || 0
+    rememberPreviewPath(p, curMtime, res.path)
+    const u = fileUrl(res.path) + '?v=' + curMtime
+    await decodeIntoPool(u, p)
+    if (nonce === briefPreviewNonce && lib.brief.path === p) {
+      previewPath.value = res.path
+      scheduleNeighborPrefetch(orderList.value, p, (fp) => lib.imageMap.get(fp))
+    }
   } catch (e) { /* 预览失败不阻塞原图 */ }
 }, { immediate: true })
 
 const mediaStyle = computed(() => ({
-  cursor: dragging.value ? 'grabbing' : (kind.value === 'video' ? 'pointer' : 'grab'),
+  cursor: kind.value === 'video' ? 'pointer' : 'grab',
 }))
 
-function syncMediaTransform() {
-  const el = kind.value === 'video' ? videoEl.value : mediaEl.value
-  if (el) {
-    el.style.transform = `translate3d(${lib.brief.tx || 0}px, ${lib.brief.ty || 0}px, 0) scale(${lib.brief.scale || 1})`
-  }
-}
-watch(() => [lib.brief.tx, lib.brief.ty, lib.brief.scale, kind.value], syncMediaTransform)
-function next() { lib.briefNav(1) }
-function prev() { lib.briefNav(-1) }
+/* 本地实时视口与容器矩形缓存：拖拽与滚轮缩放同步直写 GPU 合成层，0 rAF 延迟，静止防抖回写 store */
+const live = { tx: lib.brief.tx || 0, ty: lib.brief.ty || 0, scale: lib.brief.scale || 1 }
+const briefRect = { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight }
+let briefRO = null
+let briefResizeRaf = 0
+let storeSyncTimer = 0
 
-/* 平移：拖动期间 rAF + 直接改媒体 transform，松手才写回 brief.tx/ty */
-const pan = { active: false, x0: 0, y0: 0, tx0: 0, ty0: 0, tx: 0, ty: 0, raf: 0, moved: false }
-function applyPan(tx, ty) {
-  if (kind.value === 'image' && canvasStage.value?.drawAt) {
-    canvasStage.value.drawAt(tx, ty, lib.brief.scale || 1)
+function updateBriefRect() {
+  const el = briefEl.value
+  if (!el) return
+  const r = el.getBoundingClientRect()
+  briefRect.left = r.left
+  briefRect.top = r.top
+  briefRect.width = r.width
+  briefRect.height = r.height
+}
+function ensureBriefRect() {
+  if (!briefRect.width || !briefRect.height) updateBriefRect()
+  return briefRect
+}
+function syncTransformNow(tx, ty, scale = live.scale) {
+  if (kind.value === 'image' && !noCanvas.value && canvasStage.value?.drawAt) {
+    canvasStage.value.drawAt(tx, ty, scale)
     return
   }
   const el = kind.value === 'video' ? videoEl.value : mediaEl.value
-  if (el) el.style.transform = `translate3d(${tx}px, ${ty}px, 0) scale(${lib.brief.scale || 1})`
+  if (el) el.style.transform = `translate3d(${tx}px, ${ty}px, 0) scale(${scale})`
+}
+function syncMediaTransform() {
+  const el = kind.value === 'video' ? videoEl.value : mediaEl.value
+  if (el) {
+    el.style.transform = `translate3d(${live.tx}px, ${live.ty}px, 0) scale(${live.scale})`
+  }
+}
+function commitLiveToStore() {
+  if (storeSyncTimer) { clearTimeout(storeSyncTimer); storeSyncTimer = 0 }
+  if (lib.brief.tx !== live.tx) lib.brief.tx = live.tx
+  if (lib.brief.ty !== live.ty) lib.brief.ty = live.ty
+  if (lib.brief.scale !== live.scale) lib.brief.scale = live.scale
+}
+function scheduleStoreSync(delay = 80) {
+  if (storeSyncTimer) clearTimeout(storeSyncTimer)
+  storeSyncTimer = setTimeout(() => {
+    storeSyncTimer = 0
+    commitLiveToStore()
+  }, delay)
+}
+
+watch(() => [lib.brief.tx, lib.brief.ty, lib.brief.scale, kind.value], ([tx, ty, sc]) => {
+  if (pan.active) return
+  if (
+    Math.abs((tx ?? 0) - live.tx) > 1e-3
+    || Math.abs((ty ?? 0) - live.ty) > 1e-3
+    || Math.abs((sc ?? 1) - live.scale) > 1e-6
+  ) {
+    live.tx = tx ?? 0
+    live.ty = ty ?? 0
+    live.scale = sc ?? 1
+  }
+  syncTransformNow(live.tx, live.ty, live.scale)
+})
+watch(() => lib.brief.path, () => {
+  if (storeSyncTimer) { clearTimeout(storeSyncTimer); storeSyncTimer = 0 }
+  live.tx = lib.brief.tx || 0
+  live.ty = lib.brief.ty || 0
+  live.scale = lib.brief.scale || 1
+})
+function next() { lib.briefNav(1) }
+function prev() { lib.briefNav(-1) }
+
+/* 平移：pointermove 同步直写 GPU 层（零 rAF 排队），松手写回 brief.tx/ty */
+const pan = { active: false, pointerId: null, x0: 0, y0: 0, tx0: 0, ty0: 0, tx: 0, ty: 0, moved: false }
+function applyPan(tx, ty) {
+  live.tx = tx
+  live.ty = ty
+  syncTransformNow(tx, ty, live.scale)
 }
 /* ---- Ken Burns 缓慢推拉运镜 + 自动轮播（幻灯片） ---- */
 const kenBurnsOn = ref(localStorage.getItem('picnest.briefKenBurnsV2') === '1')
@@ -267,7 +358,7 @@ const intervalSec = ref(Number(localStorage.getItem('picnest.briefInterval')) ||
 const topRightHover = ref(false)
 let autoTimer = null
 
-const isUnzoomed = computed(() => Math.abs((lib.brief.scale || 1) - 1) < 0.01 && !(lib.brief.tx || 0) && !(lib.brief.ty || 0) && !dragging.value)
+const isUnzoomed = computed(() => Math.abs((lib.brief.scale || 1) - 1) < 0.01 && !(lib.brief.tx || 0) && !(lib.brief.ty || 0))
 const kbClass = computed(() => (kenBurnsOn.value && isUnzoomed.value && kind.value === 'image' ? `kb kb-${idx.value % 4}` : ''))
 
 function toggleKenBurns() {
@@ -286,7 +377,7 @@ function cycleInterval() {
   resetAutoTimer()
 }
 function stepAutoNext() {
-  if (!lib.brief.open || dragging.value) return
+  if (!lib.brief.open || pan.active) return
   const list = orderList.value
   if (!list.length) return
   if (idx.value >= list.length - 1) {
@@ -319,46 +410,70 @@ watch(() => [lib.brief.open, lib.brief.path], ([open]) => {
   resetAutoTimer()
 })
 function onBriefPointerMove(e) {
-  topRightHover.value = e.clientY <= 72 && (window.innerWidth - e.clientX) <= 320
-  bottomHover.value = (window.innerHeight - e.clientY) <= 80
+  if (pan.active) return
+  const r = ensureBriefRect()
+  const w = r.width || window.innerWidth
+  const h = r.height || window.innerHeight
+  topRightHover.value = e.clientY <= 72 && (w - e.clientX) <= 320
+  bottomHover.value = (h - e.clientY) <= 80
 }
 
 let downTarget = null
 function onDown(e) {
   if (e.button !== 0) return
   if (e.target.closest?.('.brief-x') || e.target.closest?.('.brief-ctl-bar') || e.target.closest?.('.brief-video-dock')) return
+  if (storeSyncTimer) { clearTimeout(storeSyncTimer); storeSyncTimer = 0 }
   downTarget = e.target
   pan.active = true
+  pan.pointerId = e.pointerId ?? null
   pan.x0 = e.clientX; pan.y0 = e.clientY
-  pan.tx0 = lib.brief.tx || 0; pan.ty0 = lib.brief.ty || 0
+  pan.tx0 = live.tx; pan.ty0 = live.ty
   pan.tx = pan.tx0; pan.ty = pan.ty0
   pan.moved = false
-  dragging.value = false
+  canvasStage.value?.setInteractive?.(true)
+  if (pan.pointerId != null) {
+    try { briefEl.value?.setPointerCapture?.(pan.pointerId) } catch {}
+  }
   window.addEventListener('pointermove', onMove)
-  window.addEventListener('pointerup', onUp, { once: true })
+  window.addEventListener('pointerup', onUp)
+  window.addEventListener('pointercancel', onUp)
 }
 function onMove(e) {
   if (!pan.active) return
-  const dx = e.clientX - pan.x0, dy = e.clientY - pan.y0
-  if (!pan.moved && Math.hypot(dx, dy) < 4) return
-  if (!pan.moved) { pan.moved = true; dragging.value = true }
+  if (pan.pointerId != null && e.pointerId != null && e.pointerId !== pan.pointerId) return
+  const ev = e.getCoalescedEvents?.().at(-1) || e
+  const dx = ev.clientX - pan.x0, dy = ev.clientY - pan.y0
+  if (!pan.moved && dx * dx + dy * dy < 12.25) return
+  if (!pan.moved) {
+    pan.moved = true
+    briefEl.value?.classList.add('is-panning')
+  }
   pan.tx = pan.tx0 + dx
   pan.ty = pan.ty0 + dy
-  if (pan.raf) return
-  pan.raf = requestAnimationFrame(() => {
-    pan.raf = 0
-    if (pan.active) applyPan(pan.tx, pan.ty)
-  })
+  applyPan(pan.tx, pan.ty)
 }
-function onUp() {
+function onUp(e) {
+  if (!pan.active) return
+  if (pan.pointerId != null && e?.pointerId != null && e.pointerId !== pan.pointerId) return
   window.removeEventListener('pointermove', onMove)
+  window.removeEventListener('pointerup', onUp)
+  window.removeEventListener('pointercancel', onUp)
   const moved = !!pan.moved
-  if (pan.raf) { cancelAnimationFrame(pan.raf); pan.raf = 0 }
   pan.active = false
-  dragging.value = false
+  briefEl.value?.classList.remove('is-panning')
+  if (pan.pointerId != null) {
+    try {
+      if (briefEl.value?.hasPointerCapture?.(pan.pointerId)) {
+        briefEl.value.releasePointerCapture(pan.pointerId)
+      }
+    } catch {}
+    pan.pointerId = null
+  }
+  canvasStage.value?.setInteractive?.(false)
   if (moved) {
-    lib.brief.tx = pan.tx
-    lib.brief.ty = pan.ty
+    live.tx = pan.tx
+    live.ty = pan.ty
+    commitLiveToStore()
   } else {
     // 未拖拽平移，单击意图判定：
     // 若在视频模式下且点击发生在视频画面本身上：暂停/启动播放
@@ -374,29 +489,30 @@ function onUp() {
   }
 }
 function onWheel(e) {
-  const b = lib.brief
-  const s0 = b.scale || 1
+  const s0 = live.scale || 1
   const s1 = Math.min(8, Math.max(0.2, s0 * (e.deltaY < 0 ? 1.12 : 1 / 1.12)))
   if (s1 === s0) return
   const wasPan = pan.active
-  /* 拖动中滚轮：先落当前位移，锚点缩放后重设 pan 基准，避免下一次 pointermove 用旧 base 回弹 */
-  if (wasPan) { b.tx = pan.tx; b.ty = pan.ty }
-  const rect = e.currentTarget.getBoundingClientRect()
+  if (wasPan) {
+    live.tx = pan.tx
+    live.ty = pan.ty
+  }
+  const rect = ensureBriefRect()
   const px = e.clientX - (rect.left + rect.width / 2)
   const py = e.clientY - (rect.top + rect.height / 2)
-  b.tx = px - (s1 / s0) * (px - (b.tx || 0))
-  b.ty = py - (s1 / s0) * (py - (b.ty || 0))
-  b.scale = s1
+  live.tx = px - (s1 / s0) * (px - (live.tx || 0))
+  live.ty = py - (s1 / s0) * (py - (live.ty || 0))
+  live.scale = s1
+  syncTransformNow(live.tx, live.ty, s1)
   if (wasPan) {
-    if (pan.raf) { cancelAnimationFrame(pan.raf); pan.raf = 0 }
     pan.x0 = e.clientX
     pan.y0 = e.clientY
-    pan.tx0 = b.tx
-    pan.ty0 = b.ty
-    pan.tx = b.tx
-    pan.ty = b.ty
-    applyPan(pan.tx, pan.ty)
+    pan.tx0 = live.tx
+    pan.ty0 = live.ty
+    pan.tx = live.tx
+    pan.ty = live.ty
   }
+  scheduleStoreSync(80)
 }
 function onContext(e) {
   const m = lib.images.find((i) => i.file_path === lib.brief.path)
@@ -423,28 +539,53 @@ function onBriefKey(e) {
 }
 
 onMounted(() => {
+  updateBriefRect()
+  try {
+    briefRO = new ResizeObserver(() => {
+      if (briefResizeRaf) cancelAnimationFrame(briefResizeRaf)
+      briefResizeRaf = requestAnimationFrame(() => { briefResizeRaf = 0; updateBriefRect() })
+    })
+    if (briefEl.value) briefRO.observe(briefEl.value)
+  } catch {}
+  window.addEventListener('resize', updateBriefRect)
   document.addEventListener('fullscreenchange', onFsChange)
   window.addEventListener('keydown', onBriefKey)
+  window.__picBriefPerf = () => ({
+    scale: live.scale,
+    tx: live.tx,
+    ty: live.ty,
+    perf: canvasStage.value?.getPerfStats?.() || null,
+    preload: getPreloadStats(),
+  })
 })
 onBeforeUnmount(() => {
+  cancelNeighborPrefetch()
+  if (!lib.lightbox.open) clearDecodedPool()
   if (autoTimer) { clearInterval(autoTimer); autoTimer = null }
+  if (briefResizeRaf) cancelAnimationFrame(briefResizeRaf)
+  if (storeSyncTimer) { clearTimeout(storeSyncTimer); storeSyncTimer = 0 }
+  briefRO?.disconnect()
+  briefRO = null
+  window.removeEventListener('resize', updateBriefRect)
   document.removeEventListener('fullscreenchange', onFsChange)
   window.removeEventListener('keydown', onBriefKey)
   window.removeEventListener('pointermove', onMove)
-  if (pan.raf) { cancelAnimationFrame(pan.raf); pan.raf = 0 }
+  window.removeEventListener('pointerup', onUp)
+  window.removeEventListener('pointercancel', onUp)
   pan.active = false
+  delete window.__picBriefPerf
 })
 </script>
 
 <template>
   <Teleport to="body">
-    <div v-if="lib.brief.open" class="brief" :class="{ 'ctl-show': topRightHover }"
-         :style="{ cursor: dragging ? 'grabbing' : (kind === 'image' ? 'grab' : 'default') }"
+    <div v-if="lib.brief.open" ref="briefEl" class="brief" :class="{ 'ctl-show': topRightHover }"
+         :style="{ cursor: kind === 'image' ? 'grab' : 'default' }"
          @pointermove="onBriefPointerMove"
          @wheel.prevent="onWheel" @pointerdown="onDown" @contextmenu.prevent="onContext">
-      <!-- 氛围底：当前图模糊放大铺满黑场 + 深暗角，切图交叉淡化 -->
+      <!-- 氛围底：切图时离线预模糊烘焙为极小 JPEG 底图 + 深暗角，切图交叉淡化 -->
       <Transition name="bamb">
-        <div v-if="kind === 'image' && thumbSrc" :key="thumbSrc" class="brief-amb" :style="{ backgroundImage: `url(&quot;${thumbSrc}&quot;)` }" />
+        <div v-if="kind === 'image' && briefAmbientUrl" :key="briefAmbientUrl" class="brief-amb" :style="{ backgroundImage: `url(&quot;${briefAmbientUrl}&quot;)` }" />
       </Transition>
       <div class="brief-vignette" />
       <div :key="lib.brief.path" class="brief-stage-wrap" :class="kbClass">
@@ -539,6 +680,14 @@ onBeforeUnmount(() => {
   position: fixed; inset: 0; z-index: 890; /* 低于右键菜单(900)/确认卡(950)，便于在简报里操作 */
   display: flex; align-items: center; justify-content: center;
   background: #0b0b0d; cursor: default; user-select: none; overflow: hidden;
+  touch-action: none;
+}
+.brief.is-panning,
+.brief.is-panning * {
+  cursor: grabbing !important;
+}
+.brief.is-panning .brief-stage-wrap {
+  animation-play-state: paused !important;
 }
 .brief img, .brief video {
   max-width: 100vw; max-height: 100vh; object-fit: contain; display: block;
@@ -554,11 +703,11 @@ onBeforeUnmount(() => {
   padding: 5px 10px; border-radius: 8px; pointer-events: none;
   background: rgba(20, 18, 14, 0.62); color: #e8e2d6; font-size: 11.5px;
 }
-/* ---- 氛围底：黑场里透出当前图的色彩光晕（影院 Ambilight 式），切图交叉淡化，静态驻留省 GPU ---- */
+/* ---- 氛围底：离线预模糊后的影院 Ambilight 光晕，切图交叉淡化，拖动零实时模糊开销 ---- */
 .brief-amb {
   position: absolute; inset: -15%; z-index: 0; pointer-events: none;
   background-size: cover; background-position: center;
-  filter: blur(90px) saturate(1.6) brightness(0.55);
+  filter: saturate(1.6) brightness(0.55);
   opacity: 0.85;
   transform: translateZ(0);
 }
@@ -583,8 +732,7 @@ onBeforeUnmount(() => {
 @keyframes kb-move-1 { from { transform: scale(1.068) translate3d(1.1%, -0.6%, 0); } to { transform: scale(1) translate3d(0, 0, 0); } }
 @keyframes kb-move-2 { from { transform: scale(1) translate3d(0, 0, 0); } to { transform: scale(1.065) translate3d(1.0%, 0.8%, 0); } }
 @keyframes kb-move-3 { from { transform: scale(1.065) translate3d(-1.0%, 0.7%, 0); } to { transform: scale(1) translate3d(0, 0, 0); } }
-.brief img, .brief video { filter: drop-shadow(0 24px 60px rgba(0, 0, 0, 0.55)); }
-.brief img.gray, .brief video.gray { filter: grayscale(1) drop-shadow(0 24px 60px rgba(0, 0, 0, 0.55)); }
+.brief img.gray, .brief video.gray { filter: grayscale(1); }
 .brief-count {
   position: fixed; top: 16px; left: 24px; z-index: 2; color: #d9d3c7;
   font-family: var(--font-serif); pointer-events: none;
@@ -621,13 +769,14 @@ onBeforeUnmount(() => {
   background: rgba(20, 18, 16, 0.34);
   backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
   border: 1px solid rgba(255, 255, 255, 0.08);
-  opacity: 0; transform: translateY(-6px);
+  opacity: 0; visibility: hidden; transform: translateY(-6px);
   pointer-events: none;
-  transition: opacity 0.45s cubic-bezier(0.22, 1, 0.36, 1), transform 0.45s cubic-bezier(0.22, 1, 0.36, 1);
+  transition: opacity 0.45s cubic-bezier(0.22, 1, 0.36, 1), transform 0.45s cubic-bezier(0.22, 1, 0.36, 1), visibility 0s linear 0.45s;
 }
 .brief.ctl-show .brief-ctl-bar,
 .brief-ctl-bar:hover {
-  opacity: 1; transform: translateY(0); pointer-events: auto;
+  opacity: 1; visibility: visible; transform: translateY(0); pointer-events: auto;
+  transition: opacity 0.45s cubic-bezier(0.22, 1, 0.36, 1), transform 0.45s cubic-bezier(0.22, 1, 0.36, 1), visibility 0s linear 0s;
 }
 .bctl-btn {
   height: 28px; padding: 0 10px; border: none; border-radius: 999px;
@@ -648,13 +797,14 @@ onBeforeUnmount(() => {
 .brief-video-dock {
   position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%);
   z-index: 10; pointer-events: none;
-  transition: opacity 0.35s cubic-bezier(0.22, 1, 0.36, 1), transform 0.35s cubic-bezier(0.22, 1, 0.36, 1);
-  opacity: 0; transform: translateX(-50%) translateY(14px) scale(0.96);
+  transition: opacity 0.35s cubic-bezier(0.22, 1, 0.36, 1), transform 0.35s cubic-bezier(0.22, 1, 0.36, 1), visibility 0s linear 0.35s;
+  opacity: 0; visibility: hidden; transform: translateX(-50%) translateY(14px) scale(0.96);
 }
 .brief-video-dock.dock-show,
 .brief-video-dock:hover {
-  opacity: 1; transform: translateX(-50%) translateY(0) scale(1);
+  opacity: 1; visibility: visible; transform: translateX(-50%) translateY(0) scale(1);
   pointer-events: auto;
+  transition: opacity 0.35s cubic-bezier(0.22, 1, 0.36, 1), transform 0.35s cubic-bezier(0.22, 1, 0.36, 1), visibility 0s linear 0s;
 }
 .dock {
   display: flex; align-items: center; gap: 6px;

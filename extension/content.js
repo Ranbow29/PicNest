@@ -2,7 +2,8 @@
 // 在网页图片上左键按住 → 光标处环形进度 → 弹出双栏面板（左：未分类/库根；右：全部文件夹）
 // 拖到目标松开即保存；松开在面板空白处则面板停留，可点击/滚动选择；Esc / 点外部取消。
 (() => {
-  const VERSION = '0.3.3'
+  const VERSION = '0.3.4'
+  const INSTANCE_TOKEN = Symbol('picnest-collect-host')
   const prevLoaded = !!window.__picnestHoldCollectLoaded
   const prevVersion = String(window.__picnestHoldCollectVersion || '')
   /* 同版本重复注入：幂等返回。旧版本实例：0.1.4 起会挂 __picnestHoldCollectCleanup，
@@ -280,7 +281,7 @@
     .dup button:hover { filter: brightness(.98); }
     .newdir { flex: none; margin-top: 4px; height: 28px; border: 1px dashed rgba(0,0,0,.18);
       border-radius: 8px; background: #fff; color: #8a6a3a; font-size: 11.5px; cursor: pointer; }
-    .newdir:hover { border-color: #b4884b; background: rgba(180,136,75,.08); }
+    .newdir:hover, .newdir.on { border-color: #b4884b; background: rgba(180,136,75,.08); }
     .newdir[hidden], .newdir-form[hidden] { display: none; }
     .newdir-form { flex: none; display: flex; gap: 6px; margin-top: 4px; }
     .newdir-input { flex: 1; min-width: 0; height: 28px; border: 1px solid rgba(0,0,0,.16);
@@ -346,35 +347,40 @@
     }
   `
 
+  function handlePanelAction(s, act) {
+    if (!s || !act) return false
+    if (act === 'newdir') { showNewDir(s); return true }
+    if (act === 'create') {
+      createNewFolder(s, s.panel?.querySelector('.newdir-input')?.value || '')
+      return true
+    }
+    if (act === 'cancelnew') { hideNewDir(s); return true }
+    if (act === 'skip') { closePanel(); return true }
+    if (act === 'overwrite') { saveTo(s, s.pendingRel, false, true); return true }
+    if (act === 'force') { saveTo(s, s.pendingRel, true); return true }
+    return false
+  }
+
   function ensureHost() {
     let host = document.getElementById(HOST_ID)
-    if (host && host.shadowRoot) return host
+    if (host && host.shadowRoot && host.__picnestInstance === INSTANCE_TOKEN) return host
+    if (host) {
+      try { host.remove() } catch { /* 静默 */ }
+    }
     host = document.createElement('div')
     host.id = HOST_ID
+    host.__picnestInstance = INSTANCE_TOKEN
     host.style.cssText = 'all:initial;position:fixed;inset:0;z-index:2147483647;pointer-events:none;'
     const shadow = host.attachShadow({ mode: 'open' })
     shadow.innerHTML = `<style>${CSS}</style><div class="wrap"><div class="toast-wrap"></div></div>`
-    shadow.addEventListener('pointerdown', (e) => e.stopPropagation(), true)
+    shadow.addEventListener('pointerdown', (e) => e.stopPropagation())
+    shadow.addEventListener('mousedown', (e) => e.stopPropagation())
     shadow.addEventListener('click', (e) => {
       e.stopPropagation()
       if (!session || !session.opened || session.saving) return
       if (Date.now() < (session.skipClick || 0)) return
-      let act = ''
-      for (const n of (e.composedPath?.() || [])) {
-        if (n && n.closest) {
-          const a = n.closest('[data-act]')
-          if (a) { act = a.dataset.act; break }
-        }
-      }
-      if (act === 'newdir') { showNewDir(session); return }
-      if (act === 'create') {
-        createNewFolder(session, session.panel?.querySelector('.newdir-input')?.value || '')
-        return
-      }
-      if (act === 'cancelnew') { hideNewDir(session); return }
-      if (act === 'skip') { closePanel(); return }
-      if (act === 'overwrite') { saveTo(session, session.pendingRel, false, true); return }
-      if (act === 'force') { saveTo(session, session.pendingRel, true); return }
+      const actEl = actFromEvent(e)
+      if (actEl && handlePanelAction(session, actEl.dataset.act)) return
       const row = rowFromEvent(e)
       if (row) saveTo(session, row.dataset.rel)
     })
@@ -507,6 +513,34 @@
     const r = p.getBoundingClientRect()
     return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom
   }
+  function isHiddenEl(el) {
+    return !el || el.hidden || !!el.closest?.('[hidden]')
+  }
+  function actAtPoint(x, y) {
+    const p = session?.panel
+    if (!p) return null
+    for (const el of p.querySelectorAll('[data-act]')) {
+      if (isHiddenEl(el)) continue
+      const r = el.getBoundingClientRect()
+      if (r.width <= 0 || r.height <= 0) continue
+      if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return el
+    }
+    return null
+  }
+  function actFromEvent(e) {
+    if (!session?.panel) return null
+    const path = e.composedPath?.() || []
+    if (path.includes(session.panel)) {
+      for (const n of path) {
+        if (n && n.closest) {
+          const a = n.closest('[data-act]')
+          if (a && !isHiddenEl(a)) return a
+        }
+      }
+      return null
+    }
+    return actAtPoint(e.clientX || 0, e.clientY || 0)
+  }
   function rowAtPoint(x, y) {
     const p = session?.panel
     if (!p) return null
@@ -583,6 +617,10 @@
     s.skipClick = 0
     setStatus(s, '', '发现相同图片')
   }
+  function focusNewDirInput(s, form, input) {
+    if (!input || session !== s || !s.panel?.isConnected || form.hidden) return
+    try { input.focus({ preventScroll: true }) } catch { try { input.focus() } catch {} }
+  }
   function showNewDir(s) {
     const p = s.panel
     if (!p) return
@@ -590,8 +628,15 @@
     const form = p.querySelector('.newdir-form')
     if (!btn || !form) return
     btn.hidden = true
+    btn.classList.remove('on')
     form.hidden = false
-    form.querySelector('.newdir-input')?.focus()
+    const input = form.querySelector('.newdir-input')
+    focusNewDirInput(s, form, input)
+    setTimeout(() => {
+      if (session === s && s.panel?.isConnected && !form.hidden && s.shadow?.activeElement !== input) {
+        focusNewDirInput(s, form, input)
+      }
+    }, 0)
   }
   function hideNewDir(s) {
     const p = s.panel
@@ -605,7 +650,8 @@
     if (input) input.value = ''
   }
   function createNewFolder(s, name) {
-    if (!s.root || s.saving) return
+    if (s.saving) return
+    if (!s.root) { setStatus(s, 'err', '正在读取目录，请稍候'); return }
     const clean = String(name || '').trim()
     if (!clean) { setStatus(s, 'err', '请输入文件夹名称'); return }
     if (!runtimeAlive()) { setStatus(s, 'err', refreshHint()); return }
@@ -615,12 +661,16 @@
       chrome.runtime.sendMessage({ type: 'create-folder', rootId: s.root.id, parentRel: '', name: clean }, (res) => {
         if (session !== s) return
         s.saving = false
-        if (!res?.ok) { setStatus(s, 'err', res?.error || '新建失败'); return }
+        const lastErr = chrome.runtime?.lastError?.message
+        if (!res?.ok) { setStatus(s, 'err', res?.error || lastErr || '新建失败'); return }
         s.createdRel = res.folder.id
         s.folders = (s.folders || []).concat([{ rel: res.folder.id, name: res.folder.name, depth: 0 }])
         renderPanel(s)
-        const row = [...s.panel.querySelectorAll('.row')].find((r) => r.dataset.rel === res.folder.id)
-        if (row) row.scrollIntoView({ block: 'nearest' })
+        const listEl = s.panel?.querySelector('.list')
+        const row = [...(s.panel?.querySelectorAll('.row') || [])].find((r) => r.dataset.rel === res.folder.id)
+        if (listEl && row) {
+          listEl.scrollTop = Math.max(0, row.offsetTop - listEl.offsetTop - listEl.clientHeight + row.offsetHeight + 8)
+        }
         setStatus(s, '', '已创建：' + res.folder.name + '（点击它保存）')
       })
     } catch (e) {
@@ -682,7 +732,7 @@
     if (!s.shadow) return
     const wrap = s.shadow.querySelector('.wrap')
     if (!wrap) return
-    wrap.innerHTML = ''
+    for (const el of wrap.querySelectorAll('.ring, .panel')) el.remove()
     s.ringEl = null
 
     const panel = document.createElement('div')
@@ -808,12 +858,22 @@
     uncat.addEventListener('mouseenter', () => playFolderIcon(panel))
     const ndInput = panel.querySelector('.newdir-input')
     if (ndInput) {
-      ndInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
-          e.preventDefault()
-          createNewFolder(s, ndInput.value)
-        }
-      })
+      for (const ev of ['keydown', 'keyup', 'keypress']) {
+        ndInput.addEventListener(ev, (e) => {
+          e.stopPropagation()
+          if (ev !== 'keydown') return
+          if (e.key === 'Escape') {
+            e.preventDefault()
+            hideNewDir(s)
+            return
+          }
+          if (e.key === 'Enter') {
+            if (e.isComposing || e.keyCode === 229) return
+            e.preventDefault()
+            createNewFolder(s, ndInput.value)
+          }
+        })
+      }
     }
     setHint(s)
     positionPanel(s, panel)
@@ -837,7 +897,7 @@
 
   function highlightRow(s, row) {
     if (!s.panel) return
-    for (const el of s.panel.querySelectorAll('.row.on, .uncat.on')) el.classList.remove('on')
+    for (const el of s.panel.querySelectorAll('.row.on, .uncat.on, .newdir.on')) el.classList.remove('on')
     if (row) row.classList.add('on')
   }
 
@@ -1425,7 +1485,7 @@
     closePanel()
     const s = {
       img, x0: e.clientX, y0: e.clientY,
-      opened: false, holding: true, canceled: false, saving: false, skipClick: 0,
+      opened: false, holding: true, canceled: false, saving: false, skipClick: 0, lastPointerUpAt: 0,
       ringTimer: 0, holdTimer: 0,
       host: null, shadow: null, panel: null, ringEl: null,
       root: null, folders: null, prevDraggable: img.draggable,
@@ -1480,12 +1540,24 @@
       }
       return
     }
-    highlightRow(session, rowFromEvent(e))
+    const actEl = actFromEvent(e)
+    const hoverTarget = rowFromEvent(e) || (actEl?.dataset?.act === 'newdir' ? actEl : null)
+    highlightRow(session, hoverTarget)
   }
 
   function onUp(e) {
     const s = session
     if (!s) return
+    if (e.button != null && e.button !== 0) return
+    if (e.type === 'pointerup') {
+      s.lastPointerUpAt = Date.now()
+    } else if (e.type === 'mouseup' && Date.now() - (s.lastPointerUpAt || 0) < 120) {
+      if (s.opened) {
+        e.stopPropagation?.()
+        e.stopImmediatePropagation?.()
+      }
+      return
+    }
     if (s.opened) {
       e.stopPropagation?.()
       e.stopImmediatePropagation?.()
@@ -1494,6 +1566,13 @@
     if (!s.opened) { closePanel(); return }
     const row = rowFromEvent(e)
     if (row) { saveTo(s, row.dataset.rel); return }
+    const actEl = actFromEvent(e)
+    if (actEl) {
+      s.holding = false
+      setHint(s)
+      s.skipClick = Date.now() + 180
+      if (handlePanelAction(s, actEl.dataset.act)) return
+    }
     const inPanel = (e.composedPath?.() || []).includes(s.panel) || panelAtPoint(e.clientX, e.clientY)
     if (!inPanel) { closePanel(); return }
     s.holding = false
@@ -1505,6 +1584,11 @@
     if (e.key === 'Escape') {
       e.preventDefault()
       e.stopPropagation()
+      const form = session.panel?.querySelector('.newdir-form')
+      if (form && !form.hidden) {
+        hideNewDir(session)
+        return
+      }
       closePanel()
     }
   }

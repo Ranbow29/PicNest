@@ -3,6 +3,18 @@ import { computed, ref, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useLibrary } from '../stores/library'
 import { fileUrl, api } from '../api'
 import { isTextPath, isVideoPath, extOf } from '../lib/fileKinds'
+import { renderAmbientBlur } from '../lib/ambientBlur'
+import {
+  isPreviewableImage,
+  getCachedPreviewPath,
+  rememberPreviewPath,
+  decodeIntoPool,
+  scheduleNeighborPrefetch,
+  cancelNeighborPrefetch,
+  invalidatePreviewCache,
+  clearDecodedPool,
+  getPreloadStats,
+} from '../lib/previewPreload'
 import CanvasStage from './CanvasStage.vue'
 
 // 大图工作区：正文内的编辑舞台（顶栏由 TitleBar 按模式变形；底部悬浮工具条 ZCode 输入口风格）
@@ -10,49 +22,111 @@ const lib = useLibrary()
 const V = computed(() => lib.viewer)
 const stageEl = ref(null)
 const imgEl = ref(null)
-const dragging = ref(false)
-/* 灯箱平移：拖动期间每帧最多一次 rAF，普通模式直接改 img.style.transform（不走 Pinia 响应式），
-   松手才把最终 tx/ty 写回 store；裁剪模式仍逐帧写 store 以便裁剪框跟随。 */
-const pan = { active: false, startX: 0, startY: 0, baseTx: 0, baseTy: 0, curTx: 0, curTy: 0, raf: 0 }
-function stageTransform(tx, ty) {
-  return `translate3d(${tx}px, ${ty}px, 0) scale(${lib.viewer.scale}) rotate(${lib.viewer.rot}deg)`
+
+/* 本地实时视口与舞台矩形缓存：拖拽与滚轮缩放全程同步直写 GPU 合成层，
+   不触发 Vue 响应式、不排队双层 rAF；仅在静止防抖后或松手时同步回 Pinia store。 */
+const live = { tx: lib.viewer.tx || 0, ty: lib.viewer.ty || 0, scale: lib.viewer.scale || 1 }
+const stageRect = { left: 0, top: 0, width: 0, height: 0 }
+let stageRO = null
+let storeSyncTimer = 0
+let resizeRaf = 0
+
+function updateStageRect() {
+  const el = stageEl.value
+  if (!el) return
+  const r = el.getBoundingClientRect()
+  stageRect.left = r.left
+  stageRect.top = r.top
+  stageRect.width = r.width
+  stageRect.height = r.height
+}
+function ensureStageRect() {
+  if (!stageRect.width || !stageRect.height) updateStageRect()
+  return stageRect
+}
+
+/* 灯箱平移：同步直写变换，彻底消除事件→rAF→Canvas 二次 rAF 延迟；仅裁剪模式用单帧 rAF 写 store 以便裁剪框跟随 */
+const pan = { active: false, pointerId: null, startX: 0, startY: 0, baseTx: 0, baseTy: 0, curTx: 0, curTy: 0, cropRaf: 0 }
+function stageTransform(tx, ty, scale = live.scale) {
+  return `translate3d(${tx}px, ${ty}px, 0) scale(${scale}) rotate(${lib.viewer.rot}deg)`
     + (lib.viewer.flopX ? ' scaleX(-1)' : '')
 }
-function applyPan(tx, ty) {
+function syncTransformNow(tx, ty, scale = live.scale) {
   if (canvasMode.value && canvasStage.value?.drawAt) {
-    canvasStage.value.drawAt(tx, ty, lib.viewer.scale)
+    canvasStage.value.drawAt(tx, ty, scale)
     return
   }
   if (kind.value === 'video') {
     const v = videoEl.value
-    if (v) v.style.transform = `translate(${tx}px, ${ty}px) scale(${lib.viewer.scale})`
+    if (v) v.style.transform = `translate3d(${tx}px, ${ty}px, 0) scale(${scale})`
     return
   }
   const el = imgEl.value
-  if (el) el.style.transform = stageTransform(tx, ty)
+  if (el) el.style.transform = stageTransform(tx, ty, scale)
 }
-
+function applyPan(tx, ty) {
+  live.tx = tx
+  live.ty = ty
+  syncTransformNow(tx, ty, live.scale)
+}
 function syncVideoTransform() {
   const v = videoEl.value
-  if (v) v.style.transform = `translate(${lib.viewer.tx}px, ${lib.viewer.ty}px) scale(${lib.viewer.scale})`
+  if (v) v.style.transform = `translate3d(${live.tx}px, ${live.ty}px, 0) scale(${live.scale})`
+}
+function commitLiveToStore() {
+  if (storeSyncTimer) { clearTimeout(storeSyncTimer); storeSyncTimer = 0 }
+  if (lib.viewer.tx !== live.tx) lib.viewer.tx = live.tx
+  if (lib.viewer.ty !== live.ty) lib.viewer.ty = live.ty
+  if (lib.viewer.scale !== live.scale) lib.viewer.scale = live.scale
+}
+function scheduleStoreSync(delay = 80) {
+  if (storeSyncTimer) clearTimeout(storeSyncTimer)
+  storeSyncTimer = setTimeout(() => {
+    storeSyncTimer = 0
+    commitLiveToStore()
+  }, delay)
 }
 function commitPan() {
   if (!pan.active) return
-  if (pan.raf) { cancelAnimationFrame(pan.raf); pan.raf = 0 }
+  if (pan.cropRaf) { cancelAnimationFrame(pan.cropRaf); pan.cropRaf = 0 }
   pan.active = false
-  dragging.value = false
-  window.removeEventListener('mousemove', onMove)
-  window.removeEventListener('mouseup', onUp)
-  lib.viewer.tx = pan.curTx
-  lib.viewer.ty = pan.curTy
+  stageEl.value?.classList.remove('is-panning')
+  if (pan.pointerId != null) {
+    try {
+      if (stageEl.value?.hasPointerCapture?.(pan.pointerId)) {
+        stageEl.value.releasePointerCapture(pan.pointerId)
+      }
+    } catch {}
+    pan.pointerId = null
+  }
+  canvasStage.value?.setInteractive?.(false)
+  window.removeEventListener('pointermove', onMove)
+  window.removeEventListener('pointerup', onUp)
+  window.removeEventListener('pointercancel', onUp)
+  live.tx = pan.curTx
+  live.ty = pan.curTy
+  commitLiveToStore()
 }
 
 const meta = computed(() => lib.images.find((i) => i.file_path === lib.lightbox.path) || null)
+const orderList = computed(() => (lib.gridOrder?.length ? lib.gridOrder : lib.filteredImages.map((i) => i.file_path)))
 const kind = computed(() => {
   const p = lib.lightbox.path
   return isVideoPath(p) ? 'video' : isTextPath(p) ? 'text' : 'image'
 })
-watch(() => [lib.viewer.tx, lib.viewer.ty, lib.viewer.scale, kind.value], syncVideoTransform)
+watch(() => [lib.viewer.tx, lib.viewer.ty, lib.viewer.scale, kind.value], ([tx, ty, sc]) => {
+  if (pan.active) return
+  if (
+    Math.abs((tx ?? 0) - live.tx) > 1e-3
+    || Math.abs((ty ?? 0) - live.ty) > 1e-3
+    || Math.abs((sc ?? 1) - live.scale) > 1e-6
+  ) {
+    live.tx = tx ?? 0
+    live.ty = ty ?? 0
+    live.scale = sc ?? 1
+  }
+  syncTransformNow(live.tx, live.ty, live.scale)
+})
 const videoCompatPath = ref('')
 let compatReqPath = ''
 async function onVideoError() {
@@ -84,23 +158,34 @@ const ambientUrl = computed(() => {
   if (img.thumbnail_path && img.thumbnail_path !== 'SKIP') return fileUrl(img.thumbnail_path) + '?v=' + (img.modify_time || 0)
   return url.value
 })
+const ambientBlurredUrl = ref('')
+let ambientNonce = 0
+watch(ambientUrl, async (u) => {
+  const nonce = ++ambientNonce
+  if (!u) {
+    ambientBlurredUrl.value = ''
+    return
+  }
+  const baked = await renderAmbientBlur(u, { size: 96, blur: 14 })
+  if (nonce === ambientNonce) ambientBlurredUrl.value = baked || u
+}, { immediate: true })
 /* 底部工具条仅在鼠标移到底部按钮区域时才缓慢浮现，其余时刻完全隐身，不抢画面 */
 const dockHover = ref(false)
 function onViewerPointerMove(e) {
+  if (pan.active) return
   const fromBottom = window.innerHeight - e.clientY
   if (fromBottom < 0 || fromBottom > 68) {
     if (dockHover.value) dockHover.value = false
     return
   }
-  const el = stageEl.value
-  const w = el ? el.clientWidth : window.innerWidth
-  const left = el ? el.offsetLeft : 0
+  const r = ensureStageRect()
+  const w = r.width || window.innerWidth
+  const left = r.left || 0
   const fromCenter = Math.abs(e.clientX - (left + w / 2))
   const halfW = kind.value === 'video' ? 340 : 210
   dockHover.value = fromCenter <= halfW
 }
 function onViewerLeave() {
-  onUp()
   dockHover.value = false
 }
 let flipRaf = 0
@@ -217,31 +302,38 @@ let previewNonce = 0
 async function reloadPreview(p, isSwitch = false) {
   const nonce = ++previewNonce
   previewError.value = false
+  if (!isPreviewableImage(p)) {
+    previewPath.value = ''
+    cancelNeighborPrefetch()
+    return
+  }
+  const mtime = meta.value?.modify_time || 0
   if (isSwitch) {
+    const cached = getCachedPreviewPath(p, mtime)
+    if (cached) {
+      previewPath.value = cached
+      stageDead.value = false
+      stageFallback.value = false
+      decodeIntoPool(fileUrl(cached) + '?v=' + mtime, p)
+      scheduleNeighborPrefetch(orderList.value, p, (fp) => lib.imageMap.get(fp))
+      return
+    }
     previewPath.value = ''
     stageDead.value = false
     stageFallback.value = false
   }
-  const ext = extOf(p)
-  if (!p || isVideoPath(p) || isTextPath(p) || ext === '.gif' || ext === '.svg') {
-    previewPath.value = ''
-    return
-  }
   try {
     const res = await api.viewPreview(p)
     if (nonce !== previewNonce || lib.lightbox.path !== p || !res?.ok || !res.path) return
-    const u = fileUrl(res.path) + '?v=' + (meta.value?.modify_time || 0)
-    await new Promise((resolve, reject) => {
-      const im = new Image()
-      im.decoding = 'async'
-      im.onload = () => { if (im.decode) im.decode().then(resolve).catch(resolve); else resolve() }
-      im.onerror = () => reject(new Error('preview load failed'))
-      im.src = u
-    })
+    const curMtime = meta.value?.modify_time || 0
+    rememberPreviewPath(p, curMtime, res.path)
+    const u = fileUrl(res.path) + '?v=' + curMtime
+    await decodeIntoPool(u, p)
     if (nonce === previewNonce && lib.lightbox.path === p) {
       previewPath.value = res.path
       stageDead.value = false
       stageFallback.value = false
+      scheduleNeighborPrefetch(orderList.value, p, (fp) => lib.imageMap.get(fp))
     }
   } catch (e) { /* 预览失败不阻塞原图 */ }
 }
@@ -294,7 +386,7 @@ function fitToWindow(animateFlip = false) {
     iw = swapped ? img.height : img.width
     ih = swapped ? img.width : img.height
   }
-  const rect = stageEl.value.getBoundingClientRect()
+  const rect = ensureStageRect()
   const inspW = lib.viewer.showInspector ? lib.inspectorWidth + 16 : 0
   const availW = Math.max(120, rect.width - inspW - 32)
   /* 上下各让 70px：42 标题栏 + 20 玻璃拖尾 + 8 呼吸 / dock 46 + 16 底距 + 8 呼吸。
@@ -303,6 +395,7 @@ function fitToWindow(animateFlip = false) {
   const availH = Math.max(120, rect.height - TOP_INSET - BOTTOM_INSET)
   const targetScale = Math.min(availW / iw, availH / ih) || 1 /* 按工作区适配，可放大不超出 */
   if (flipRaf) { cancelAnimationFrame(flipRaf); flipRaf = 0 }
+  if (storeSyncTimer) { clearTimeout(storeSyncTimer); storeSyncTimer = 0 }
   const orig = animateFlip === true ? lib.lightboxOrigin : null
   if (orig) lib.lightboxOrigin = null
   if (orig && orig.path === lib.lightbox.path && Date.now() - orig.at < 900 && iw > 0 && ih > 0) {
@@ -312,55 +405,68 @@ function fitToWindow(animateFlip = false) {
     const dur = 360
     const t0 = performance.now()
     flipTargetScale = targetScale
+    live.scale = startScale
+    live.tx = startTx
+    live.ty = startTy
     lib.viewer.scale = startScale
     lib.viewer.tx = startTx
     lib.viewer.ty = startTy
-    if (canvasMode.value) canvasStage.value?.drawAt(startTx, startTy, startScale)
+    syncTransformNow(startTx, startTy, startScale)
     const step = (now) => {
       const p = Math.min(1, (now - t0) / dur)
       const ease = 1 - Math.pow(1 - p, 3.8)
       const curTx = startTx * (1 - ease)
       const curTy = startTy * (1 - ease)
       const curScale = startScale + (targetScale - startScale) * ease
+      live.tx = curTx
+      live.ty = curTy
+      live.scale = curScale
       if (canvasMode.value && canvasStage.value?.drawAt) {
         canvasStage.value.drawAt(curTx, curTy, curScale)
       } else {
-        lib.viewer.tx = curTx
-        lib.viewer.ty = curTy
-        lib.viewer.scale = curScale
+        syncTransformNow(curTx, curTy, curScale)
       }
       if (p < 1) {
         flipRaf = requestAnimationFrame(step)
       } else {
         flipRaf = 0
-        lib.viewer.scale = targetScale
-        lib.viewer.tx = 0
-        lib.viewer.ty = 0
-        if (canvasMode.value) canvasStage.value?.drawAt(0, 0, targetScale)
+        live.scale = targetScale
+        live.tx = 0
+        live.ty = 0
+        commitLiveToStore()
+        syncTransformNow(0, 0, targetScale)
       }
     }
     flipRaf = requestAnimationFrame(step)
     return
   }
-  lib.viewer.scale = targetScale
-  lib.viewer.tx = 0; lib.viewer.ty = 0
+  live.scale = targetScale
+  live.tx = 0; live.ty = 0
+  commitLiveToStore()
+  syncTransformNow(0, 0, targetScale)
 }
-function oneToOne() { lib.viewer.scale = 1; lib.viewer.tx = 0; lib.viewer.ty = 0 }
+function oneToOne() {
+  if (storeSyncTimer) { clearTimeout(storeSyncTimer); storeSyncTimer = 0 }
+  live.scale = 1; live.tx = 0; live.ty = 0
+  commitLiveToStore()
+  syncTransformNow(0, 0, 1)
+}
 /* 把进行中的开灯箱动画立刻收到终态（幂等），供任何用户交互打断它 */
 function finishFlip() {
   if (!flipRaf) return false
   cancelAnimationFrame(flipRaf)
   flipRaf = 0
-  lib.viewer.scale = flipTargetScale
-  lib.viewer.tx = 0
-  lib.viewer.ty = 0
-  if (canvasMode.value) canvasStage.value?.drawAt?.(0, 0, flipTargetScale)
+  live.scale = flipTargetScale
+  live.tx = 0
+  live.ty = 0
+  commitLiveToStore()
+  syncTransformNow(0, 0, flipTargetScale)
   return true
 }
 
 function dblClick() {
   finishFlip()
-  if (Math.abs(lib.viewer.scale - 1) < 0.02) fitToWindow()
+  if (Math.abs(live.scale - 1) < 0.02) fitToWindow()
   else oneToOne()
 }
 function onViewerDblclick() { if (canvasMode.value) dblClick() }
@@ -398,20 +504,44 @@ watch(() => lib.lightbox.path, () => {
   nextTick(fitToWindow)
 })
 onMounted(() => {
+  updateStageRect()
+  try {
+    stageRO = new ResizeObserver(() => {
+      if (resizeRaf) cancelAnimationFrame(resizeRaf)
+      resizeRaf = requestAnimationFrame(() => { resizeRaf = 0; updateStageRect() })
+    })
+    if (stageEl.value) stageRO.observe(stageEl.value)
+  } catch {}
+  window.addEventListener('resize', updateStageRect)
   nextTick(() => fitToWindow(true))
   window.addEventListener('keydown', onKey)
   window.addEventListener('mousemove', onWinCropMove)
   window.addEventListener('mouseup', onWinCropUp)
-  /* 调试探针：验证“滚轮打断入场动画”是否生效（不影响功能） */
-  window.__picViewer = () => ({ scale: lib.viewer.scale, tx: lib.viewer.tx, ty: lib.viewer.ty, flip: !!flipRaf })
+  /* 调试探针：验证“滚轮打断入场动画”与拖拽性能指标 */
+  window.__picViewer = () => ({
+    scale: live.scale,
+    tx: live.tx,
+    ty: live.ty,
+    flip: !!flipRaf,
+    perf: canvasStage.value?.getPerfStats?.() || null,
+    preload: getPreloadStats(),
+  })
 })
 onBeforeUnmount(() => {
+  cancelNeighborPrefetch()
+  if (!lib.brief.open) clearDecodedPool()
   cleanupVideo()
   if (flipRaf) cancelAnimationFrame(flipRaf)
-  if (pan.raf) { cancelAnimationFrame(pan.raf); pan.raf = 0 }
+  if (resizeRaf) cancelAnimationFrame(resizeRaf)
+  if (pan.cropRaf) { cancelAnimationFrame(pan.cropRaf); pan.cropRaf = 0 }
+  if (storeSyncTimer) { clearTimeout(storeSyncTimer); storeSyncTimer = 0 }
+  stageRO?.disconnect()
+  stageRO = null
+  window.removeEventListener('resize', updateStageRect)
   window.removeEventListener('keydown', onKey)
-  window.removeEventListener('mousemove', onMove)
-  window.removeEventListener('mouseup', onUp)
+  window.removeEventListener('pointermove', onMove)
+  window.removeEventListener('pointerup', onUp)
+  window.removeEventListener('pointercancel', onUp)
   window.removeEventListener('mousemove', onWinCropMove)
   window.removeEventListener('mouseup', onWinCropUp)
   delete window.__picViewer
@@ -422,36 +552,34 @@ function onWheel(e) {
   e.preventDefault()
   // 开灯箱的入场动画还在跑？先把它钉到终态，否则滚轮和动画抢同一个 scale，会闪残影
   finishFlip()
-  const s0 = lib.viewer.scale || 1
+  const s0 = live.scale || 1
   const k = e.deltaY < 0 ? 1.12 : 1 / 1.12
   const s1 = Math.min(8, Math.max(0.05, s0 * k))
   if (s1 === s0) return
   const wasPan = pan.active
-  /* 拖动中滚轮：先把当前拖动位移写进 store，再做锚点缩放，最后把 pan 基准
-     重设到当前光标/新位移；否则下一次 mousemove 会用旧 base 把缩放后的位移顶回去。 */
   if (wasPan) {
-    lib.viewer.tx = pan.curTx
-    lib.viewer.ty = pan.curTy
+    live.tx = pan.curTx
+    live.ty = pan.curTy
   }
-  const rect = stageEl.value?.getBoundingClientRect()
-  if (rect) {
+  const rect = ensureStageRect()
+  if (rect.width > 0 && rect.height > 0) {
     const px = e.clientX - (rect.left + rect.width / 2)
     const py = e.clientY - (rect.top + rect.height / 2)
-    lib.viewer.tx = px - (s1 / s0) * (px - (lib.viewer.tx || 0))
-    lib.viewer.ty = py - (s1 / s0) * (py - (lib.viewer.ty || 0))
+    live.tx = px - (s1 / s0) * (px - (live.tx || 0))
+    live.ty = py - (s1 / s0) * (py - (live.ty || 0))
   }
-  lib.viewer.scale = s1
+  live.scale = s1
+  syncTransformNow(live.tx, live.ty, s1)
   if (wasPan) {
-    if (pan.raf) { cancelAnimationFrame(pan.raf); pan.raf = 0 }
-    pan.baseTx = lib.viewer.tx
-    pan.baseTy = lib.viewer.ty
+    pan.baseTx = live.tx
+    pan.baseTy = live.ty
     pan.startX = e.clientX
     pan.startY = e.clientY
-    pan.curTx = lib.viewer.tx
-    pan.curTy = lib.viewer.ty
-    if (canvasMode.value) canvasStage.value?.drawAt(pan.curTx, pan.curTy, s1)
-    else applyPan(pan.curTx, pan.curTy)
+    pan.curTx = live.tx
+    pan.curTy = live.ty
   }
+  if (lib.viewer.cropMode) commitLiveToStore()
+  else scheduleStoreSync(80)
 }
 let didDrag = false
 function onDown(e) {
@@ -462,38 +590,53 @@ function onDown(e) {
   if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.closest?.('.dock, .crop-bar, .ask-card, button'))) return
   e.preventDefault() // 阻止视频原生拖拽虚影与选区干扰，保证平移连续性
   finishFlip() // 拖动也是接管：别和入场动画抢位移
+  if (storeSyncTimer) { clearTimeout(storeSyncTimer); storeSyncTimer = 0 }
   pan.active = true
+  pan.pointerId = e.pointerId ?? null
   didDrag = false
   pan.startX = e.clientX; pan.startY = e.clientY
-  pan.baseTx = lib.viewer.tx; pan.baseTy = lib.viewer.ty
-  pan.curTx = lib.viewer.tx; pan.curTy = lib.viewer.ty
-  dragging.value = true
-  window.addEventListener('mousemove', onMove)
-  window.addEventListener('mouseup', onUp)
+  pan.baseTx = live.tx; pan.baseTy = live.ty
+  pan.curTx = live.tx; pan.curTy = live.ty
+  stageEl.value?.classList.add('is-panning')
+  canvasStage.value?.setInteractive?.(true)
+  if (pan.pointerId != null) {
+    try { stageEl.value?.setPointerCapture?.(pan.pointerId) } catch {}
+  }
+  window.addEventListener('pointermove', onMove)
+  window.addEventListener('pointerup', onUp)
+  window.addEventListener('pointercancel', onUp)
 }
 function onMove(e) {
   if (lib.viewer.cropMode && cropAction.value) return // 裁剪框拖拽由 window 级监听独占
   if (!pan.active) return
-  const dx = e.clientX - pan.startX
-  const dy = e.clientY - pan.startY
+  if (pan.pointerId != null && e.pointerId != null && e.pointerId !== pan.pointerId) return
+  const ev = e.getCoalescedEvents?.().at(-1) || e
+  const dx = ev.clientX - pan.startX
+  const dy = ev.clientY - pan.startY
   if (dx * dx + dy * dy > 16) {
     didDrag = true
   }
   pan.curTx = pan.baseTx + dx
   pan.curTy = pan.baseTy + dy
-  if (pan.raf) return
-  pan.raf = requestAnimationFrame(() => {
-    pan.raf = 0
-    if (!pan.active) return
-    if (lib.viewer.cropMode) {
-      lib.viewer.tx = pan.curTx
-      lib.viewer.ty = pan.curTy
-    } else {
-      applyPan(pan.curTx, pan.curTy)
+  if (lib.viewer.cropMode) {
+    live.tx = pan.curTx
+    live.ty = pan.curTy
+    if (!pan.cropRaf) {
+      pan.cropRaf = requestAnimationFrame(() => {
+        pan.cropRaf = 0
+        if (!pan.active) return
+        lib.viewer.tx = pan.curTx
+        lib.viewer.ty = pan.curTy
+      })
     }
-  })
+    return
+  }
+  applyPan(pan.curTx, pan.curTy)
 }
-function onUp() { commitPan() }
+function onUp(e) {
+  if (pan.pointerId != null && e?.pointerId != null && e.pointerId !== pan.pointerId) return
+  commitPan()
+}
 /* 灯箱右键：图片/视频/文本舞台都可呼出同一套图片菜单；输入框保留原生右键 */
 function onContext(e) {
   const t = e.target
@@ -519,6 +662,7 @@ async function saveTransform() {
   try {
     const r = await lib.applyImageTransform()
     if (r?.ok && r.changed !== false) {
+      invalidatePreviewCache(lib.lightbox.path)
       await reloadPreview(lib.lightbox.path, false)
       const img = meta.value
       if (img && r.width && r.height) {
@@ -1030,6 +1174,7 @@ async function applyCrop() {
       delete lib.palettes[img.file_path]
       lib.viewer.cropMode = false
       crop.value = null
+      invalidatePreviewCache(lib.lightbox.path)
       await reloadPreview(lib.lightbox.path, false)
       stageDead.value = false
       nextTick(fitToWindow)
@@ -1101,25 +1246,25 @@ function onKey(e) {
 
 <template>
   <div
-    ref="stageEl" class="viewer" :class="{ 'dock-show': dockHover, 'has-ambient': !!ambientUrl }"
+    ref="stageEl" class="viewer" :class="{ 'dock-show': dockHover, 'has-ambient': !!ambientBlurredUrl }"
     @wheel="onWheel" @contextmenu="onContext"
-    @mousedown="onDown" @mouseleave="onViewerLeave"
+    @pointerdown="onDown" @pointerleave="onViewerLeave"
     @pointermove="onViewerPointerMove"
     @dblclick="onViewerDblclick"
-    :style="canvasMode ? { cursor: dragging ? 'grabbing' : 'grab' } : undefined"
+    :style="canvasMode ? { cursor: 'grab' } : undefined"
   >
-    <!-- 氛围底：当前图的模糊放大铺底 + 暗角，切图交叉淡化 -->
+    <!-- 氛围底：离线预模糊后的 96px 底图铺底 + 暗角，切图交叉淡化 -->
     <Transition name="amb">
-      <div v-if="ambientUrl" :key="ambientUrl" class="ambient" :style="{ backgroundImage: `url(&quot;${ambientUrl}&quot;)` }" />
+      <div v-if="ambientBlurredUrl" :key="ambientBlurredUrl" class="ambient" :style="{ backgroundImage: `url(&quot;${ambientBlurredUrl}&quot;)` }" />
     </Transition>
-    <div v-if="ambientUrl" class="ambient-veil" />
+    <div v-if="ambientBlurredUrl" class="ambient-veil" />
     <!-- 视频：自绘控制条（无原生 UI） -->
     <video
       v-if="kind === 'video'"
       ref="videoEl" :src="url" class="stage video" :class="{ gray: lib.grayscaleMode }" playsinline
       draggable="false" @dragstart.prevent
       :style="{
-        cursor: dragging ? 'grabbing' : (lib.viewer.scale > 1.05 ? 'grab' : 'grab'),
+        cursor: 'grab',
       }"
       @loadedmetadata="onVideoMeta" @timeupdate="onVideoTime"
       @play="vid.playing = true" @pause="vid.playing = false" @ended="vid.playing = false"
@@ -1168,7 +1313,7 @@ function onKey(e) {
           width: meta?.width ? meta.width + 'px' : undefined,
           height: meta?.height ? meta.height + 'px' : undefined,
           transform: `translate3d(${lib.viewer.tx}px, ${lib.viewer.ty}px, 0) scale(${lib.viewer.scale}) rotate(${lib.viewer.rot}deg)` + (lib.viewer.flopX ? ' scaleX(-1)' : ''),
-          cursor: lib.viewer.cropMode ? 'default' : dragging ? 'grabbing' : 'grab',
+          cursor: lib.viewer.cropMode ? 'default' : 'grab',
         }"
         @load="onStageImgLoad"
         @error="onStageError"
@@ -1292,13 +1437,17 @@ function onKey(e) {
   flex: 1; position: relative; overflow: hidden;
   display: flex; align-items: center; justify-content: center;
   background: var(--panel-strong);
+  touch-action: none;
 }
-/* ---- 氛围底（Ambient）：亮色主题克制温润（不抢画面），暗色主题稍微浓郁（由 style.css --amb-* 控制）
-   静态 GPU 纹理缓存，不做无限循环 transform 动画以避免 92px 高斯模糊层持续占用 GPU ---- */
+.viewer.is-panning,
+.viewer.is-panning .stage {
+  cursor: grabbing !important;
+}
+/* ---- 氛围底（Ambient）：切图时离线预模糊烘焙为极小 JPEG 底图，拖拽缩放零实时高斯模糊开销 ---- */
 .ambient {
   position: absolute; inset: -14%; z-index: 0; pointer-events: none;
   background-size: cover; background-position: center;
-  filter: blur(var(--amb-blur, 92px)) saturate(var(--amb-sat, 1.16)) brightness(var(--amb-bright, 1.04));
+  filter: saturate(var(--amb-sat, 1.16)) brightness(var(--amb-bright, 1.04));
   opacity: var(--amb-opacity, 0.20);
   transform: translateZ(0);
 }
@@ -1342,15 +1491,18 @@ function onKey(e) {
   box-shadow: 0 6px 22px rgba(0, 0, 0, 0.08);
   padding: 5px 8px;
   opacity: 0;
+  visibility: hidden;
   transform: translateX(-50%) translateY(12px) scale(0.96);
   pointer-events: none;
-  transition: opacity 0.48s cubic-bezier(0.22, 1, 0.36, 1), transform 0.48s cubic-bezier(0.22, 1, 0.36, 1);
+  transition: opacity 0.48s cubic-bezier(0.22, 1, 0.36, 1), transform 0.48s cubic-bezier(0.22, 1, 0.36, 1), visibility 0s linear 0.48s;
 }
 .viewer.dock-show .dock.dock-clear,
 .dock.dock-clear:hover {
   opacity: 1;
+  visibility: visible;
   transform: translateX(-50%) translateY(0) scale(1);
   pointer-events: auto;
+  transition: opacity 0.48s cubic-bezier(0.22, 1, 0.36, 1), transform 0.48s cubic-bezier(0.22, 1, 0.36, 1), visibility 0s linear 0s;
 }
 .dock.dock-clear .dock-btn { color: var(--text); font-size: 14px; }
 .dock.dock-clear .dock-btn:hover { background: var(--accent-weak); color: var(--accent); transform: translateY(-1px); }

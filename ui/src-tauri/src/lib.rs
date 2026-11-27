@@ -1,3 +1,4 @@
+mod capture;
 mod commands;
 mod collector;
 mod db;
@@ -23,7 +24,27 @@ use tauri::Manager;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use trash_ops::*;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
+
+static APP_DATA_DIR: OnceLock<std::path::PathBuf> = OnceLock::new();
+static SHARED_WEBVIEW_ARGS: OnceLock<String> = OnceLock::new();
+static SHARED_WEBVIEW_DATA_DIR: OnceLock<Option<std::path::PathBuf>> = OnceLock::new();
+
+pub fn app_data_dir() -> std::path::PathBuf {
+    APP_DATA_DIR.get().cloned().unwrap_or_else(|| {
+        dirs::data_local_dir()
+            .map(|p| p.join("PicNest"))
+            .unwrap_or_else(|| std::path::PathBuf::from(".picnest_data"))
+    })
+}
+
+pub fn shared_webview_args() -> String {
+    SHARED_WEBVIEW_ARGS.get().cloned().unwrap_or_default()
+}
+
+pub fn shared_webview_data_dir() -> Option<std::path::PathBuf> {
+    SHARED_WEBVIEW_DATA_DIR.get().cloned().flatten()
+}
 
 #[cfg(windows)]
 fn apply_win32_window_icons(win: &tauri::WebviewWindow) {
@@ -108,6 +129,7 @@ pub fn run() {
     let data_dir = dirs::data_local_dir()
         .map(|p| p.join("PicNest"))
         .unwrap_or_else(|| std::path::PathBuf::from(".picnest_data"));
+    let _ = APP_DATA_DIR.set(data_dir.clone());
 
     media_server::diag_init(&data_dir);
     let db_path = data_dir.join("picnest.db");
@@ -264,7 +286,32 @@ pub fn run() {
             crate::updater::cancel_download_update,
             crate::updater::quit_and_install,
             diag_event,
-            diag_dump
+            diag_dump,
+            capture::capture_start,
+            capture::capture_ready,
+            capture::capture_get_session,
+            capture::capture_cancel,
+            capture::capture_set_target_dir,
+            capture::capture_copy_text,
+            capture::capture_commit,
+            capture::capture_get_hotkey,
+            capture::capture_set_hotkey,
+            capture::pin_get_info,
+            capture::pin_ready,
+            capture::pin_drag_begin,
+            capture::pin_drag_move,
+            capture::pin_drag_end,
+            capture::pin_zoom_by,
+            capture::pin_reset_size,
+            capture::pin_zoom_at,
+            capture::pin_set_bounds,
+            capture::pin_set_opacity,
+            capture::pin_set_click_through,
+            capture::pin_release_all_through,
+            capture::pin_get_through_hotkey,
+            capture::pin_set_through_hotkey,
+            capture::pin_action,
+            capture::pin_close_all
         ])
         .setup(move |app| {
             if cfg!(debug_assertions) {
@@ -325,6 +372,8 @@ pub fn run() {
                     media_server::diag_push(&format!("CDP enabled on port {}", p));
                 }
             }
+            let _ = SHARED_WEBVIEW_ARGS.set(args.clone());
+            let _ = SHARED_WEBVIEW_DATA_DIR.set(data_dir.clone());
             builder = builder.additional_browser_args(&args);
             if let Some(d) = data_dir {
                 builder = builder.data_directory(d);
@@ -337,9 +386,16 @@ pub fn run() {
 
             // —— 系统托盘 ——
             // 关窗只隐藏进托盘；托盘左键唤回窗口，右键菜单里“退出”才是真退。
+            let capture_label = format!("屏幕截图 ({})", capture::current_hotkey_label());
+            let capture_item = MenuItem::with_id(app.handle(), "tray_capture", &capture_label, true, None::<&str>)?;
+            capture::register_tray_capture_item(capture_item.clone());
+            let through_label = format!("解除贴图穿透 ({})", capture::current_through_hotkey_label());
+            let release_through_item = MenuItem::with_id(app.handle(), "tray_release_pin_through", &through_label, true, None::<&str>)?;
+            capture::register_tray_through_item(release_through_item.clone());
+            let close_pins_item = MenuItem::with_id(app.handle(), "tray_close_pins", "关闭全部贴图", true, None::<&str>)?;
             let show_item = MenuItem::with_id(app.handle(), "tray_show", "打开 PicNest 窗口", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app.handle(), "tray_quit", "退出 PicNest", true, None::<&str>)?;
-            let tray_menu = Menu::with_items(app.handle(), &[&show_item, &quit_item])?;
+            let tray_menu = Menu::with_items(app.handle(), &[&capture_item, &release_through_item, &close_pins_item, &show_item, &quit_item])?;
             let _tray = TrayIconBuilder::with_id("picnest-main")
                 .icon(tauri::include_image!("icons/tray-icon.png"))
                 .tooltip("PicNest")
@@ -347,6 +403,15 @@ pub fn run() {
                 // Windows：左键不再弹菜单（弹给事件处理），右键才弹“退出”
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id().as_ref() {
+                    "tray_capture" => { capture::trigger_capture(app); }
+                    "tray_release_pin_through" => {
+                        let app_c = app.clone();
+                        std::thread::spawn(move || { capture::toggle_all_pins_through(&app_c, true); });
+                    }
+                    "tray_close_pins" => {
+                        let app_c = app.clone();
+                        std::thread::spawn(move || { capture::close_all_pins(&app_c); });
+                    }
                     "tray_quit" => app.exit(0),
                     "tray_show" => show_main(app),
                     _ => {}
@@ -400,6 +465,7 @@ pub fn run() {
             let c_data_dir = cdp_data_base.clone();
             let c_db_path = win.state::<AppState>().db_path.clone();
             collector::start_collector_server(c_data_dir, c_db_path, win.app_handle().clone());
+            capture::start_hotkey_listener(app.handle().clone());
             Ok(())
         })
         .run(tauri::generate_context!())

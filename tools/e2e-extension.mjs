@@ -135,6 +135,7 @@ function connect(wsUrl) {
 }
 
 let sw = null
+let pageCdp = null
 let browser = null
 const results = []
 function ok(name) { results.push(name); console.log('ok', name) }
@@ -344,8 +345,157 @@ try {
   assert.equal(repairedGone, null)
   ok('非 Pinterest：不自动刷新 → status=stale →「修复本页」刷新后恢复')
 
+  /* ---------- 采集面板「＋ 新建文件夹…」：拖拽直达 + 花瓣式捕获拦截 + 键盘隔离 + 遗留宿主替换 ---------- */
+  await evalSW(`(() => {
+    globalThis.__origFetchForE2e = globalThis.fetch
+    globalThis.__e2eCreatedFolders = []
+    globalThis.fetch = async (url, init) => {
+      if (String(url).startsWith('http://127.0.0.1:41600')) {
+        if (url.includes('/api/v1/context')) {
+          return new Response(JSON.stringify({ ok: true, roots: [{ id: 1, name: '图源' }], rootId: 1 }))
+        }
+        if (url.includes('/api/v1/folders')) {
+          return new Response(JSON.stringify({ ok: true, root: { id: 1, name: '图源' }, folders: [{ id: 'Ceramic', name: 'Ceramic', children: [] }] }))
+        }
+        if (url.includes('/api/v1/folder/create')) {
+          const body = JSON.parse(init.body)
+          globalThis.__e2eCreatedFolders.push(body.name)
+          return new Response(JSON.stringify({ ok: true, folder: { id: body.name, name: body.name, parent: null } }))
+        }
+        return new Response(JSON.stringify({ ok: true }))
+      }
+      return globalThis.__origFetchForE2e(url, init)
+    }
+  })()`)
+
+  const panelUrl = `http://127.0.0.1:${port}/?panel=1`
+  const panelTarget = await browser.send('Target.createTarget', { url: panelUrl })
+  const panelTab = await waitTab('panel=1')
+  await waitCurrent(panelTab.id)
+  await evalSW(`chrome.tabs.update(${panelTab.id}, { active: true })`)
+  const targetList = await fetchJson('/json/list')
+  const pageTarget = targetList.find((t) => t.id === panelTarget.targetId)
+  assert.ok(pageTarget, '找到面板测试页 CDP target')
+  pageCdp = await connect(pageTarget.webSocketDebuggerUrl)
+  await pageCdp.send('Runtime.enable')
+  const evalPage = async (expr) => {
+    const r = await pageCdp.send('Runtime.evaluate', { expression: expr, returnByValue: true })
+    if (r.exceptionDetails) throw new Error('页面求值失败：' + (r.exceptionDetails.exception?.description || r.exceptionDetails.text))
+    return r.result.value
+  }
+  const clickAt = async (x, y) => {
+    await pageCdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, buttons: 0 })
+    await pageCdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount: 1 })
+    await pageCdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', buttons: 0, clickCount: 1 })
+  }
+
+  // 1) 长按图片后直接拖到「＋ 新建文件夹…」松手：应直接展开输入框并聚焦，Esc 只关输入框不关面板
+  await pageCdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: 100, y: 100, button: 'left', buttons: 1, clickCount: 1 })
+  await sleep(550)
+  const dragRects = await evalPage(`(() => {
+    const sr = document.getElementById('picnest-collect-host')?.shadowRoot
+    const btn = sr?.querySelector('.newdir')
+    return {
+      hasPanel: !!sr?.querySelector('.panel'),
+      btn: btn?.getBoundingClientRect()?.toJSON(),
+    }
+  })()`)
+  assert.equal(dragRects.hasPanel, true, '长按弹出采集面板')
+  const dbx = dragRects.btn.x + dragRects.btn.width / 2
+  const dby = dragRects.btn.y + dragRects.btn.height / 2
+  await pageCdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: dbx, y: dby, buttons: 1 })
+  await pageCdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: dbx, y: dby, button: 'left', buttons: 0, clickCount: 1 })
+  await sleep(150)
+  const afterDragNewdir = await evalPage(`(() => {
+    const sr = document.getElementById('picnest-collect-host')?.shadowRoot
+    const form = sr?.querySelector('.newdir-form')
+    return {
+      panelAlive: !!sr?.querySelector('.panel'),
+      formHidden: form?.hidden,
+      activeCls: sr?.activeElement?.className || '',
+    }
+  })()`)
+  assert.equal(afterDragNewdir.panelAlive, true)
+  assert.equal(afterDragNewdir.formHidden, false, '拖拽松开在新建文件夹按钮上应直接展开输入框')
+  assert.equal(afterDragNewdir.activeCls, 'newdir-input')
+
+  await pageCdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+  await pageCdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+  await sleep(100)
+  const afterEscForm = await evalPage(`(() => {
+    const sr = document.getElementById('picnest-collect-host')?.shadowRoot
+    return { panelAlive: !!sr?.querySelector('.panel'), formHidden: sr?.querySelector('.newdir-form')?.hidden }
+  })()`)
+  assert.equal(afterEscForm.panelAlive, true, '第一次 Esc 只收起新建文件夹表单，面板保持打开')
+  assert.equal(afterEscForm.formHidden, true)
+  await pageCdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+  await pageCdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+  await sleep(100)
+  ok('拖拽直达「＋ 新建文件夹…」松手即展开 + Esc 分层关闭')
+
+  // 2) 模拟花瓣捕获阶段 click 拦截 + window 键盘窃听 + 遗留旧宿主 DOM 节点
+  await evalPage(`(() => {
+    window.__e2eBlockedKeys = []
+    window.addEventListener('click', (e) => { e.stopPropagation(); e.preventDefault() }, true)
+    document.addEventListener('click', (e) => { e.stopPropagation(); e.preventDefault() }, true)
+    window.addEventListener('keydown', (e) => { window.__e2eBlockedKeys.push(e.key) }, true)
+    const stale = document.createElement('div')
+    stale.id = 'picnest-collect-host'
+    stale.attachShadow({ mode: 'open' }).innerHTML = '<div class="wrap"><div class="stale-marker"></div></div>'
+    document.documentElement.appendChild(stale)
+  })()`)
+  await pageCdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: 100, y: 100, button: 'left', buttons: 1, clickCount: 1 })
+  await sleep(550)
+  const panelRects = await evalPage(`(() => {
+    const sr = document.getElementById('picnest-collect-host')?.shadowRoot
+    return {
+      staleRemoved: !sr?.querySelector('.stale-marker'),
+      head: sr?.querySelector('.head')?.getBoundingClientRect()?.toJSON(),
+      btn: sr?.querySelector('.newdir')?.getBoundingClientRect()?.toJSON(),
+    }
+  })()`)
+  assert.equal(panelRects.staleRemoved, true, '遗留旧宿主节点已被当前实例安全替换')
+  await pageCdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: panelRects.head.x + 20, y: panelRects.head.y + 10, buttons: 1 })
+  await pageCdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: panelRects.head.x + 20, y: panelRects.head.y + 10, button: 'left', buttons: 0, clickCount: 1 })
+  await sleep(100)
+
+  await clickAt(panelRects.btn.x + panelRects.btn.width / 2, panelRects.btn.y + panelRects.btn.height / 2)
+  await sleep(150)
+  const formState = await evalPage(`(() => {
+    const sr = document.getElementById('picnest-collect-host')?.shadowRoot
+    return {
+      formHidden: sr?.querySelector('.newdir-form')?.hidden,
+      activeCls: sr?.activeElement?.className || '',
+      okRect: sr?.querySelector('[data-act="create"]')?.getBoundingClientRect()?.toJSON(),
+    }
+  })()`)
+  assert.equal(formState.formHidden, false, '即使页面捕获拦截 click，新建文件夹表单仍可打开')
+  assert.equal(formState.activeCls, 'newdir-input')
+
+  await pageCdp.send('Input.insertText', { text: '花瓣新建测试' })
+  await sleep(100)
+  await clickAt(formState.okRect.x + formState.okRect.width / 2, formState.okRect.y + formState.okRect.height / 2)
+  await sleep(250)
+  const afterCreate = await evalPage(`(() => {
+    const sr = document.getElementById('picnest-collect-host')?.shadowRoot
+    return {
+      panelAlive: !!sr?.querySelector('.panel'),
+      state: sr?.querySelector('.state')?.textContent,
+      rows: [...(sr?.querySelectorAll('.row') || [])].map((r) => r.dataset.rel),
+      leakedKeys: window.__e2eBlockedKeys,
+    }
+  })()`)
+  assert.equal(afterCreate.panelAlive, true)
+  assert.equal(afterCreate.state, '已创建：花瓣新建测试（点击它保存）')
+  assert.ok(afterCreate.rows.includes('花瓣新建测试'))
+  const createdFolders = await evalSW('globalThis.__e2eCreatedFolders')
+  assert.deepEqual(createdFolders, ['花瓣新建测试'])
+  await evalSW('(() => { if (globalThis.__origFetchForE2e) globalThis.fetch = globalThis.__origFetchForE2e })()')
+  ok('捕获阶段 click 拦截 + 遗留宿主替换 + 新建文件夹创建闭环')
+
   console.log('\n真实 Chrome 冒烟测试全部通过：', results.length, '项')
 } finally {
+  try { pageCdp?.close() } catch { /* 静默 */ }
   try { sw?.close() } catch { /* 静默 */ }
   try { browser?.close() } catch { /* 静默 */ }
   try { chrome.kill() } catch { /* 静默 */ }
